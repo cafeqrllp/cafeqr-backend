@@ -13,6 +13,9 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class SyncPushRequest {
+    private String clientVersion;
+    private Integer schemaVersion;
+
     @Builder.Default
     private List<SyncOperationRequest> operations = new ArrayList<>();
 }

@@ -1,4 +1,4 @@
-package com.restaurant.pos.expense.exception;
+package com.restaurant.pos.common.exception;
 
 /**
  * Exception thrown when the idempotency backing store encounters a persistent

@@ -48,4 +48,6 @@ public class OrderSummaryDto {
     private String description;
     @Builder.Default
     private List<OrderLineSummaryDto> lines = new ArrayList<>();
+    private UUID warehouseId;
+    private UUID vendorId;
 }

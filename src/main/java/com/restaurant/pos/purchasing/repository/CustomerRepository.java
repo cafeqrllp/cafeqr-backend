@@ -16,6 +16,12 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     List<Customer> findByClientIdAndOrgIdOrderByNameAsc(UUID clientId, UUID orgId);
     Optional<Customer> findByIdAndClientId(UUID id, UUID clientId);
     Optional<Customer> findByIdAndClientIdAndOrgId(UUID id, UUID clientId, UUID orgId);
+
+    @Query("SELECT c FROM Customer c WHERE c.clientId = :clientId AND (c.orgId = :orgId OR c.orgId IS NULL) ORDER BY c.name ASC")
+    List<Customer> findByClientIdAndOrgIdOrGlobalOrderByNameAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    @Query("SELECT c FROM Customer c WHERE c.id = :id AND c.clientId = :clientId AND (c.orgId = :orgId OR c.orgId IS NULL)")
+    Optional<Customer> findByIdAndClientIdAndOrgIdOrGlobal(@Param("id") UUID id, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
     Optional<Customer> findByPhoneAndClientIdAndOrgId(String phone, UUID clientId, UUID orgId);
     Optional<Customer> findByPhoneAndClientId(String phone, UUID clientId);
     Optional<Customer> findFirstByPhoneAndClientIdOrderByCreatedAtAsc(String phone, UUID clientId);

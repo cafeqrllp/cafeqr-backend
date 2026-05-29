@@ -35,7 +35,7 @@ public class InventoryService {
         if (SecurityUtils.isSuperAdmin()) {
             return warehouseRepository.findByClientIdOrderByCreatedAtDesc(clientId);
         }
-        return warehouseRepository.findByClientIdAndOrgIdOrderByCreatedAtDesc(clientId, TenantContext.getCurrentOrg());
+        return warehouseRepository.findByClientIdAndOrgIdOrGlobalOrderByCreatedAtDesc(clientId, TenantContext.getCurrentOrg());
     }
 
     public Warehouse getWarehouse(UUID id) {
@@ -44,7 +44,7 @@ public class InventoryService {
             return warehouseRepository.findByIdAndClientId(id, clientId)
                     .orElseThrow(() -> new ResourceNotFoundException("Warehouse not found"));
         }
-        return warehouseRepository.findByIdAndClientIdAndOrgId(id, clientId, TenantContext.getCurrentOrg())
+        return warehouseRepository.findByIdAndClientIdAndOrgIdOrGlobal(id, clientId, TenantContext.getCurrentOrg())
                 .orElseThrow(() -> new ResourceNotFoundException("Warehouse not found for ID: " + id));
     }
 
@@ -66,13 +66,26 @@ public class InventoryService {
     // --- Core Stock Logic (Ledger & Snapshots) ---
 
     @Transactional
-    public void updateStock(UUID warehouseId, UUID productId, UUID variantId, 
-                             BigDecimal quantityChange, String transactionType, 
+    public void updateStock(UUID warehouseId, UUID productId, UUID variantId,
+                             BigDecimal quantityChange, String transactionType,
                              UUID referenceId, BigDecimal unitCost) {
-        
-        UUID clientId = TenantContext.getCurrentTenant();
-        // Use getCurrentOrg() but ensure it's not null. Stock movements must happen in a branch context.
         UUID orgId = branchContext.requireWriteOrgId(TenantContext.getCurrentOrg());
+        updateStock(warehouseId, productId, variantId, quantityChange, transactionType, referenceId, unitCost, orgId);
+    }
+
+    /**
+     * Stock update with an explicit orgId — use this when the org is already known from the
+     * source document (e.g. a completed Purchase Order) rather than relying on TenantContext,
+     * which may not carry the correct branch during nested transactional calls.
+     */
+    @Transactional
+    public void updateStock(UUID warehouseId, UUID productId, UUID variantId,
+                             BigDecimal quantityChange, String transactionType,
+                             UUID referenceId, BigDecimal unitCost, UUID explicitOrgId) {
+
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID orgId = explicitOrgId != null ? explicitOrgId
+                : branchContext.requireWriteOrgId(TenantContext.getCurrentOrg());
 
         // 1. Get current balance from snapshot (or 0)
         StockSnapshot snapshot = stockSnapshotRepository

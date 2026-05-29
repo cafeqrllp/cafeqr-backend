@@ -45,6 +45,7 @@ public class ProductListDto {
     private int variantCount;
     private boolean hasUpsells;
     private int upsellCount;
+    private boolean hasIngredients;
     private UUID defaultPricelistId;
     private String defaultPricelistName;
 }

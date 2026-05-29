@@ -9,19 +9,21 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-@Data
+@Getter
+@Setter
+@ToString(exclude = "order")
 @Entity
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@EqualsAndHashCode(exclude = "order")
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 @Table(name = "order_lines")
 public class OrderLine {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Builder.Default
-    private UUID id = null;
+    @EqualsAndHashCode.Include
+    private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", nullable = false)

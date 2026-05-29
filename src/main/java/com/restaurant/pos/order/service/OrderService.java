@@ -18,6 +18,8 @@ import com.restaurant.pos.invoice.domain.InvoiceLine;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderLine;
 import com.restaurant.pos.order.domain.OrderType;
+import com.restaurant.pos.order.domain.OrderStatus;
+import com.restaurant.pos.order.domain.PaymentStatus;
 import com.restaurant.pos.order.domain.Payment;
 import com.restaurant.pos.order.domain.PaymentSplit;
 import com.restaurant.pos.order.domain.PaymentType;
@@ -177,8 +179,14 @@ public class OrderService {
     }
 
     private boolean shouldGenerateInvoice(Order order) {
-        if (order == null || "CANCELLED".equalsIgnoreCase(order.getOrderStatus()) || "VOID".equalsIgnoreCase(order.getOrderStatus())) {
+        if (order == null 
+                || "DRAFT".equalsIgnoreCase(order.getOrderStatus())
+                || "CANCELLED".equalsIgnoreCase(order.getOrderStatus()) 
+                || "VOID".equalsIgnoreCase(order.getOrderStatus())) {
             return false;
+        }
+        if (order.getOrderType() == OrderType.PURCHASE || order.getOrderType() == OrderType.SALE || order.getOrderType() == null) {
+            return true;
         }
         return "COMPLETED".equalsIgnoreCase(order.getOrderStatus()) || "BILLED".equalsIgnoreCase(order.getOrderStatus());
     }
@@ -272,6 +280,12 @@ public class OrderService {
                 continue;
             }
 
+            if (order.getOrderType() == OrderType.PURCHASE) {
+                if (product.getRecipeLines() != null && !product.getRecipeLines().isEmpty()) {
+                    throw new BusinessException("Product '" + product.getName() + "' has ingredients and cannot be purchased directly.");
+                }
+            }
+
             if (line.getProductName() == null || line.getProductName().isBlank()) {
                 line.setProductName(product.getName());
             }
@@ -291,7 +305,7 @@ public class OrderService {
         return orders;
     }
 
-    private void hydrateCustomer(Order order) {
+    private void prepareCustomerFields(Order order) {
         if (order == null) return;
         if (order.getOrderType() != null && order.getOrderType() != OrderType.SALE) return;
 
@@ -304,13 +318,47 @@ public class OrderService {
             return;
         }
 
+        order.setCustomers(resolveOrderCustomers(order, selections, clientId, orgId, false));
+    }
+
+    private void linkCustomersToSavedOrder(Order order) {
+        if (order == null) return;
+        if (order.getOrderType() != null && order.getOrderType() != OrderType.SALE) return;
+        if (order.getId() == null) {
+            throw new IllegalStateException("Order id is required before linking customers");
+        }
+
+        UUID clientId = order.getClientId();
+        UUID orgId = order.getOrgId();
+        List<CustomerSelection> selections = resolvedCustomerSelections(order);
+        if (selections.isEmpty()) {
+            selections = customerSelections(order);
+        }
+
+        if (selections.isEmpty()) {
+            hydrateOrderCustomers(order);
+            return;
+        }
+
+        order.setCustomers(resolveOrderCustomers(order, selections, clientId, orgId, true));
+    }
+
+    private List<OrderCustomerDto> resolveOrderCustomers(
+            Order order,
+            List<CustomerSelection> selections,
+            UUID clientId,
+            UUID orgId,
+            boolean linkToOrder
+    ) {
         List<OrderCustomerDto> linkedCustomers = new ArrayList<>();
         Instant attachedAt = Instant.now();
         for (int i = 0; i < selections.size(); i++) {
             CustomerSelection selection = selections.get(i);
             Customer customer = resolveCustomer(clientId, orgId, selection);
             boolean primary = i == 0;
-            linkCustomerToOrder(customer, order.getId(), primary, attachedAt);
+            if (linkToOrder) {
+                linkCustomerToOrder(customer, order.getId(), primary, attachedAt);
+            }
             Customer saved = customerRepository.save(customer);
             linkedCustomers.add(toOrderCustomerDto(saved, primary));
             if (primary) {
@@ -319,7 +367,7 @@ public class OrderService {
                 order.setCustomerPhone(saved.getPhone());
             }
         }
-        order.setCustomers(linkedCustomers);
+        return linkedCustomers;
     }
 
     private void prepareCreditCustomer(Order order, boolean completingAsCredit) {
@@ -364,6 +412,81 @@ public class OrderService {
         }
     }
 
+    private boolean shouldLogCreditOrderCreate(Order order) {
+        if (order == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(order.getIsCredit())
+                || order.getCreditCustomerId() != null
+                || "CREDIT".equalsIgnoreCase(order.getPaymentMethod())
+                || "CREDIT".equalsIgnoreCase(order.getReference());
+    }
+
+    private void logCreditOrderCreateSuccess(boolean enabled, Order order) {
+        if (!enabled) {
+            return;
+        }
+        log.info(
+                "credit_order_create_success orderId={} orderNo={} clientId={} orgId={} tableId={} orderStatus={} paymentStatus={} isCredit={} creditCustomerId={} customerId={} grandTotal={} sourceOperationId={} terminalId={}",
+                order != null ? order.getId() : null,
+                order != null ? order.getOrderNo() : null,
+                order != null ? order.getClientId() : null,
+                order != null ? order.getOrgId() : null,
+                order != null ? order.getTableId() : null,
+                order != null ? order.getOrderStatus() : null,
+                order != null ? order.getPaymentStatus() : null,
+                order != null ? order.getIsCredit() : null,
+                order != null ? order.getCreditCustomerId() : null,
+                order != null ? order.getCustomerId() : null,
+                order != null ? order.getGrandTotal() : null,
+                order != null ? order.getSourceOperationId() : null,
+                order != null ? order.getTerminalId() : null
+        );
+    }
+
+    private void logCreditOrderCreateFailure(boolean enabled, String phase, Order order, RuntimeException ex) {
+        if (!enabled) {
+            return;
+        }
+        Throwable root = rootCause(ex);
+        log.error(
+                "credit_order_create_failed phase={} exception={} rootException={} rootMessage={} orderId={} orderNo={} clientId={} orgId={} tableId={} orderStatus={} paymentStatus={} isCredit={} creditCustomerId={} customerId={} grandTotal={} sourceOperationId={} terminalId={}",
+                phase,
+                ex.getClass().getName(),
+                root.getClass().getName(),
+                safeLogMessage(root.getMessage()),
+                order != null ? order.getId() : null,
+                order != null ? order.getOrderNo() : null,
+                order != null ? order.getClientId() : null,
+                order != null ? order.getOrgId() : null,
+                order != null ? order.getTableId() : null,
+                order != null ? order.getOrderStatus() : null,
+                order != null ? order.getPaymentStatus() : null,
+                order != null ? order.getIsCredit() : null,
+                order != null ? order.getCreditCustomerId() : null,
+                order != null ? order.getCustomerId() : null,
+                order != null ? order.getGrandTotal() : null,
+                order != null ? order.getSourceOperationId() : null,
+                order != null ? order.getTerminalId() : null,
+                ex
+        );
+    }
+
+    private Throwable rootCause(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null && current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current != null ? current : throwable;
+    }
+
+    private String safeLogMessage(String message) {
+        if (message == null) {
+            return null;
+        }
+        return message.replace('\r', ' ').replace('\n', ' ');
+    }
+
     private Customer resolveCustomer(UUID clientId, UUID orgId, CustomerSelection selection) {
         if (selection.id() != null) {
             return customerRepository.findByIdAndClientId(selection.id(), clientId)
@@ -393,10 +516,13 @@ public class OrderService {
     }
 
     private void linkCustomerToOrder(Customer customer, UUID orderId, boolean primary, Instant attachedAt) {
+        if (orderId == null) {
+            throw new IllegalStateException("Order id is required before linking customers");
+        }
         if (customer.getOrderLinks() == null) {
             customer.setOrderLinks(new ArrayList<>());
         }
-        customer.getOrderLinks().removeIf(link -> orderId.equals(link.getOrderId()));
+        customer.getOrderLinks().removeIf(link -> Objects.equals(orderId, link.getOrderId()));
         customer.getOrderLinks().add(Customer.OrderLink.builder()
                 .orderId(orderId)
                 .isPrimary(primary)
@@ -420,6 +546,22 @@ public class OrderService {
                 || (order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank())) {
             addCustomerSelection(selections, new CustomerSelection(null, order.getCustomerName(), order.getCustomerPhone()));
         }
+        return selections.values().stream()
+                .filter(selection -> selection.id() != null
+                        || (selection.name() != null && !selection.name().isBlank())
+                        || (selection.phone() != null && !selection.phone().isBlank()))
+                .toList();
+    }
+
+    private List<CustomerSelection> resolvedCustomerSelections(Order order) {
+        if (order.getCustomers() == null || order.getCustomers().isEmpty()) {
+            return List.of();
+        }
+        Map<String, CustomerSelection> selections = new LinkedHashMap<>();
+        order.getCustomers().forEach(customer -> addCustomerSelection(
+                selections,
+                new CustomerSelection(customer.getId(), customer.getName(), customer.getPhone())
+        ));
         return selections.values().stream()
                 .filter(selection -> selection.id() != null
                         || (selection.name() != null && !selection.name().isBlank())
@@ -582,6 +724,8 @@ public class OrderService {
                 .paymentMethod(firstNonBlank(hydrated.getPaymentMethod(), hydrated.getReference()))
                 .description(hydrated.getDescription())
                 .lines(toOrderLineSummaries(hydrated.getLines()))
+                .warehouseId(hydrated.getWarehouseId())
+                .vendorId(hydrated.getVendorId())
                 .build();
     }
 
@@ -743,11 +887,11 @@ public class OrderService {
     }
 
     private boolean isPrimaryForOrder(Customer customer, UUID orderId) {
-        if (customer.getOrderLinks() == null) {
+        if (orderId == null || customer.getOrderLinks() == null) {
             return false;
         }
         return customer.getOrderLinks().stream()
-                .anyMatch(link -> orderId.equals(link.getOrderId()) && Boolean.TRUE.equals(link.getIsPrimary()));
+                .anyMatch(link -> Objects.equals(orderId, link.getOrderId()) && Boolean.TRUE.equals(link.getIsPrimary()));
     }
 
     private OrderCustomerDto toOrderCustomerDto(Customer customer, boolean primary) {
@@ -787,6 +931,36 @@ public class OrderService {
     
     public List<Order> getOrders() {
         return getOrders(null);
+    }
+
+    public Page<Order> getOrders(String status, Pageable pageable) {
+        UUID tenantId = TenantContext.getCurrentTenant();
+        UUID orgId = branchContext.getReadOrgId(null);
+        List<String> statuses = (status != null && !status.isEmpty()) ? Arrays.asList(status.split(",")) : null;
+
+        Page<Order> ordersPage;
+        if (orgId == null) {
+            if (statuses != null) {
+                ordersPage = orderRepository.findByClientIdAndOrderStatusIn(tenantId, statuses, pageable);
+            } else {
+                ordersPage = orderRepository.findByClientId(tenantId, pageable);
+            }
+        } else {
+            if (statuses != null) {
+                ordersPage = orderRepository.findByClientIdAndOrgIdAndOrderStatusIn(tenantId, orgId, statuses, pageable);
+            } else {
+                ordersPage = orderRepository.findByClientIdAndOrgId(tenantId, orgId, pageable);
+            }
+        }
+
+        // Lazy generate documents for completed orders that are missing them
+        ordersPage.getContent().stream()
+            .filter(o -> "COMPLETED".equalsIgnoreCase(o.getOrderStatus()) && (o.getInvoiceNo() == null || o.getInvoiceNo().isEmpty()))
+            .forEach(o -> {
+                try { generateInvoice(o); } catch (Exception ignored) {}
+            });
+
+        return ordersPage.map(this::hydrateOrder);
     }
 
     @Transactional(readOnly = true)
@@ -891,6 +1065,17 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
+    public Page<Order> searchOrders(com.restaurant.pos.order.dto.OrderSearchCriteria criteria, Pageable pageable) {
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID orgId = branchContext.getReadOrgId(null);
+        
+        org.springframework.data.jpa.domain.Specification<Order> spec = 
+            com.restaurant.pos.order.spec.OrderSpecification.filterBy(criteria, clientId, orgId);
+            
+        return orderRepository.findAll(spec, pageable).map(this::hydrateOrder);
+    }
+
+    @Transactional(readOnly = true)
     public Order getOrder(UUID id) {
         UUID tenantId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
@@ -907,45 +1092,91 @@ public class OrderService {
         log.info("Creating order: {} | Tenant: {} | Org: {}", order, TenantContext.getCurrentTenant(), TenantContext.getCurrentOrg());
         String requestedInvoiceNo = order.getOfflineInvoiceNo();
         String requestedPaymentNo = order.getOfflinePaymentNo();
-        
-        order.setClientId(TenantContext.getCurrentTenant());
-        order.setOrgId(resolveOrderWriteOrgId(order));
-        prepareSourceFields(order);
 
-        if (order.getOrderStatus() == null) {
-            order.setOrderStatus("DRAFT");
+        boolean logCreditDiagnostics = shouldLogCreditOrderCreate(order);
+        String diagnosticPhase = "resolve_context";
+        try {
+            order.setClientId(TenantContext.getCurrentTenant());
+            order.setOrgId(resolveOrderWriteOrgId(order));
+            prepareSourceFields(order);
+
+            if (order.getOrderStatus() == null) {
+                order.setOrderStatus("DRAFT");
+            }
+
+            diagnosticPhase = "validate_table_available";
+            validateTableAvailableForNewOrder(order);
+
+            diagnosticPhase = "assign_order_number";
+            assignOrderNumber(order);
+
+            diagnosticPhase = "prepare_credit_customer";
+            prepareCreditCustomer(order, Boolean.TRUE.equals(order.getIsCredit()));
+
+            diagnosticPhase = "prepare_order_lines";
+            // Ensure bidirectional mapping
+            if (order.getLines() != null) {
+                order.getLines().forEach(line -> line.setOrder(order));
+            }
+
+            diagnosticPhase = "hydrate_order_inputs";
+            hydrateOrderLines(order);
+            prepareCustomerFields(order);
+
+            diagnosticPhase = "save_order";
+            Order saved = orderRepository.save(order);
+
+            diagnosticPhase = "link_customers";
+            linkCustomersToSavedOrder(saved);
+
+            diagnosticPhase = "generate_invoice";
+            if (shouldGenerateInvoice(saved)) {
+                generateInvoice(saved, null, requestedInvoiceNo);
+            }
+
+            diagnosticPhase = "post_financials";
+            // Resolve payment method safely
+            String paymentMethod = order.getPaymentMethod();
+            if (paymentMethod == null || paymentMethod.isBlank()) {
+                paymentMethod = saved.getPaymentMethod();
+            }
+            if (paymentMethod == null || paymentMethod.isBlank()) {
+                paymentMethod = "CASH";
+            }
+            boolean isCredit = Boolean.TRUE.equals(saved.getIsCredit()) || "CREDIT".equalsIgnoreCase(paymentMethod);
+
+            if (saved.getOrderType() == OrderType.PURCHASE) {
+                if (!"DRAFT".equalsIgnoreCase(saved.getOrderStatus()) && !isCredit) {
+                    generatePayment(saved, paymentMethod, requestedPaymentNo);
+                }
+                if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
+                    processInventoryForOrder(saved);
+                }
+            } else {
+                // Sales
+                if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus()) && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+                    String salePaymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
+                    generatePayment(saved, salePaymentMethod, requestedPaymentNo);
+                    accountingPostingService.postSaleCogs(saved);
+                } else if (isCompletedCreditSale(saved)) {
+                    accountingPostingService.postSaleCogs(saved);
+                }
+            }
+
+            diagnosticPhase = "handle_table_status";
+            handleTableStatus(saved);
+
+            diagnosticPhase = "hydrate_saved_order";
+            Order hydrated = hydrateOrder(saved);
+
+            diagnosticPhase = "enqueue_cloud_print_jobs";
+            enqueueCloudPrintJobs(hydrated);
+            logCreditOrderCreateSuccess(logCreditDiagnostics, hydrated);
+            return hydrated;
+        } catch (RuntimeException ex) {
+            logCreditOrderCreateFailure(logCreditDiagnostics, diagnosticPhase, order, ex);
+            throw ex;
         }
-
-        validateTableAvailableForNewOrder(order);
-        assignOrderNumber(order);
-        prepareCreditCustomer(order, Boolean.TRUE.equals(order.getIsCredit()));
-
-        // Ensure bidirectional mapping
-        if (order.getLines() != null) {
-            order.getLines().forEach(line -> line.setOrder(order));
-        }
-        hydrateOrderLines(order);
-        hydrateCustomer(order);
-
-        Order saved = orderRepository.save(order);
-        
-        if (shouldGenerateInvoice(saved)) {
-            generateInvoice(saved, null, requestedInvoiceNo);
-        }
-        
-        // Create payment only if completed and paid
-        if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus()) && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
-            String paymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
-            generatePayment(saved, paymentMethod, requestedPaymentNo);
-            accountingPostingService.postSaleCogs(saved);
-        } else if (isCompletedCreditSale(saved)) {
-            accountingPostingService.postSaleCogs(saved);
-        }
-
-        handleTableStatus(saved);
-        Order hydrated = hydrateOrder(saved);
-        enqueueCloudPrintJobs(hydrated);
-        return hydrated;
     }
 
     @Transactional(readOnly = true)
@@ -966,7 +1197,7 @@ public class OrderService {
         oldOrder.setOrderNo(originalOrderNo + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
         oldOrder.setOrderStatus("VOID");
         oldOrder.setIsactive("N");
-        orderRepository.save(oldOrder);
+        orderRepository.saveAndFlush(oldOrder);
         
         // 2. VOID the linked invoice
         List<UUID> oldInvoiceIdList = new java.util.ArrayList<>();
@@ -975,7 +1206,7 @@ public class OrderService {
             accountingPostingService.reverseInvoice(inv, "Order revised");
             inv.setInvoiceNo(inv.getInvoiceNo() + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
             inv.setStatus("VOID");
-            invoiceRepository.save(inv);
+            invoiceRepository.saveAndFlush(inv);
         });
 
         paymentRepository.findByOrderId(id).forEach(payment -> {
@@ -984,7 +1215,7 @@ public class OrderService {
                     + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
             payment.setDocStatus("VOID");
             payment.setIsactive("N");
-            paymentRepository.save(payment);
+            paymentRepository.saveAndFlush(payment);
         });
 
         // 3. Create the correct entity subtype to preserve the JPA discriminator value.
@@ -1073,21 +1304,42 @@ public class OrderService {
         }
         hydrateOrderLines(newOrder);
         prepareCreditCustomer(newOrder, Boolean.TRUE.equals(newOrder.getIsCredit()));
-        hydrateCustomer(newOrder);
+        prepareCustomerFields(newOrder);
         
         Order saved = orderRepository.save(newOrder);
+        linkCustomersToSavedOrder(saved);
         
         // 4. Generate new ERP documents (Invoice/Payment)
         UUID oldInvId = oldInvoiceIdList.isEmpty() ? null : oldInvoiceIdList.get(0);
         if (shouldGenerateInvoice(saved)) {
             generateInvoice(saved, oldInvId);
         }
-        if ("PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
-            String paymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
-            generatePayment(saved, paymentMethod);
-            accountingPostingService.postSaleCogs(saved);
-        } else if (isCompletedCreditSale(saved)) {
-            accountingPostingService.postSaleCogs(saved);
+        // Resolve payment method safely
+        String paymentMethod = newOrder.getPaymentMethod();
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            paymentMethod = saved.getPaymentMethod();
+        }
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            paymentMethod = "CASH";
+        }
+        boolean isCredit = Boolean.TRUE.equals(saved.getIsCredit()) || "CREDIT".equalsIgnoreCase(paymentMethod);
+
+        if (saved.getOrderType() == OrderType.PURCHASE) {
+            if (!"DRAFT".equalsIgnoreCase(saved.getOrderStatus()) && !isCredit) {
+                generatePayment(saved, paymentMethod);
+            }
+            if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
+                processInventoryForOrder(saved);
+            }
+        } else {
+            // Sales
+            if ("PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+                String salePaymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
+                generatePayment(saved, salePaymentMethod);
+                accountingPostingService.postSaleCogs(saved);
+            } else if (isCompletedCreditSale(saved)) {
+                accountingPostingService.postSaleCogs(saved);
+            }
         }
         
         handleTableStatus(saved);
@@ -1103,6 +1355,11 @@ public class OrderService {
     }
 
     @Transactional
+    @org.springframework.retry.annotation.Retryable(
+        value = { org.springframework.orm.ObjectOptimisticLockingFailureException.class },
+        maxAttempts = 3,
+        backoff = @org.springframework.retry.annotation.Backoff(delay = 50)
+    )
     public Order updateOrderStatus(UUID id, String status, String paymentStatus, String description) {
         Order order = getOrder(id);
         if (status != null) order.setOrderStatus(status);
@@ -1116,13 +1373,29 @@ public class OrderService {
             generateInvoice(result);
         }
 
-        // Generate Payment only if completed and paid
-        if ("COMPLETED".equalsIgnoreCase(result.getOrderStatus()) && "PAID".equalsIgnoreCase(result.getPaymentStatus())) {
-            String paymentMethod = result.getReference() != null ? result.getReference() : "CASH";
-            generatePayment(result, paymentMethod);
-            accountingPostingService.postSaleCogs(result);
-        } else if (isCompletedCreditSale(result)) {
-            accountingPostingService.postSaleCogs(result);
+        // Resolve payment method safely
+        String paymentMethod = order.getPaymentMethod();
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            paymentMethod = result.getPaymentMethod();
+        }
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            paymentMethod = "CASH";
+        }
+        boolean isCredit = Boolean.TRUE.equals(result.getIsCredit()) || "CREDIT".equalsIgnoreCase(paymentMethod);
+
+        if (result.getOrderType() == OrderType.PURCHASE) {
+            if (!"DRAFT".equalsIgnoreCase(result.getOrderStatus()) && !isCredit) {
+                generatePayment(result, paymentMethod);
+            }
+        } else {
+            // Sales
+            if ("COMPLETED".equalsIgnoreCase(result.getOrderStatus()) && "PAID".equalsIgnoreCase(result.getPaymentStatus())) {
+                String salePaymentMethod = result.getReference() != null ? result.getReference() : "CASH";
+                generatePayment(result, salePaymentMethod);
+                accountingPostingService.postSaleCogs(result);
+            } else if (isCompletedCreditSale(result)) {
+                accountingPostingService.postSaleCogs(result);
+            }
         }
         
         handleTableStatus(result);
@@ -1141,11 +1414,38 @@ public class OrderService {
     }
 
     @Transactional
+    @org.springframework.retry.annotation.Retryable(
+        value = { org.springframework.orm.ObjectOptimisticLockingFailureException.class },
+        maxAttempts = 3,
+        backoff = @org.springframework.retry.annotation.Backoff(delay = 50)
+    )
+    public Order updateOrderStatus(UUID id, OrderStatus status, PaymentStatus paymentStatus, String description) {
+        return updateOrderStatus(
+            id,
+            status != null ? status.name() : null,
+            paymentStatus != null ? paymentStatus.name() : null,
+            description
+        );
+    }
+
+    @Transactional
+    @org.springframework.retry.annotation.Retryable(
+        value = { org.springframework.orm.ObjectOptimisticLockingFailureException.class },
+        maxAttempts = 3,
+        backoff = @org.springframework.retry.annotation.Backoff(delay = 50)
+    )
+    public Order updateOrderStatus(UUID id, OrderStatus status) {
+        return updateOrderStatus(id, status, null, null);
+    }
+
+    @Transactional
     public Order billOrder(UUID id) {
         Order order = getOrder(id);
         ensureOrderCanChange(order, "bill");
 
-        order.setOrderStatus("BILLED");
+        if (order.getOrderType() != OrderType.PURCHASE) {
+            order.setOrderStatus("BILLED");
+        }
         if (!"PAID".equalsIgnoreCase(order.getPaymentStatus())) {
             order.setPaymentStatus("PENDING");
         }
@@ -1236,6 +1536,7 @@ public class OrderService {
         OrderCreditCompletionRequest safeRequest = request == null ? new OrderCreditCompletionRequest() : request;
         order.setCreditCustomerId(safeRequest.getCreditCustomerId() != null ? safeRequest.getCreditCustomerId() : order.getCreditCustomerId());
         prepareCreditCustomer(order, true);
+        prepareCustomerFields(order);
 
         BigDecimal discountAmount = moneyValue(safeRequest.getDiscountAmount());
         BigDecimal roundOffAmount = moneyValue(safeRequest.getRoundOffAmount());
@@ -1261,6 +1562,7 @@ public class OrderService {
         }
 
         Order saved = orderRepository.save(order);
+        linkCustomersToSavedOrder(saved);
         List<Invoice> invoices = invoiceRepository.findByOrderId(saved.getId());
         if (invoices.isEmpty()) {
             generateInvoice(saved);
@@ -1462,6 +1764,7 @@ public class OrderService {
                                 BigDecimal cashAmount, BigDecimal onlineAmount,
                                 List<OrderSettleRequest.PaymentSplitRequest> paymentSplits) {
         if (order.getPaymentNo() != null && !order.getPaymentNo().isEmpty()) return;
+        if (!paymentRepository.findByOrderId(order.getId()).isEmpty()) return;
 
         // Try to find the invoice
         List<Invoice> invoices = invoiceRepository.findByOrderId(order.getId());
@@ -1655,6 +1958,7 @@ public class OrderService {
         }
         if (!"settle".equalsIgnoreCase(action)
                 && !"cancel".equalsIgnoreCase(action)
+                && order.getOrderType() != OrderType.PURCHASE
                 && ("COMPLETED".equalsIgnoreCase(status) || "PAID".equalsIgnoreCase(order.getPaymentStatus()))) {
             throw new IllegalStateException("Cannot " + action + " a completed order");
         }
@@ -1782,20 +2086,28 @@ public class OrderService {
 
     private void processInventoryForOrder(Order order) {
         if (order.getWarehouseId() == null) {
-            // Log warning or throw exception? For now, we need a warehouse to receive stock.
+            // A warehouse is required to receive stock — skip silently if not set.
+            log.warn("processInventoryForOrder: skipping order {} — no warehouseId set", order.getId());
             return;
         }
 
         if (order.getLines() != null) {
             for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+                if (line.getProductId() == null) {
+                    continue; // skip lines with no product
+                }
+                // Use the 8-arg overload that accepts an explicit orgId from the order,
+                // because TenantContext may not carry the correct branch org during nested
+                // transactional calls (see InventoryService.updateStock javadoc).
                 inventoryService.updateStock(
                     order.getWarehouseId(),
                     line.getProductId(),
                     line.getVariantId(),
-                    line.getQuantity(),
+                    line.getQuantity() != null ? line.getQuantity() : java.math.BigDecimal.ONE,
                     "PURCHASE",
                     order.getId(),
-                    line.getUnitPrice()
+                    line.getUnitPrice() != null ? line.getUnitPrice() : java.math.BigDecimal.ZERO,
+                    order.getOrgId()
                 );
             }
         }

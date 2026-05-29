@@ -9,20 +9,20 @@ import lombok.*;
 import org.hibernate.annotations.Formula;
 
 import java.math.BigDecimal;
-
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-@Data
+@Getter
+@Setter
+@ToString(callSuper = true)
 @Entity
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
-@EqualsAndHashCode(callSuper = true)
+@EqualsAndHashCode(onlyExplicitlyIncluded = true, callSuper = false)
 @Table(name = "orders")
 @Inheritance(strategy = InheritanceType.SINGLE_TABLE)
 @DiscriminatorColumn(name = "order_type", discriminatorType = DiscriminatorType.STRING)
@@ -41,8 +41,9 @@ import java.util.UUID;
 public class Order extends BaseEntity {
 
     @Id
-    @Builder.Default
-    private UUID id = UUID.randomUUID();
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @EqualsAndHashCode.Include
+    private UUID id;
 
     @Column(name = "order_no", nullable = false)
     private String orderNo;
@@ -55,9 +56,6 @@ public class Order extends BaseEntity {
     @Column(name = "order_status", length = 20)
     @Builder.Default
     private String orderStatus = "DRAFT"; // DRAFT, CONFIRMED, COMPLETED, CANCELLED
-
-    @Column(name = "document_kind", length = 50)
-    private String documentKind;
 
     @Column(name = "doc_status", length = 20)
     @Builder.Default
@@ -183,6 +181,10 @@ public class Order extends BaseEntity {
     @Column(name = "revision_number")
     @Builder.Default
     private Integer revisionNumber = 0;
+
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private long version;
 
     @Formula("(SELECT i.invoice_no FROM invoices i WHERE i.order_id = id LIMIT 1)")
     private String invoiceNo;

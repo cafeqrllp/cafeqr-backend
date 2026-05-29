@@ -2,8 +2,10 @@ package com.restaurant.pos.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.pos.accounting.service.AccountingPostingService;
+import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
+import com.restaurant.pos.credit.domain.CreditCustomer;
 import com.restaurant.pos.credit.repository.CreditCustomerRepository;
 import com.restaurant.pos.inventory.service.InventoryService;
 import com.restaurant.pos.invoice.repository.InvoiceRepository;
@@ -280,6 +282,70 @@ class OrderServiceTest {
         assertThat(customerB.getOrderLinks()).singleElement().satisfies(link -> {
             assertThat(link.getOrderId()).isEqualTo(orderId);
             assertThat(link.getIsPrimary()).isFalse();
+        });
+    }
+
+    @Test
+    void createCreditOrderLinksCustomerAfterOrderIdIsGenerated() {
+        UUID generatedOrderId = UUID.randomUUID();
+        UUID linkedCustomerId = UUID.randomUUID();
+        UUID creditCustomerId = UUID.randomUUID();
+
+        Customer linkedCustomer = Customer.builder()
+                .id(linkedCustomerId)
+                .name("Ravi")
+                .phone("1234567890")
+                .build();
+        linkedCustomer.setClientId(clientId);
+        linkedCustomer.setOrgId(orgId);
+
+        CreditCustomer creditCustomer = CreditCustomer.builder()
+                .id(creditCustomerId)
+                .linkedCustomerId(linkedCustomerId)
+                .name("Ravi")
+                .phone("1234567890")
+                .status("ACTIVE")
+                .isactive("Y")
+                .build();
+        creditCustomer.setClientId(clientId);
+        creditCustomer.setOrgId(orgId);
+
+        Order order = Order.builder()
+                .orderStatus("COMPLETED")
+                .paymentStatus("PENDING")
+                .isCredit(true)
+                .creditCustomerId(creditCustomerId)
+                .grandTotal(new BigDecimal("118.00"))
+                .totalTaxAmount(new BigDecimal("18.00"))
+                .build();
+
+        when(sequenceService.generateNextSequence(DocumentType.SALE_ORDER)).thenReturn("SO-CREDIT");
+        when(sequenceService.generateNextSequence(DocumentType.CUSTOMER_INVOICE)).thenReturn("INV-CREDIT");
+        when(configurationService.getConfiguration()).thenReturn(ConfigurationDto.builder().creditEnabled(true).build());
+        when(creditCustomerRepository.findByIdAndClientId(creditCustomerId, clientId)).thenReturn(Optional.of(creditCustomer));
+        when(customerRepository.findByIdAndClientId(linkedCustomerId, clientId)).thenReturn(Optional.of(linkedCustomer));
+        when(customerRepository.save(any(Customer.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
+            Order saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(generatedOrderId);
+            }
+            return saved;
+        });
+        when(invoiceRepository.findByOrderId(generatedOrderId)).thenReturn(List.of());
+        when(customerRepository.findByClientIdAndOrderLink(eq(clientId), any(), any()))
+                .thenReturn(List.of(linkedCustomer));
+
+        Order saved = orderService.createOrder(order);
+
+        assertThat(saved.getId()).isEqualTo(generatedOrderId);
+        assertThat(saved.getCustomerId()).isEqualTo(linkedCustomerId);
+        assertThat(saved.getCustomerName()).isEqualTo("Ravi");
+        assertThat(saved.getIsCredit()).isTrue();
+        assertThat(saved.getCreditCustomerId()).isEqualTo(creditCustomerId);
+        assertThat(linkedCustomer.getOrderLinks()).singleElement().satisfies(link -> {
+            assertThat(link.getOrderId()).isEqualTo(generatedOrderId);
+            assertThat(link.getIsPrimary()).isTrue();
         });
     }
 

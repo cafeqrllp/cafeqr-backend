@@ -103,4 +103,9 @@ public class Product extends AuditableEntity {
     @Builder.Default
     @BatchSize(size = 20)
     private List<PricelistProduct> pricelistProducts = new ArrayList<>();
+
+    @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    @BatchSize(size = 20)
+    private List<ProductRecipe> recipeLines = new ArrayList<>();
 }

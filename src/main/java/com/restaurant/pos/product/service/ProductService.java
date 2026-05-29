@@ -6,6 +6,7 @@ import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.product.domain.Category;
 import com.restaurant.pos.product.domain.Product;
+import com.restaurant.pos.product.domain.ProductRecipe;
 import com.restaurant.pos.product.domain.Uom;
 import com.restaurant.pos.product.domain.VariantGroup;
 import com.restaurant.pos.product.domain.VariantOption;
@@ -409,6 +410,7 @@ public class ProductService {
                     .variantCount(product.getVariantMappings() != null ? product.getVariantMappings().size() : 0)
                     .hasUpsells(product.getUpsells() != null && !product.getUpsells().isEmpty())
                     .upsellCount(product.getUpsells() != null ? product.getUpsells().size() : 0)
+                    .hasIngredients(product.getRecipeLines() != null && !product.getRecipeLines().isEmpty())
                     .defaultPricelistId(product.getDefaultPricelist() != null ? product.getDefaultPricelist().getId() : null)
                     .defaultPricelistName(product.getDefaultPricelist() != null ? product.getDefaultPricelist().getName() : null)
                     .build();
@@ -473,6 +475,20 @@ public class ProductService {
                                 .build())
                         .collect(Collectors.toList());
 
+        List<ProductDetailDto.RecipeDto> recipeLines = product.getRecipeLines() == null
+                ? List.of()
+                : product.getRecipeLines().stream()
+                        .map(recipe -> ProductDetailDto.RecipeDto.builder()
+                                .id(recipe.getId())
+                                .ingredientId(recipe.getIngredient() != null ? recipe.getIngredient().getId() : null)
+                                .ingredientName(recipe.getIngredient() != null ? recipe.getIngredient().getName() : null)
+                                .quantity(recipe.getQuantity())
+                                .uomName(recipe.getIngredient() != null && recipe.getIngredient().getUom() != null
+                                        ? recipe.getIngredient().getUom().getName() : null)
+                                .isActive(recipe.isActive())
+                                .build())
+                        .collect(Collectors.toList());
+
         return ProductDetailDto.builder()
                 .id(product.getId())
                 .name(product.getName())
@@ -498,6 +514,7 @@ public class ProductService {
                 .variantMappings(mappings)
                 .variantPricings(pricings)
                 .upsells(upsells)
+                .recipeLines(recipeLines)
                 .build();
     }
 
@@ -605,6 +622,17 @@ public class ProductService {
                 pp.setProduct(product);
                 pp.setClientId(clientId);
                 pp.setOrgId(orgId);
+            });
+        }
+        if (product.getRecipeLines() != null) {
+            product.getRecipeLines().forEach(recipe -> {
+                if (product.getId() != null && recipe.getIngredient() != null
+                        && product.getId().equals(recipe.getIngredient().getId())) {
+                    throw new BusinessException("A product cannot be an ingredient of itself");
+                }
+                recipe.setProduct(product);
+                recipe.setClientId(clientId);
+                recipe.setOrgId(orgId);
             });
         }
     }
@@ -763,6 +791,30 @@ public class ProductService {
         existing.getPricelistProducts().clear();
         if (product.getPricelistProducts() != null) {
             existing.getPricelistProducts().addAll(product.getPricelistProducts());
+        }
+
+        // Update Recipe Lines
+        existing.getRecipeLines().clear();
+        if (product.getRecipeLines() != null) {
+            product.getRecipeLines().forEach(recipe -> {
+                if (existing.getId() != null && recipe.getIngredient() != null
+                        && existing.getId().equals(recipe.getIngredient().getId())) {
+                    throw new BusinessException("A product cannot be an ingredient of itself");
+                }
+                if (recipe.getIngredient() != null && recipe.getIngredient().getId() != null) {
+                    Product ingredientProduct = productRepository.findById(recipe.getIngredient().getId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Ingredient product not found"));
+                    validateOwnership(ingredientProduct.getClientId(), ingredientProduct.getOrgId(), "Ingredient Product", false);
+                    if (!ingredientProduct.isIngredient()) {
+                        throw new BusinessException("Product must be set as an ingredient to be used in a recipe");
+                    }
+                    recipe.setIngredient(ingredientProduct);
+                }
+                recipe.setProduct(existing);
+                recipe.setClientId(clientId);
+                recipe.setOrgId(orgId);
+            });
+            existing.getRecipeLines().addAll(product.getRecipeLines());
         }
 
         return productRepository.save(existing);

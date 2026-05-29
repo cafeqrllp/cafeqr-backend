@@ -33,7 +33,7 @@ public class PurchasingService {
         if (SecurityUtils.isSuperAdmin()) {
             return customerRepository.findByClientIdOrderByNameAsc(tenantId);
         }
-        return customerRepository.findByClientIdAndOrgIdOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
+        return customerRepository.findByClientIdAndOrgIdOrGlobalOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
     }
 
     public Customer getCustomer(UUID id) {
@@ -42,7 +42,7 @@ public class PurchasingService {
             return customerRepository.findByIdAndClientId(id, tenantId)
                     .orElseThrow(() -> new ResourceNotFoundException("Customer not found"));
         }
-        return customerRepository.findByIdAndClientIdAndOrgId(id, tenantId, TenantContext.getCurrentOrg())
+        return customerRepository.findByIdAndClientIdAndOrgIdOrGlobal(id, tenantId, TenantContext.getCurrentOrg())
                 .orElseThrow(() -> new ResourceNotFoundException("Customer not found"));
     }
 
@@ -110,7 +110,7 @@ public class PurchasingService {
         if (SecurityUtils.isSuperAdmin()) {
             return vendorRepository.findByClientIdOrderByNameAsc(tenantId);
         }
-        return vendorRepository.findByClientIdAndOrgIdOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
+        return vendorRepository.findByClientIdAndOrgIdOrGlobalOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
     }
 
     public Vendor getVendor(UUID id) {
@@ -119,7 +119,7 @@ public class PurchasingService {
             return vendorRepository.findByIdAndClientId(id, tenantId)
                     .orElseThrow(() -> new ResourceNotFoundException("Vendor not found"));
         }
-        return vendorRepository.findByIdAndClientIdAndOrgId(id, tenantId, TenantContext.getCurrentOrg())
+        return vendorRepository.findByIdAndClientIdAndOrgIdOrGlobal(id, tenantId, TenantContext.getCurrentOrg())
                 .orElseThrow(() -> new ResourceNotFoundException("Vendor not found"));
     }
 

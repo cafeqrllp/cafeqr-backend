@@ -1,7 +1,6 @@
 package com.restaurant.pos.common.exception;
 
 import com.restaurant.pos.common.dto.ApiResponse;
-import com.restaurant.pos.expense.exception.IdempotencyStoreException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -41,6 +40,13 @@ public class GlobalExceptionHandler {
         log.warn("Validation error: {}", message);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(message));
+    }
+
+    @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(jakarta.validation.ConstraintViolationException ex) {
+        log.warn("Constraint violation error: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error("Validation error: " + ex.getMessage()));
     }
 
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
@@ -106,7 +112,23 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleIdempotencyStoreException(IdempotencyStoreException ex) {
         log.error("Idempotency store unavailable: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ApiResponse.error("The service is temporarily unable to process the request safely. Please try again later."));
+                .header("Retry-After", "30")
+                .body(ApiResponse.error("STORE_UNAVAILABLE", "The service is temporarily unable to process the request safely. Please try again later."));
+    }
+
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLockingFailure(org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        log.warn("Database concurrency optimistic locking conflict: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error("DATABASE_CONFLICT", "This record was updated by another cashier. Please reload and try again."));
+    }
+
+    @ExceptionHandler(com.restaurant.pos.order.exception.ConcurrentIdempotentRequestException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConcurrentIdempotentRequest(com.restaurant.pos.order.exception.ConcurrentIdempotentRequestException ex) {
+        log.warn("Idempotency lock active: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(org.springframework.http.HttpHeaders.RETRY_AFTER, "15")
+                .body(ApiResponse.error("CONCURRENT_REQUEST", ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

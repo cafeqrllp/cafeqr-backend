@@ -3,7 +3,7 @@ package com.restaurant.pos.expense.idempotency;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.pos.expense.dto.ExpenseResponse;
-import com.restaurant.pos.expense.exception.IdempotencyStoreException;
+import com.restaurant.pos.common.exception.IdempotencyStoreException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;

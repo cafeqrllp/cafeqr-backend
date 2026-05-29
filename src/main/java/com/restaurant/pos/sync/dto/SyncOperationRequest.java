@@ -15,6 +15,7 @@ import java.util.Map;
 public class SyncOperationRequest {
     private String id;
     private String operationId;
+    private String dependsOnOperationId;
     private String clientRequestId;
     private String offlineId;
     private String method;

@@ -6,8 +6,8 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -53,7 +53,7 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
               AND o.updatedAt >= :updatedAfter
             ORDER BY o.updatedAt DESC, o.orderDate DESC
             """)
-    List<Order> findChangedOrders(UUID clientId, UUID orgId, OrderType orderType, LocalDateTime updatedAfter, Pageable pageable);
+    Slice<Order> findChangedOrders(UUID clientId, UUID orgId, OrderType orderType, LocalDateTime updatedAfter, Pageable pageable);
 
     @EntityGraph(attributePaths = "lines")
     List<Order> findByClientIdAndOrderStatusInOrderByCreatedAtDesc(UUID clientId, List<String> statuses);
@@ -78,7 +78,7 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
               AND o.orderDate BETWEEN :from AND :to
             ORDER BY o.orderDate ASC
             """)
-    List<Order> findByClientIdAndOrgIdAndOrderDateBetweenOrderByOrderDateAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("from") java.time.Instant from, @Param("to") java.time.Instant to);
+    List<Order> findByClientIdAndOrgIdAndOrderDateBetweenOrderByOrderDateAsc(UUID clientId, UUID orgId, java.time.Instant from, java.time.Instant to);
 
     @Query("""
             SELECT COUNT(o) > 0 FROM Order o
@@ -86,10 +86,22 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
               AND ((:orgId IS NULL AND o.orgId IS NULL) OR o.orgId = :orgId)
               AND o.orderNo = :orderNo
             """)
-    boolean existsByClientIdAndOrgIdAndOrderNo(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("orderNo") String orderNo);
+    boolean existsByClientIdAndOrgIdAndOrderNo(UUID clientId, UUID orgId, String orderNo);
 
     @EntityGraph(attributePaths = "lines")
     Optional<Order> findBySourceOperationIdAndClientId(String sourceOperationId, UUID clientId);
+
+    @EntityGraph(attributePaths = "lines")
+    org.springframework.data.domain.Page<Order> findByClientId(UUID clientId, org.springframework.data.domain.Pageable pageable);
+
+    @EntityGraph(attributePaths = "lines")
+    org.springframework.data.domain.Page<Order> findByClientIdAndOrgId(UUID clientId, UUID orgId, org.springframework.data.domain.Pageable pageable);
+
+    @EntityGraph(attributePaths = "lines")
+    org.springframework.data.domain.Page<Order> findByClientIdAndOrderStatusIn(UUID clientId, List<String> statuses, org.springframework.data.domain.Pageable pageable);
+
+    @EntityGraph(attributePaths = "lines")
+    org.springframework.data.domain.Page<Order> findByClientIdAndOrgIdAndOrderStatusIn(UUID clientId, UUID orgId, List<String> statuses, org.springframework.data.domain.Pageable pageable);
 
     long countByClientId(UUID clientId);
 }

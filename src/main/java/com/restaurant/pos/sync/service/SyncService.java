@@ -6,6 +6,8 @@ import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.order.domain.Order;
+import com.restaurant.pos.order.domain.OrderStatus;
+import com.restaurant.pos.order.domain.PaymentStatus;
 import com.restaurant.pos.order.service.OrderService;
 import com.restaurant.pos.product.domain.Category;
 import com.restaurant.pos.product.domain.Product;
@@ -78,9 +80,21 @@ public class SyncService {
 
     @Transactional
     public SyncPushResponse push(SyncPushRequest request) {
-        List<SyncOperationResult> results = request.getOperations().stream()
-                .map(this::processOperationSafely)
-                .toList();
+        // Schema Version check
+        if (request.getSchemaVersion() != null && request.getSchemaVersion() < 1) {
+            throw new IllegalArgumentException("Unsupported offline sync schema version: " + request.getSchemaVersion());
+        }
+
+        java.util.Set<String> failedOperationIds = new java.util.HashSet<>();
+        java.util.List<SyncOperationResult> results = new java.util.ArrayList<>();
+
+        for (SyncOperationRequest operation : request.getOperations()) {
+            SyncOperationResult result = processOperationSafely(operation, failedOperationIds);
+            results.add(result);
+            if (!result.isSuccess()) {
+                failedOperationIds.add(result.getOperationId() != null ? result.getOperationId() : operation.getId());
+            }
+        }
 
         return SyncPushResponse.builder()
                 .serverTime(Instant.now())
@@ -89,6 +103,10 @@ public class SyncService {
     }
 
     private SyncOperationResult processOperationSafely(SyncOperationRequest operation) {
+        return processOperationSafely(operation, new java.util.HashSet<>());
+    }
+
+    private SyncOperationResult processOperationSafely(SyncOperationRequest operation, java.util.Set<String> failedOperationIds) {
         String operationId = operation.getOperationId() != null ? operation.getOperationId() : operation.getId();
         if (operationId == null || operationId.isBlank()) {
             return SyncOperationResult.builder()
@@ -97,6 +115,20 @@ public class SyncService {
                     .status("REJECTED")
                     .message("Missing operationId")
                     .build();
+        }
+
+        // DAG check: Check if parent operation failed
+        if (operation.getDependsOnOperationId() != null && !operation.getDependsOnOperationId().isBlank() 
+                && failedOperationIds.contains(operation.getDependsOnOperationId())) {
+            log.warn("Skipping operation {} because parent operation {} failed.", operationId, operation.getDependsOnOperationId());
+            SyncOperationResult result = SyncOperationResult.builder()
+                    .operationId(operationId)
+                    .success(false)
+                    .status("SKIPPED_DEPENDENCY")
+                    .message("Skipped because parent operation " + operation.getDependsOnOperationId() + " failed.")
+                    .build();
+            storeOperation(operation, result);
+            return result;
         }
 
         SyncOperationResult existing = findStoredResult(operationId);
@@ -118,15 +150,31 @@ public class SyncService {
         } catch (Exception ex) {
             log.warn("Offline sync operation failed. operationId={}, method={}, path={}, message={}",
                     operationId, operation.getMethod(), resolvePath(operation), ex.getMessage());
+            
+            // Exception Classification: Permanent vs Retryable
+            String status = classifyFailure(ex);
+            
             SyncOperationResult result = SyncOperationResult.builder()
                     .operationId(operationId)
                     .success(false)
-                    .status("FAILED")
+                    .status(status)
                     .message(ex.getMessage())
                     .build();
             storeOperation(operation, result);
             return result;
         }
+    }
+
+    private String classifyFailure(Exception ex) {
+        if (ex instanceof IllegalArgumentException 
+                || ex instanceof NullPointerException 
+                || ex instanceof ClassCastException
+                || ex instanceof com.restaurant.pos.common.exception.BusinessException
+                || ex instanceof com.fasterxml.jackson.core.JsonProcessingException
+                || (ex.getMessage() != null && ex.getMessage().toLowerCase().contains("validation"))) {
+            return "FAILED_PERMANENT";
+        }
+        return "FAILED_RETRYABLE";
     }
 
     private Object dispatch(SyncOperationRequest operation) {
@@ -151,9 +199,11 @@ public class SyncService {
         }
         if ("PATCH".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/status")) {
             UUID orderId = extractUuid(path, 3);
-            String status = stringParam(operation, "status");
-            String paymentStatus = stringParam(operation, "paymentStatus");
+            String statusStr = stringParam(operation, "status");
+            String paymentStatusStr = stringParam(operation, "paymentStatus");
             String description = stringParam(operation, "description");
+            OrderStatus status = statusStr != null ? OrderStatus.valueOf(statusStr.toUpperCase()) : null;
+            PaymentStatus paymentStatus = paymentStatusStr != null ? PaymentStatus.valueOf(paymentStatusStr.toUpperCase()) : null;
             return orderService.updateOrderStatus(orderId, status, paymentStatus, description);
         }
 

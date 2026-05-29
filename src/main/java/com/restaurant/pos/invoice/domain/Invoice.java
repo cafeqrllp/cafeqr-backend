@@ -52,7 +52,7 @@ public class Invoice extends BaseEntity {
     @Column(name = "sync_origin", length = 40)
     private String syncOrigin;
 
-    @Column(name = "order_id")
+    @Column(name = "order_id", unique = true)
     private UUID orderId;
 
     @Column(name = "expense_id")

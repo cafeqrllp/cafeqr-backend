@@ -641,11 +641,11 @@ public class ReportService {
     }
 
     private boolean isPrimaryForOrder(Customer customer, UUID orderId) {
-        if (customer.getOrderLinks() == null) {
+        if (orderId == null || customer.getOrderLinks() == null) {
             return false;
         }
         return customer.getOrderLinks().stream()
-                .anyMatch(link -> orderId.equals(link.getOrderId()) && Boolean.TRUE.equals(link.getIsPrimary()));
+                .anyMatch(link -> Objects.equals(orderId, link.getOrderId()) && Boolean.TRUE.equals(link.getIsPrimary()));
     }
 
     private String orderNeedle(UUID orderId, boolean primary) {

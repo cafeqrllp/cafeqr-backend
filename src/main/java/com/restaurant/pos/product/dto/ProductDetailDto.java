@@ -60,6 +60,23 @@ public class ProductDetailDto {
     @Builder.Default
     private List<UpsellDto> upsells = new ArrayList<>();
 
+    @Builder.Default
+    private List<RecipeDto> recipeLines = new ArrayList<>();
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RecipeDto {
+        private UUID id;
+        private UUID ingredientId;
+        private String ingredientName;
+        private BigDecimal quantity;
+        private String uomName;
+        @JsonProperty("isActive")
+        private boolean isActive;
+    }
+
     @Data
     @Builder
     @NoArgsConstructor
