@@ -22,13 +22,13 @@ import java.util.Map;
 @Slf4j
 public class FirebaseAdminService {
 
-    @Value("${app.firebase.project-id}")
+    @Value("${app.firebase.project-id:}")
     private String projectId;
-
-    @Value("${app.firebase.client-email}")
+ 
+    @Value("${app.firebase.client-email:}")
     private String clientEmail;
-
-    @Value("${app.firebase.private-key}")
+ 
+    @Value("${app.firebase.private-key:}")
     private String privateKey;
 
     @PostConstruct
