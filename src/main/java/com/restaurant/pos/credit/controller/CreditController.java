@@ -66,6 +66,12 @@ public class CreditController {
         return ResponseEntity.ok(ApiResponse.success(creditService.getCustomerOrders(id)));
     }
 
+    @GetMapping("/customers/{id}/payments")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    public ResponseEntity<ApiResponse<List<CreditReportDto.PaymentTransactionDto>>> getCustomerPayments(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.success(creditService.getCustomerPayments(id)));
+    }
+
     @PostMapping("/customers/{id}/payments")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<CreditCustomerDto>> recordPayment(@PathVariable UUID id, @RequestBody CreditPaymentRequest request) {

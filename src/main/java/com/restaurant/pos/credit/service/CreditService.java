@@ -157,6 +157,24 @@ public class CreditService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
+    public List<CreditReportDto.PaymentTransactionDto> getCustomerPayments(UUID creditCustomerId) {
+        ensureCreditEnabled();
+        CreditCustomer customer = getCreditCustomer(creditCustomerId, requireClient());
+        List<Payment> payments = paymentRepository.findAll((root, query, cb) -> {
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), customer.getClientId()));
+            predicates.add(cb.equal(root.get("creditCustomerId"), customer.getId()));
+            predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
+            predicates.add(cb.or(cb.isNull(root.get("docStatus")), cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED"))));
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+        return payments.stream()
+                .map(payment -> toPaymentTransaction(payment, customer))
+                .sorted(Comparator.comparing(CreditReportDto.PaymentTransactionDto::getTransactionDate, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
+    }
+
     @Transactional
     public CreditCustomerDto recordPayment(UUID creditCustomerId, CreditPaymentRequest request) {
         ensureCreditEnabled();
@@ -169,6 +187,28 @@ public class CreditService {
         UUID orgId = branchContext.requireWriteOrgId(request != null ? request.getOrgId() : null);
         String paymentMethod = normalizePaymentMethod(request != null ? request.getPaymentMethod() : null);
 
+        UUID invoiceId = request != null ? request.getInvoiceId() : null;
+        String orderOrInvoiceNo = null;
+        if (invoiceId != null) {
+            Invoice linkedInvoice = invoiceRepository.findByIdAndClientId(invoiceId, clientId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Invoice not found"));
+            validateCreditInvoice(customer, linkedInvoice);
+            Order order = resolveOrder(linkedInvoice.getOrderId());
+            orderOrInvoiceNo = order != null ? order.getOrderNo() : linkedInvoice.getInvoiceNo();
+        }
+
+        String referenceNo = sequenceService.generateNextSequence(DocumentType.INBOUND_PAYMENT, orgId);
+        if (orderOrInvoiceNo != null) {
+            referenceNo = referenceNo + "-" + orderOrInvoiceNo;
+        }
+
+        String description;
+        if (orderOrInvoiceNo != null) {
+            description = "Payment against Order - " + orderOrInvoiceNo;
+        } else {
+            description = resolvePaymentDescription(customer, request != null ? request.getDescription() : null);
+        }
+
         Payment payment = Payment.builder()
                 .paymentType(PaymentType.INBOUND)
                 .customerId(customer.getLinkedCustomerId())
@@ -176,8 +216,8 @@ public class CreditService {
                 .paymentDate(LocalDateTime.now())
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
-                .referenceNo(sequenceService.generateNextSequence(DocumentType.INBOUND_PAYMENT, orgId))
-                .description(resolvePaymentDescription(customer, request.getDescription()))
+                .referenceNo(referenceNo)
+                .description(description)
                 .build();
         payment.setClientId(clientId);
         payment.setOrgId(orgId);
@@ -224,7 +264,7 @@ public class CreditService {
             }
             predicates.add(cb.isNotNull(root.get("creditCustomerId")));
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
-            predicates.add(cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED")));
+            predicates.add(cb.or(cb.isNull(root.get("docStatus")), cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED"))));
             if (fromDate != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("paymentDate"), fromDate));
             }
@@ -286,34 +326,54 @@ public class CreditService {
         BigDecimal remaining = money(payment.getAmountPaid());
         List<PaymentAllocation> allocations = new ArrayList<>();
 
-        if ("MANUAL".equals(mode) && request != null && request.getAllocations() != null && !request.getAllocations().isEmpty()) {
-            for (CreditPaymentRequest.AllocationRequest allocationRequest : request.getAllocations()) {
-                if (allocationRequest == null || allocationRequest.getInvoiceId() == null) {
-                    continue;
-                }
-                Invoice invoice = invoiceRepository.findByIdAndClientId(allocationRequest.getInvoiceId(), customer.getClientId())
-                        .orElseThrow(() -> new ResourceNotFoundException("Credit invoice not found"));
-                validateCreditInvoice(customer, invoice);
-                BigDecimal allocated = money(allocationRequest.getAmount()).min(money(invoice.getAmountDue())).min(remaining);
-                if (allocated.compareTo(BigDecimal.ZERO) > 0) {
-                    allocations.add(buildAllocation(customer, payment, invoice, allocated, "Manual credit payment allocation"));
-                    applyInvoicePayment(invoice, allocated);
-                    remaining = remaining.subtract(allocated);
-                }
-                if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
-                    break;
-                }
+        if (request != null && request.getInvoiceId() != null) {
+            Invoice invoice = invoiceRepository.findByIdAndClientId(request.getInvoiceId(), customer.getClientId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Credit invoice not found"));
+            validateCreditInvoice(customer, invoice);
+            BigDecimal allocated = money(invoice.getAmountDue()).min(remaining);
+            if (allocated.compareTo(BigDecimal.ZERO) > 0) {
+                allocations.add(buildAllocation(customer, payment, invoice, allocated, "Direct order-level payment allocation"));
+                applyInvoicePayment(invoice, allocated);
+                remaining = remaining.subtract(allocated);
             }
-        } else {
-            for (Invoice invoice : openInvoices(customer.getId())) {
-                BigDecimal allocated = money(invoice.getAmountDue()).min(remaining);
-                if (allocated.compareTo(BigDecimal.ZERO) > 0) {
-                    allocations.add(buildAllocation(customer, payment, invoice, allocated, "Oldest-first credit payment allocation"));
-                    applyInvoicePayment(invoice, allocated);
-                    remaining = remaining.subtract(allocated);
+        }
+
+        if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+            if ("MANUAL".equals(mode) && request != null && request.getAllocations() != null && !request.getAllocations().isEmpty()) {
+                for (CreditPaymentRequest.AllocationRequest allocationRequest : request.getAllocations()) {
+                    if (allocationRequest == null || allocationRequest.getInvoiceId() == null) {
+                        continue;
+                    }
+                    if (request.getInvoiceId() != null && request.getInvoiceId().equals(allocationRequest.getInvoiceId())) {
+                        continue;
+                    }
+                    Invoice invoice = invoiceRepository.findByIdAndClientId(allocationRequest.getInvoiceId(), customer.getClientId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Credit invoice not found"));
+                    validateCreditInvoice(customer, invoice);
+                    BigDecimal allocated = money(allocationRequest.getAmount()).min(money(invoice.getAmountDue())).min(remaining);
+                    if (allocated.compareTo(BigDecimal.ZERO) > 0) {
+                        allocations.add(buildAllocation(customer, payment, invoice, allocated, "Manual credit payment allocation"));
+                        applyInvoicePayment(invoice, allocated);
+                        remaining = remaining.subtract(allocated);
+                    }
+                    if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                        break;
+                    }
                 }
-                if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
-                    break;
+            } else {
+                for (Invoice invoice : openInvoices(customer.getId())) {
+                    if (request != null && request.getInvoiceId() != null && request.getInvoiceId().equals(invoice.getId())) {
+                        continue;
+                    }
+                    BigDecimal allocated = money(invoice.getAmountDue()).min(remaining);
+                    if (allocated.compareTo(BigDecimal.ZERO) > 0) {
+                        allocations.add(buildAllocation(customer, payment, invoice, allocated, "Oldest-first credit payment allocation"));
+                        applyInvoicePayment(invoice, allocated);
+                        remaining = remaining.subtract(allocated);
+                    }
+                    if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                        break;
+                    }
                 }
             }
         }
@@ -402,7 +462,7 @@ public class CreditService {
             predicates.add(cb.equal(root.get("clientId"), customer.getClientId()));
             predicates.add(cb.equal(root.get("creditCustomerId"), customer.getId()));
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
-            predicates.add(cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED")));
+            predicates.add(cb.or(cb.isNull(root.get("docStatus")), cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED"))));
             return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
         });
         BigDecimal invoiceTotal = invoices.stream().map(Invoice::getTotalAmount).map(this::money).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -542,9 +602,9 @@ public class CreditService {
 
     private String resolvePaymentDescription(CreditCustomer customer, String description) {
         if (description != null && !description.isBlank()) {
-            return description.trim();
+            return "Credit Settlement - " + description.trim();
         }
-        return "Payment received from " + customer.getName();
+        return "Credit Settlement - Payment received from " + customer.getName();
     }
 
     private Order resolveOrder(UUID orderId) {

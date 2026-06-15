@@ -13,6 +13,7 @@ public class CreditPaymentRequest {
     private String paymentMethod;
     private String description;
     private String allocationMode;
+    private UUID invoiceId;
     private List<AllocationRequest> allocations;
 
     @Data
