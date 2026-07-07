@@ -6,12 +6,27 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=prod
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/pos_db
-      - SPRING_DATASOURCE_USERNAME=pos_user
-      - SPRING_DATASOURCE_PASSWORD=pos_password
-      - JWT_SECRET=${JWT_SECRET:-your_fallback_secret_for_development}
-      - RAZORPAY_KEY_ID=rzp_live_RHGyElzudRSzgz
-      - RAZORPAY_KEY_SECRET=jCqjRcfddWa2NkfLdSmu2awB
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/${DB_NAME:-pos_db}
+      - SPRING_DATASOURCE_USERNAME=${DB_USER:-pos_user}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD:-pos_password}
+      - JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:-}
+      - JWT_PUBLIC_KEY=${JWT_PUBLIC_KEY:-}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:-}
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-gmail-api}
+      - GMAIL_SENDER_EMAIL=${GMAIL_SENDER_EMAIL:-cafeqrllp@gmail.com}
+      - GMAIL_CLIENT_ID=${GMAIL_CLIENT_ID:-}
+      - GMAIL_CLIENT_SECRET=${GMAIL_CLIENT_SECRET:-}
+      - GMAIL_REFRESH_TOKEN=${GMAIL_REFRESH_TOKEN:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+      - FRONTEND_URL=${FRONTEND_URL:-https://cafeqr-frontend.pages.dev}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL:-}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY:-}
+      - SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE=25
+      - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=5
+      - SPRING_DATA_REDIS_HOST=redis
     depends_on:
       - db
       - redis
@@ -22,9 +37,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      - POSTGRES_DB=pos_db
-      - POSTGRES_USER=pos_user
-      - POSTGRES_PASSWORD=pos_password
+      - POSTGRES_DB=${DB_NAME:-pos_db}
+      - POSTGRES_USER=${DB_USER:-pos_user}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-pos_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
