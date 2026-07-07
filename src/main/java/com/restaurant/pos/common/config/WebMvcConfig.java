@@ -19,6 +19,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Value("${app.cors.allowed-origins:" +
             "http://localhost:3000," +
             "http://localhost:3001," +
+            "http://192.168.29.152:3000," +
+            "http://192.168.29.152:3001," +
             "https://cafe-test-qr-frontend.vercel.app," +
             "https://cafe-qr-frontend.vercel.app," +
             "https://test-cafe-qr-delivery-app.vercel.app," +

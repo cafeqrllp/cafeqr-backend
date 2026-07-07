@@ -30,7 +30,7 @@ public class InvoiceController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResponse<Invoice>> createInvoice(@RequestBody Invoice invoice) {
         return ResponseEntity.ok(ApiResponse.success(invoiceService.createInvoice(invoice)));
     }

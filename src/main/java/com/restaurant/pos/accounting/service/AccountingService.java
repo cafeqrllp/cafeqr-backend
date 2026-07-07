@@ -617,7 +617,8 @@ public class AccountingService {
     }
 
     private List<Order> findCompletedSaleOrdersInPeriod(UUID clientId, UUID orgId, UUID terminalId, DateRange range) {
-        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, orgId);
+        UUID resolvedOrgId = orgId != null ? orgId : TenantContext.getCurrentOrg();
+        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
         Instant instantFrom = range.from.atZone(zoneId).toInstant();
         Instant instantTo = range.to.atZone(zoneId).toInstant();
         return orderRepository.findAll((root, query, cb) -> {
@@ -877,21 +878,18 @@ public class AccountingService {
             if (line.getGrossLineAmount() == null || line.getTaxType() == null) {
                 BigDecimal disc = money(line.getDiscountAmount());
                 BigDecimal taxRate = money(line.getTaxRate());
-                boolean isInclusive = line.getIsPackagedGood() != null && line.getIsPackagedGood();
-                BigDecimal discExTax = isInclusive 
-                        ? disc.divide(BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100))), 4, RoundingMode.HALF_UP)
-                        : disc;
+                BigDecimal discExTax = disc.divide(BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100))), 4, RoundingMode.HALF_UP);
                 totalExTaxDiscount = totalExTaxDiscount.add(discExTax);
                 continue;
             }
             BigDecimal grossLine = money(line.getGrossLineAmount());
             BigDecimal taxable = money(line.getTaxableAmount());
             BigDecimal taxRate = money(line.getTaxRate());
-            boolean isInclusive = "INCLUSIVE".equalsIgnoreCase(String.valueOf(line.getTaxType()));
             
-            BigDecimal lineGrossExTax = isInclusive 
-                    ? grossLine.divide(BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100))), 4, RoundingMode.HALF_UP)
-                    : grossLine;
+            // Note: Since grossLineAmount is populated with the Gross Face Amount (tax-inclusive) for both
+            // INCLUSIVE and EXCLUSIVE tax lines, we must always divide by the tax factor (1 + taxRate/100)
+            // to obtain the true tax-exclusive gross amount.
+            BigDecimal lineGrossExTax = grossLine.divide(BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100))), 4, RoundingMode.HALF_UP);
             
             BigDecimal lineDiscountExTax = lineGrossExTax.subtract(taxable).max(BigDecimal.ZERO);
             totalExTaxDiscount = totalExTaxDiscount.add(lineDiscountExTax);

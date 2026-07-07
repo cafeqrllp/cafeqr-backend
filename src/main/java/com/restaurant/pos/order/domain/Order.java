@@ -88,6 +88,9 @@ public class Order extends BaseEntity {
     @Column(name = "source_local_ref", length = 160)
     private String sourceLocalRef;
 
+    @Column(name = "request_fingerprint", length = 64)
+    private String requestFingerprint;
+
     @Column(name = "offline_created_at")
     private LocalDateTime offlineCreatedAt;
 
@@ -99,6 +102,21 @@ public class Order extends BaseEntity {
 
     @Transient
     private String offlinePaymentNo;
+
+    @Transient
+    private String roundOffMode;
+
+    @Transient
+    private BigDecimal lineDiscountFaceAmount;
+
+    @Transient
+    private BigDecimal lineDiscountBaseAmount;
+
+    @Transient
+    private BigDecimal orderDiscountFaceAmount;
+
+    @Transient
+    private BigDecimal orderDiscountBaseAmount;
 
     /** Transient: payment splits for direct-settle MIXED orders (not persisted). */
     @Transient

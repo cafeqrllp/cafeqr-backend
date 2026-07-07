@@ -33,5 +33,9 @@ public class CreditReportDto {
         private BigDecimal amount;
         private String description;
         private String referenceNo;
+        private UUID orderId;
+        private String orderNo;
+        private UUID invoiceId;
+        private String invoiceNo;
     }
 }

@@ -8,7 +8,6 @@ import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderType;
 import com.restaurant.pos.order.domain.OrderStatus;
 import com.restaurant.pos.order.domain.PaymentStatus;
-import com.restaurant.pos.order.domain.PaymentSplit;
 import com.restaurant.pos.order.dto.CreateOrderRequest;
 import com.restaurant.pos.order.dto.UpdateOrderRequest;
 import com.restaurant.pos.order.dto.OrderResponseDto;
@@ -20,7 +19,10 @@ import com.restaurant.pos.order.dto.OrderPrintOptionsRequest;
 import com.restaurant.pos.order.dto.OrderSearchCriteria;
 import com.restaurant.pos.order.dto.OrderSettleRequest;
 import com.restaurant.pos.order.dto.OrderSummaryDto;
+import com.restaurant.pos.order.dto.PaymentSplitResponseDto;
+import com.restaurant.pos.order.dto.OrderPaymentDto;
 import com.restaurant.pos.order.service.OrderService;
+import com.restaurant.pos.order.service.OrderRequestFingerprintService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -31,6 +33,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -38,11 +42,10 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
-import java.util.function.Supplier;
 
 @Slf4j
 @StaffAccess
@@ -56,6 +59,24 @@ public class OrderController {
     private final OrderService orderService;
     private final OrderDtoMapper orderDtoMapper;
     private final IdempotencyGuard idempotencyGuard;
+    private final OrderRequestFingerprintService fingerprintService;
+
+    /**
+     * Order statuses that represent financial or terminal states.
+     * These must only be reached via dedicated command endpoints
+     * (/bill, /settle, /cancel, /complete-credit) — never via the generic
+     * /status patch endpoint.
+     */
+    private static final Set<OrderStatus> FINANCIAL_STATUSES = Set.of(
+            OrderStatus.BILLED, OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.VOID
+    );
+    private static final Set<PaymentStatus> FINANCIAL_PAYMENT_STATUSES = Set.of(
+            PaymentStatus.PAID, PaymentStatus.VOID
+    );
+
+    // -----------------------------------------------------------------
+    // Query endpoints
+    // -----------------------------------------------------------------
 
     @GetMapping
     @Operation(summary = "List orders paginated", description = "Returns a paginated list of all orders, optionally filtered by status.")
@@ -68,8 +89,8 @@ public class OrderController {
     public ResponseEntity<ApiResponse<Page<OrderResponseDto>>> getOrders(
             @Parameter(description = "Optional status filter or comma-separated list of statuses (e.g. 'DRAFT,COMPLETED')", example = "DRAFT") @RequestParam(required = false) String status,
             @Parameter(description = "Zero-indexed page number", example = "0") @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "Page size (maximum 5000)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 5000, message = "Page size cannot exceed 5000") int size) {
-        Pageable pageable = PageRequest.of(page, size);
+            @Parameter(description = "Page size (maximum 200)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 200, message = "Page size cannot exceed 200") int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> entityPage = orderService.getOrders(status, pageable);
         Page<OrderResponseDto> dtoPage = entityPage.map(orderDtoMapper::toResponseDto);
         return ResponseEntity.ok(ApiResponse.success(dtoPage));
@@ -86,14 +107,14 @@ public class OrderController {
     public ResponseEntity<ApiResponse<Page<OrderResponseDto>>> getOrdersByType(
             @Parameter(description = "The type of orders to retrieve (SALE, PURCHASE, EXPENSE)", required = true, example = "SALE") @PathVariable String type,
             @Parameter(description = "Zero-indexed page number", example = "0") @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "Page size (maximum 5000)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 5000, message = "Page size cannot exceed 5000") int size) {
+            @Parameter(description = "Page size (maximum 200)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 200, message = "Page size cannot exceed 200") int size) {
         OrderType orderType;
         try {
             orderType = OrderType.valueOf(type.toUpperCase());
         } catch (IllegalArgumentException | NullPointerException e) {
             return ResponseEntity.badRequest().body(ApiResponse.error("INVALID_ORDER_TYPE", "Invalid order type: " + type));
         }
-        Pageable pageable = PageRequest.of(page, size);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> orders = orderService.getOrdersByType(orderType, pageable);
         Page<OrderResponseDto> dtos = orders.map(orderDtoMapper::toResponseDto);
         return ResponseEntity.ok(ApiResponse.success(dtos));
@@ -127,7 +148,7 @@ public class OrderController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId,
             @Parameter(description = "Zero-indexed page number", example = "0") @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "Page size (maximum 5000)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 5000, message = "Page size cannot exceed 5000") int size) {
+            @Parameter(description = "Page size (maximum 500)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 500, message = "Page size cannot exceed 500") int size) {
         if (type != null && type != OrderType.SALE) {
             log.warn("Legacy type parameter '{}' passed to /history is ignored. This endpoint exclusively retrieves SALE history.", type);
         }
@@ -156,7 +177,7 @@ public class OrderController {
             @Parameter(description = "Generic search term for order number or notes") @RequestParam(required = false) String searchTerm,
             @RequestParam(required = false) UUID terminalId,
             @Parameter(description = "Zero-indexed page number", example = "0") @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "Page size (maximum 5000)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 5000, message = "Page size cannot exceed 5000") int size) {
+            @Parameter(description = "Page size (maximum 200)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 200, message = "Page size cannot exceed 200") int size) {
         OrderSearchCriteria criteria = OrderSearchCriteria.builder()
                 .orderType(type)
                 .fromDate(fromDate)
@@ -170,7 +191,7 @@ public class OrderController {
                 .searchTerm(searchTerm)
                 .terminalId(terminalId)
                 .build();
-        Pageable pageable = PageRequest.of(page, size);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> entityPage = orderService.searchOrders(criteria, pageable);
         Page<OrderResponseDto> dtoPage = entityPage.map(orderDtoMapper::toResponseDto);
         return ResponseEntity.ok(ApiResponse.success(dtoPage));
@@ -206,30 +227,65 @@ public class OrderController {
     @GetMapping("/{id}/payment-splits")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     @Operation(summary = "Get payment splits for an order", description = "Returns payment splits for a settled mixed payment order.")
-    public ResponseEntity<ApiResponse<List<PaymentSplit>>> getPaymentSplits(@PathVariable UUID id) {
-        return ResponseEntity.ok(ApiResponse.success(orderService.getPaymentSplits(id)));
+    public ResponseEntity<ApiResponse<List<PaymentSplitResponseDto>>> getPaymentSplits(@PathVariable UUID id) {
+        List<PaymentSplitResponseDto> splits = orderService.getPaymentSplits(id)
+                .stream()
+                .map(ps -> new PaymentSplitResponseDto(ps.getId(), ps.getPaymentMethod(), ps.getAmount(), ps.getReferenceNo()))
+                .toList();
+        return ResponseEntity.ok(ApiResponse.success(splits));
     }
+
+    @GetMapping("/{id}/payments")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get payments for an order", description = "Returns all payments and allocations linked to this order.")
+    public ResponseEntity<ApiResponse<List<OrderPaymentDto>>> getOrderPayments(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.success(orderService.getOrderPayments(id)));
+    }
+
+    // -----------------------------------------------------------------
+    // Command endpoints — create & update
+    // -----------------------------------------------------------------
 
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF') or hasAuthority('ORDER_WRITE')")
     @Operation(summary = "Create order", description = "Creates a new order. The orderType field determines SALE, PURCHASE, or EXPENSE routing.")
     @ApiResponses(value = {
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Successfully created the order"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Successfully created the order"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid request payload or business constraint violation"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Unauthorized access", content = @Content),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Forbidden access", content = @Content)
     })
     public ResponseEntity<ApiResponse<OrderResponseDto>> createOrder(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Parameter(description = "Order details including type, branch, items, totals, and customer details", required = true) @Valid @RequestBody CreateOrderRequest request) {
-        log.info("Creating order | type={} | warehouseId={}", request.getOrderType(), request.getWarehouseId());
+        log.info("Creating order | type={} | warehouseId={} | hasIdempotencyKey={}",
+                request.getOrderType(), request.getWarehouseId(), idempotencyKey != null && !idempotencyKey.isBlank());
+
+        if (org.springframework.util.StringUtils.hasText(idempotencyKey)
+                && org.springframework.util.StringUtils.hasText(request.getSourceLocalRef())
+                && !idempotencyKey.equals(request.getSourceLocalRef())) {
+            throw new com.restaurant.pos.common.exception.BusinessException(
+                "Idempotency-Key does not match sourceLocalRef"
+            );
+        }
+
+        String sourceLocalRef = org.springframework.util.StringUtils.hasText(idempotencyKey)
+                ? idempotencyKey
+                : request.getSourceLocalRef();
+
+        String fingerprint = fingerprintService.fingerprint(request);
         Order mappedEntity = orderDtoMapper.toEntity(request);
-        Order savedEntity = orderService.createOrder(mappedEntity);
-        return ResponseEntity.ok(ApiResponse.success(orderDtoMapper.toResponseDto(savedEntity)));
+        mappedEntity.setRequestFingerprint(fingerprint);
+        mappedEntity.setSourceLocalRef(sourceLocalRef);
+
+        com.restaurant.pos.order.dto.IdempotentCreateResult result = orderService.createOrderIdempotently(mappedEntity);
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status).body(ApiResponse.success(orderDtoMapper.toResponseDto(result.order())));
     }
 
-    @PutMapping("/{id}")
+    @PatchMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF') or hasAuthority('ORDER_WRITE')")
-    @Operation(summary = "Update order", description = "Replaces the order with a new version. Triggers invoice/payment generation on status transitions.")
+    @Operation(summary = "Update order", description = "Merges changes into the existing order (partial update). Triggers invoice/payment generation on status transitions.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Successfully updated the order"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid request payload or modification constraint violation"),
@@ -239,7 +295,7 @@ public class OrderController {
     })
     public ResponseEntity<ApiResponse<OrderResponseDto>> updateOrder(
             @Parameter(description = "UUID of the order to update", required = true) @PathVariable UUID id,
-            @Parameter(description = "New order details payload", required = true) @Valid @RequestBody UpdateOrderRequest request) {
+            @Parameter(description = "Order update payload", required = true) @Valid @RequestBody UpdateOrderRequest request) {
         log.info("Updating order | id={} | status={} | paymentStatus={}", id, request.getOrderStatus(),
                 request.getPaymentStatus());
         Order updates = orderDtoMapper.toEntity(request);
@@ -249,23 +305,39 @@ public class OrderController {
 
     @PatchMapping("/{id}/status")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF') or hasAuthority('ORDER_WRITE')")
-    @Operation(summary = "Update order status only", description = "Lightweight status change without full order payload.")
+    @Operation(summary = "Update operational order status", description = "Lightweight status change for operational transitions only (DRAFT→KITCHEN, KITCHEN→READY, etc.). Financial transitions (BILLED, COMPLETED, PAID, VOID, CANCELLED) must use dedicated command endpoints.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Successfully updated the order status"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid status transition request"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid or forbidden status transition"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Unauthorized access", content = @Content),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Forbidden access", content = @Content),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Order not found", content = @Content)
     })
     public ResponseEntity<ApiResponse<OrderResponseDto>> updateOrderStatus(
             @Parameter(description = "UUID of the order", required = true) @PathVariable UUID id,
-            @Parameter(description = "Next order status (e.g. 'CONFIRMED', 'COMPLETED', 'VOID')", required = true, example = "COMPLETED") @RequestParam OrderStatus status,
-            @Parameter(description = "Optional payment status update (PAID, PENDING, VOID)") @RequestParam(required = false) PaymentStatus paymentStatus,
-            @Parameter(description = "Optional operational notes or cancel reason") @RequestParam(required = false) String description) {
+            @Parameter(description = "Next operational status (DRAFT, CONFIRMED, IN_PROGRESS, READY)", required = true, example = "IN_PROGRESS") @RequestParam OrderStatus status,
+            @Parameter(description = "Optional payment status update — PENDING or PARTIAL only") @RequestParam(required = false) PaymentStatus paymentStatus,
+            @Parameter(description = "Optional operational notes") @RequestParam(required = false) String description) {
+        if (FINANCIAL_STATUSES.contains(status)) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(
+                    "FORBIDDEN_STATUS_TRANSITION",
+                    "Status '" + status + "' must be set via a dedicated command endpoint (/bill, /settle, /cancel, /complete-credit)."
+            ));
+        }
+        if (paymentStatus != null && FINANCIAL_PAYMENT_STATUSES.contains(paymentStatus)) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(
+                    "FORBIDDEN_PAYMENT_STATUS_TRANSITION",
+                    "Payment status '" + paymentStatus + "' must be set via a dedicated command endpoint (/settle, /complete-credit)."
+            ));
+        }
         log.info("Updating order status | id={} | status={} | paymentStatus={}", id, status, paymentStatus);
         Order savedEntity = orderService.updateOrderStatus(id, status, paymentStatus, description);
         return ResponseEntity.ok(ApiResponse.success(orderDtoMapper.toResponseDto(savedEntity)));
     }
+
+    // -----------------------------------------------------------------
+    // Financial command endpoints
+    // -----------------------------------------------------------------
 
     @PostMapping("/{id}/bill")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER') or hasAuthority('ORDER_BILL')")
@@ -280,8 +352,11 @@ public class OrderController {
     public ResponseEntity<ApiResponse<OrderResponseDto>> billOrder(
             @Parameter(description = "UUID of the order to bill", required = true) @PathVariable UUID id,
             @Parameter(description = "Optional idempotency key to prevent double billing") @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody(required = false) OrderPrintOptionsRequest request) {
+            @Valid @RequestBody(required = false) OrderPrintOptionsRequest request) {
         OrderPrintOptionsRequest safeRequest = request == null ? new OrderPrintOptionsRequest() : request;
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            log.warn("Missing Idempotency-Key header for bill order | id={}", id);
+        }
         log.info("Billing order | id={}", id);
         OrderResponseDto responseDto = idempotencyGuard.execute(
                 "bill",
@@ -306,23 +381,47 @@ public class OrderController {
     public ResponseEntity<ApiResponse<OrderResponseDto>> settleOrder(
             @Parameter(description = "UUID of the order to settle", required = true) @PathVariable UUID id,
             @Parameter(description = "Optional idempotency key to prevent double payment") @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @Parameter(description = "Settlement parameters including payment method and amounts") @RequestBody(required = false) OrderSettleRequest request) {
-        OrderSettleRequest safeRequest = request == null ? new OrderSettleRequest() : request;
-        log.info("Settling order | id={} | method={}", id, safeRequest.getPaymentMethod() != null ? safeRequest.getPaymentMethod() : "default");
+            @Parameter(description = "Settlement parameters including payment method and amounts") @Valid @RequestBody OrderSettleRequest request) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            log.warn("Missing Idempotency-Key header for settle order | id={}", id);
+        }
+        log.info("Settling order | id={} | method={}", id, request.getPaymentMethod() != null ? request.getPaymentMethod() : "default");
         OrderResponseDto responseDto = idempotencyGuard.execute(
                 "settle",
                 id,
                 idempotencyKey,
                 OrderResponseDto.class,
-                () -> orderDtoMapper.toResponseDto(orderService.settleOrder(id, safeRequest))
+                () -> orderDtoMapper.toResponseDto(orderService.settleOrder(id, request))
         );
         return ResponseEntity.ok(ApiResponse.success(responseDto));
     }
 
     @PostMapping("/{id}/complete-credit")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
-    public ResponseEntity<ApiResponse<Order>> completeCreditOrder(@PathVariable UUID id, @RequestBody(required = false) OrderCreditCompletionRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(orderService.completeCreditOrder(id, request)));
+    @Operation(summary = "Complete credit order", description = "Finalises a credit order by recording the credit customer and generating the invoice. Replays identically if a duplicate Idempotency-Key is provided.")
+    @ApiResponses(value = {
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Successfully completed the credit order"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Credit completion validation failed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Unauthorized access", content = @Content),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Forbidden access", content = @Content),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Order not found", content = @Content)
+    })
+    public ResponseEntity<ApiResponse<OrderResponseDto>> completeCreditOrder(
+            @Parameter(description = "UUID of the credit order to finalise", required = true) @PathVariable UUID id,
+            @Parameter(description = "Optional idempotency key to prevent duplicate credit completion") @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody(required = false) OrderCreditCompletionRequest request) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            log.warn("Missing Idempotency-Key header for complete-credit order | id={}", id);
+        }
+        log.info("Completing credit order | id={}", id);
+        OrderResponseDto responseDto = idempotencyGuard.execute(
+                "complete-credit",
+                id,
+                idempotencyKey,
+                OrderResponseDto.class,
+                () -> orderDtoMapper.toResponseDto(orderService.completeCreditOrder(id, request))
+        );
+        return ResponseEntity.ok(ApiResponse.success(responseDto));
     }
 
     @PostMapping("/{id}/move-table")
@@ -337,7 +436,7 @@ public class OrderController {
     })
     public ResponseEntity<ApiResponse<OrderResponseDto>> moveTable(
             @Parameter(description = "UUID of the order to move", required = true) @PathVariable UUID id,
-            @Parameter(description = "Target table details", required = true) @RequestBody OrderMoveTableRequest request) {
+            @Parameter(description = "Target table details", required = true) @Valid @RequestBody OrderMoveTableRequest request) {
         log.info("Moving table | orderId={} | toTable={}", id, request.getTableId());
         Order savedEntity = orderService.moveTable(id, request);
         return ResponseEntity.ok(ApiResponse.success(orderDtoMapper.toResponseDto(savedEntity)));
@@ -356,7 +455,10 @@ public class OrderController {
     public ResponseEntity<ApiResponse<OrderResponseDto>> cancelOrder(
             @Parameter(description = "UUID of the order to cancel", required = true) @PathVariable UUID id,
             @Parameter(description = "Optional idempotency key to prevent duplicate cancel processing") @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @Parameter(description = "Cancellation reason details") @RequestBody(required = false) OrderCancelRequest request) {
+            @Parameter(description = "Cancellation reason details") @Valid @RequestBody(required = false) OrderCancelRequest request) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            log.warn("Missing Idempotency-Key header for cancel order | id={}", id);
+        }
         log.info("Cancelling order | id={} | reason={}", id, request != null ? request.getReason() : "none");
         OrderResponseDto responseDto = idempotencyGuard.execute(
                 "cancel",

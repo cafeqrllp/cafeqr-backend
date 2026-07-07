@@ -25,6 +25,13 @@ public class OrderLine {
     @EqualsAndHashCode.Include
     private UUID id;
 
+    /**
+     * Optional client-generated line identifier used for stable request→result mapping.
+     * Not persisted — transient only.
+     */
+    @Transient
+    private UUID clientLineId;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", nullable = false)
     @JsonIgnore

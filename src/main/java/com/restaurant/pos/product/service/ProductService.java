@@ -15,6 +15,8 @@ import com.restaurant.pos.product.repository.ProductRepository;
 import com.restaurant.pos.product.repository.UomRepository;
 import com.restaurant.pos.product.repository.VariantGroupRepository;
 import com.restaurant.pos.product.repository.VariantOptionRepository;
+import com.restaurant.pos.purchasing.repository.PricelistRepository;
+import com.restaurant.pos.purchasing.domain.Pricelist;
 import com.restaurant.pos.product.dto.ProductDetailDto;
 import com.restaurant.pos.product.dto.ProductListDto;
 import com.restaurant.pos.product.dto.VariantGroupDto;
@@ -44,9 +46,12 @@ public class ProductService {
     private final UomRepository uomRepository;
     private final VariantGroupRepository variantGroupRepository;
     private final VariantOptionRepository variantOptionRepository;
+    private final PricelistRepository pricelistRepository;
 
     @Transactional(readOnly = true)
-    // @Cacheable(value = "products_categories_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @Cacheable(value = "products_categories_v2", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public List<Category> getCategories() {
         return categoryRepository.findByClientIdAndOrgIdOrGlobal(TenantContext.getCurrentTenant(),
                 TenantContext.getCurrentOrg());
@@ -98,14 +103,18 @@ public class ProductService {
     // --- UOM Methods ---
 
     @Transactional(readOnly = true)
-    // @Cacheable(value = "products_uoms_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @Cacheable(value = "products_uoms_v2", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public List<Uom> getUoms() {
         return uomRepository.findByClientIdAndOrgIdOrGlobal(TenantContext.getCurrentTenant(),
                 TenantContext.getCurrentOrg());
     }
 
     @Transactional
-    // @CacheEvict(value = "products_uoms_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @CacheEvict(value = "products_uoms_v2", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Uom createUom(Uom uom) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
@@ -120,7 +129,9 @@ public class ProductService {
     }
 
     @Transactional
-    // @CacheEvict(value = "products_uoms_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @CacheEvict(value = "products_uoms_v2", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Uom updateUom(UUID id, Uom uom) {
         Uom existing = uomRepository.findById(java.util.Objects.requireNonNull(id))
                 .orElseThrow(() -> new ResourceNotFoundException("UOM not found"));
@@ -136,7 +147,9 @@ public class ProductService {
     }
 
     @Transactional
-    // @CacheEvict(value = "products_uoms_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @CacheEvict(value = "products_uoms_v2", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public void deleteUom(UUID id) {
         Uom uom = uomRepository.findById(java.util.Objects.requireNonNull(id))
                 .orElseThrow(() -> new ResourceNotFoundException("UOM not found"));
@@ -180,7 +193,7 @@ public class ProductService {
     public VariantGroupDto createVariantGroup(VariantGroup group) {
         group.setClientId(TenantContext.getCurrentTenant());
         group.setOrgId(TenantContext.getCurrentOrg());
-        
+
         if (group.getOptions() != null) {
             group.getOptions().forEach(opt -> {
                 opt.setGroup(group);
@@ -201,7 +214,8 @@ public class ProductService {
 
         if (existing.isActive() && !group.isActive()) {
             if (productRepository.existsByVariantMappings_VariantGroup_IdAndIsActiveTrue(id)) {
-                throw new BusinessException("Cannot deactivate variant group because it is currently used by active products");
+                throw new BusinessException(
+                        "Cannot deactivate variant group because it is currently used by active products");
             }
         }
 
@@ -251,7 +265,8 @@ public class ProductService {
             throw new BusinessException("Variant Group ID is required");
         }
 
-        VariantGroup group = variantGroupRepository.findById(java.util.Objects.requireNonNull(option.getGroup().getId()))
+        VariantGroup group = variantGroupRepository
+                .findById(java.util.Objects.requireNonNull(option.getGroup().getId()))
                 .orElseThrow(() -> new ResourceNotFoundException("Variant Group not found"));
 
         validateOwnership(group.getClientId(), group.getOrgId(), "Variant Group");
@@ -272,7 +287,8 @@ public class ProductService {
 
         if (existing.isActive() && !option.isActive()) {
             if (productRepository.existsByVariantPricings_VariantOption_IdAndIsActiveTrue(id)) {
-                throw new BusinessException("Cannot deactivate variant option because it is currently used by active products");
+                throw new BusinessException(
+                        "Cannot deactivate variant option because it is currently used by active products");
             }
         }
 
@@ -297,12 +313,15 @@ public class ProductService {
     // --- Product Methods ---
 
     @Transactional(readOnly = true)
-    // @Cacheable(value = "products_list_v4", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    // @Cacheable(value = "products_list_v4", key =
+    // "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' +
+    // T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public List<ProductListDto> getProducts() {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
 
-        System.out.println("===> [DEBUG] ProductService: Fetching products for Client: " + clientId + " | Org: " + orgId);
+        System.out
+                .println("===> [DEBUG] ProductService: Fetching products for Client: " + clientId + " | Org: " + orgId);
         List<Product> products = productRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId);
         System.out.println("===> [DEBUG] ProductService: Repository returned " + products.size() + " products");
 
@@ -357,8 +376,10 @@ public class ProductService {
     }
 
     private void initializeProductDetails(Product product) {
-        if (product.getCategory() != null) product.getCategory().getName();
-        if (product.getUom() != null) product.getUom().getName();
+        if (product.getCategory() != null)
+            product.getCategory().getName();
+        if (product.getUom() != null)
+            product.getUom().getName();
 
         if (product.getVariantMappings() != null) {
             product.getVariantMappings().forEach(mapping -> {
@@ -412,8 +433,10 @@ public class ProductService {
                     .hasUpsells(product.getUpsells() != null && !product.getUpsells().isEmpty())
                     .upsellCount(product.getUpsells() != null ? product.getUpsells().size() : 0)
                     .hasIngredients(product.getRecipeLines() != null && !product.getRecipeLines().isEmpty())
-                    .defaultPricelistId(product.getDefaultPricelist() != null ? product.getDefaultPricelist().getId() : null)
-                    .defaultPricelistName(product.getDefaultPricelist() != null ? product.getDefaultPricelist().getName() : null)
+                    .defaultPricelistId(
+                            product.getDefaultPricelist() != null ? product.getDefaultPricelist().getId() : null)
+                    .defaultPricelistName(
+                            product.getDefaultPricelist() != null ? product.getDefaultPricelist().getName() : null)
                     .build();
         } catch (Exception e) {
             System.err.println("===> [ERROR] mapToDto failed for product: " + product.getId() + " - " + e.getMessage());
@@ -483,10 +506,12 @@ public class ProductService {
                         .map(recipe -> ProductDetailDto.RecipeDto.builder()
                                 .id(recipe.getId())
                                 .ingredientId(recipe.getIngredient() != null ? recipe.getIngredient().getId() : null)
-                                .ingredientName(recipe.getIngredient() != null ? recipe.getIngredient().getName() : null)
+                                .ingredientName(
+                                        recipe.getIngredient() != null ? recipe.getIngredient().getName() : null)
                                 .quantity(recipe.getQuantity())
                                 .uomName(recipe.getIngredient() != null && recipe.getIngredient().getUom() != null
-                                        ? recipe.getIngredient().getUom().getName() : null)
+                                        ? recipe.getIngredient().getUom().getName()
+                                        : null)
                                 .isActive(recipe.isActive())
                                 .build())
                         .collect(Collectors.toList());
@@ -550,8 +575,6 @@ public class ProductService {
                 .build();
     }
 
-
-
     @Transactional
     @CacheEvict(value = "products_list_v3", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Product createProduct(Product product) {
@@ -581,13 +604,15 @@ public class ProductService {
         validateProductIntegrity(product, clientId, orgId);
 
         // Duplicate Name Check (case-insensitive)
-        if (productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(product.getName().trim(), clientId, orgId, null)) {
+        if (productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(product.getName().trim(), clientId, orgId,
+                null)) {
             throw new BusinessException("Product with this name already exists");
         }
 
         // Duplicate Code Check (case-insensitive)
         if (product.getProductCode() != null && productRepository
-                .existsByProductCodeAndClientIdAndOrgIdOrGlobalAndIdNot(product.getProductCode().trim(), clientId, orgId, null)) {
+                .existsByProductCodeAndClientIdAndOrgIdOrGlobalAndIdNot(product.getProductCode().trim(), clientId,
+                        orgId, null)) {
             throw new BusinessException("Product with this code already exists");
         }
 
@@ -744,7 +769,8 @@ public class ProductService {
         validateProductIntegrity(product, clientId, orgId);
 
         // Duplicate Name Check (case-insensitive, excluding current product)
-        if (productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(product.getName().trim(), clientId, orgId, id)) {
+        if (productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(product.getName().trim(), clientId, orgId,
+                id)) {
             throw new BusinessException("Product with this name already exists");
         }
 
@@ -761,8 +787,10 @@ public class ProductService {
         existing.setPackagedGood(product.isPackagedGood());
         existing.setIngredient(product.isIngredient());
 
-        String newCode = product.getProductCode() != null && product.getProductCode().trim().isEmpty() ? null : product.getProductCode();
-        if (newCode != null && productRepository.existsByProductCodeAndClientIdAndOrgIdOrGlobalAndIdNot(newCode.trim(), clientId, orgId, id)) {
+        String newCode = product.getProductCode() != null && product.getProductCode().trim().isEmpty() ? null
+                : product.getProductCode();
+        if (newCode != null && productRepository.existsByProductCodeAndClientIdAndOrgIdOrGlobalAndIdNot(newCode.trim(),
+                clientId, orgId, id)) {
             throw new BusinessException("Product with this code already exists");
         }
         existing.setProductCode(newCode);
@@ -829,6 +857,16 @@ public class ProductService {
         // Update Pricelist Products
         existing.getPricelistProducts().clear();
         if (product.getPricelistProducts() != null) {
+            product.getPricelistProducts().forEach(pp -> {
+                pp.setProduct(existing);
+                pp.setClientId(clientId);
+                pp.setOrgId(orgId);
+                if (pp.getPricelist() != null && pp.getPricelist().getId() != null) {
+                    Pricelist pl = pricelistRepository.findById(pp.getPricelist().getId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Pricelist not found"));
+                    pp.setPricelist(pl);
+                }
+            });
             existing.getPricelistProducts().addAll(product.getPricelistProducts());
         }
 
@@ -843,7 +881,8 @@ public class ProductService {
                 if (recipe.getIngredient() != null && recipe.getIngredient().getId() != null) {
                     Product ingredientProduct = productRepository.findById(recipe.getIngredient().getId())
                             .orElseThrow(() -> new ResourceNotFoundException("Ingredient product not found"));
-                    validateOwnership(ingredientProduct.getClientId(), ingredientProduct.getOrgId(), "Ingredient Product", false);
+                    validateOwnership(ingredientProduct.getClientId(), ingredientProduct.getOrgId(),
+                            "Ingredient Product", false);
                     if (!ingredientProduct.isIngredient()) {
                         throw new BusinessException("Product must be set as an ingredient to be used in a recipe");
                     }
@@ -984,7 +1023,8 @@ public class ProductService {
         if (product.getUpsells() != null) {
             for (var upsell : product.getUpsells()) {
                 if (upsell.getUpsellProduct() != null && upsell.getUpsellProduct().getId() != null) {
-                    Product upProduct = productRepository.findById(java.util.Objects.requireNonNull(upsell.getUpsellProduct().getId()))
+                    Product upProduct = productRepository
+                            .findById(java.util.Objects.requireNonNull(upsell.getUpsellProduct().getId()))
                             .orElseThrow(() -> new ResourceNotFoundException("Upsell product not found"));
                     validateOwnership(upProduct.getClientId(), upProduct.getOrgId(), "Upsell Product", false);
                 }
