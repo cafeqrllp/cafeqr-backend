@@ -28,6 +28,9 @@ public class OrderSettleRequest {
     @Schema(description = "Round-off adjustment applied to this settlement", example = "0.00")
     private BigDecimal roundOffAmount;
 
+    @Schema(description = "Round-off mode (e.g. AUTOMATIC, MANUAL, DISABLED)", example = "AUTOMATIC")
+    private String roundOffMode;
+
     @Schema(description = "Operational description or notes for this payment", example = "Settled with discount")
     private String description;
 

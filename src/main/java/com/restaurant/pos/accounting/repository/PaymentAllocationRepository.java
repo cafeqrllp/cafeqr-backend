@@ -13,4 +13,10 @@ public interface PaymentAllocationRepository extends JpaRepository<PaymentAlloca
     List<PaymentAllocation> findByPaymentIdAndClientId(UUID paymentId, UUID clientId);
 
     List<PaymentAllocation> findByInvoiceIdAndClientId(UUID invoiceId, UUID clientId);
+
+    List<PaymentAllocation> findByOrderId(UUID orderId);
+
+    List<PaymentAllocation> findByInvoiceId(UUID invoiceId);
+
+    List<PaymentAllocation> findByOrderIdAndIsactive(UUID orderId, String isactive);
 }

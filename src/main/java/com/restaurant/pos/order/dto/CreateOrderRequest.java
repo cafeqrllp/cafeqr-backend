@@ -31,6 +31,22 @@ public class CreateOrderRequest {
     @Schema(description = "Optional offline payment number")
     private String offlinePaymentNo;
 
+    @Schema(description = "Client-generated idempotency reference. Set to the same value as the Idempotency-Key header so the server can detect and deduplicate retried create requests.", example = "550e8400-e29b-41d4-a716-446655440000")
+    private String sourceLocalRef;
+
+    @Schema(description = "Stable operation ID for offline-sync deduplication (distinct from sourceLocalRef)")
+    private String sourceOperationId;
+
+    @Schema(description = "Originating device UUID")
+    private UUID sourceDeviceId;
+
+    @Schema(description = "Originating terminal UUID")
+    private UUID sourceTerminalId;
+
+    @Schema(description = "Sync origin tag (CLOUD_ONLINE, OFFLINE_QUEUE, MAIN_OFFLINE)")
+    private String syncOrigin;
+
+
     @Schema(description = "Target dining table UUID")
     private UUID tableId;
 
@@ -135,6 +151,9 @@ public class CreateOrderRequest {
     @Data
     @Schema(description = "DTO for creating an order line/item")
     public static class CreateOrderLineRequest {
+        @Schema(description = "Optional client-generated line UUID for stable request→result mapping")
+        private UUID clientLineId;
+
         @NotNull(message = "Product UUID must not be null")
         @Schema(description = "Product UUID", requiredMode = Schema.RequiredMode.REQUIRED)
         private UUID productId;
@@ -164,7 +183,7 @@ public class CreateOrderRequest {
         @Schema(description = "Calculated line total", example = "21.00")
         private BigDecimal lineTotal;
 
-        // ——— GST Enrichment Fields ———
+        // ——— Tax Enrichment Fields ———
 
         @Schema(description = "qty × unit_price (face/MRP) before any discount", example = "50.00")
         private BigDecimal grossLineAmount;
@@ -178,13 +197,13 @@ public class CreateOrderRequest {
         @Schema(description = "Tax type: INCLUSIVE | EXCLUSIVE | NONE", example = "EXCLUSIVE")
         private String taxType;
 
-        @Schema(description = "Snapshot of the actual GST rate at bill time (e.g. 18.0)", example = "18.0")
+        @Schema(description = "Snapshot of the actual tax rate at bill time (e.g. 18.0)", example = "18.0")
         private BigDecimal taxSnapshotRate;
 
-        @Schema(description = "Tax code at bill time, e.g. GST_18", example = "GST_18")
+        @Schema(description = "Tax code at bill time, e.g. TAX_18", example = "TAX_18")
         private String taxCode;
 
-        @Schema(description = "Human-readable tax label at bill time, e.g. GST 18%", example = "GST 18%")
+        @Schema(description = "Human-readable tax label at bill time, e.g. Tax 18%", example = "Tax 18%")
         private String taxName;
 
         @Schema(description = "User-entered flat line discount (face value). Null if % based.", example = "5.00")

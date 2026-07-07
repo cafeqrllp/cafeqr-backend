@@ -217,9 +217,6 @@ public class CreditService {
         }
 
         String referenceNo = sequenceService.generateNextSequence(DocumentType.INBOUND_PAYMENT, orgId);
-        if (orderOrInvoiceNo != null) {
-            referenceNo = referenceNo + "-" + orderOrInvoiceNo;
-        }
 
         String description;
         if (orderOrInvoiceNo != null) {
@@ -232,6 +229,8 @@ public class CreditService {
                 .paymentType(PaymentType.INBOUND)
                 .customerId(customer.getLinkedCustomerId())
                 .creditCustomerId(customer.getId())
+                .orderId(invoiceId != null ? invoiceRepository.findById(invoiceId).map(Invoice::getOrderId).orElse(null) : null)
+                .invoiceId(invoiceId)
                 .paymentDate(LocalDateTime.now())
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
@@ -432,6 +431,19 @@ public class CreditService {
             invoice.setIsPaid(false);
         }
         invoiceRepository.save(invoice);
+
+        if (invoice.getOrderId() != null) {
+            orderRepository.findById(invoice.getOrderId()).ifPresent(order -> {
+                if (due.compareTo(BigDecimal.ZERO) <= 0) {
+                    order.setPaymentStatus("PAID");
+                } else if (due.compareTo(invoice.getTotalAmount()) >= 0) {
+                    order.setPaymentStatus("PENDING");
+                } else {
+                    order.setPaymentStatus("PARTIAL");
+                }
+                orderRepository.save(order);
+            });
+        }
     }
 
     private List<Invoice> openInvoices(UUID creditCustomerId) {
@@ -529,6 +541,19 @@ public class CreditService {
     }
 
     private CreditReportDto.PaymentTransactionDto toPaymentTransaction(Payment payment, CreditCustomer customer) {
+        String orderNo = null;
+        if (payment.getOrderId() != null) {
+            orderNo = orderRepository.findById(payment.getOrderId())
+                    .map(Order::getOrderNo)
+                    .orElse(null);
+        }
+        String invoiceNo = null;
+        if (payment.getInvoiceId() != null) {
+            invoiceNo = invoiceRepository.findById(payment.getInvoiceId())
+                    .map(Invoice::getInvoiceNo)
+                    .orElse(null);
+        }
+
         return CreditReportDto.PaymentTransactionDto.builder()
                 .paymentId(payment.getId())
                 .creditCustomerId(payment.getCreditCustomerId())
@@ -540,6 +565,10 @@ public class CreditService {
                 .amount(money(payment.getAmountPaid()))
                 .description(payment.getDescription())
                 .referenceNo(payment.getReferenceNo())
+                .orderId(payment.getOrderId())
+                .orderNo(orderNo)
+                .invoiceId(payment.getInvoiceId())
+                .invoiceNo(invoiceNo)
                 .build();
     }
 

@@ -35,7 +35,7 @@ SELECT
     COALESCE(o.subscription_expiry_date, CURRENT_TIMESTAMP + INTERVAL '14' DAY)
 FROM organizations o
 CROSS JOIN (VALUES ('KOT'), ('INVENTORY')) AS m(module_name)
-ON CONFLICT (client_id, org_id, module_name) DO NOTHING;
+ON CONFLICT (client_id, org_id, module_name) WHERE org_id IS NOT NULL DO NOTHING;
 
 -- Backfill active client-scoped modules (CRM, CREDIT_LEDGER) for existing clients
 INSERT INTO client_subscription_modules (id, client_id, org_id, module_name, status, auto_renew, expiry_date)

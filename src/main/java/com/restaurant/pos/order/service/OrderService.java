@@ -1,5 +1,8 @@
 package com.restaurant.pos.order.service;
 
+import com.restaurant.pos.accounting.domain.PaymentAllocation;
+import com.restaurant.pos.accounting.repository.PaymentAllocationRepository;
+import com.restaurant.pos.order.dto.OrderPaymentDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.pos.delivery.controller.OrderStatusSseController;
@@ -29,6 +32,10 @@ import com.restaurant.pos.order.domain.DiscountEngineVersion;
 import com.restaurant.pos.order.dto.OrderCancelRequest;
 import com.restaurant.pos.order.dto.OrderCreditCompletionRequest;
 import com.restaurant.pos.order.dto.OrderCustomerDto;
+import com.restaurant.pos.order.dto.CalculationRequest;
+import com.restaurant.pos.order.dto.CalculationLineRequest;
+import com.restaurant.pos.order.dto.CalculatedLine;
+import com.restaurant.pos.order.dto.CalculationResult;
 import com.restaurant.pos.order.dto.OrderLineSummaryDto;
 import com.restaurant.pos.order.dto.OrderMoveTableRequest;
 import com.restaurant.pos.order.dto.OrderSettleRequest;
@@ -96,10 +103,23 @@ public class OrderService {
     private static final List<String> PAYMENT_SPLIT_METHODS = List.of("CASH", "ONLINE", "UPI", "CARD", "BANK",
             "CHEQUE");
 
+    private static final Map<String, Set<String>> ALLOWED_OPERATIONAL_TRANSITIONS = Map.of(
+            "DRAFT", Set.of("CONFIRMED", "CANCELLED"),
+            "CONFIRMED", Set.of("IN_PROGRESS", "READY", "CANCELLED"),
+            "IN_PROGRESS", Set.of("READY", "CONFIRMED", "CANCELLED"),
+            "READY", Set.of("CONFIRMED", "IN_PROGRESS", "CANCELLED"),
+            "PENDING", Set.of("CONFIRMED", "CANCELLED")
+    );
+
+    private static final Set<String> FINANCIAL_STATUS_NAMES = Set.of(
+            "BILLED", "COMPLETED", "VOID"
+    );
+
     private final OrderRepository orderRepository;
     private final InvoiceRepository invoiceRepository;
     private final PaymentRepository paymentRepository;
     private final PaymentSplitRepository paymentSplitRepository;
+    private final PaymentAllocationRepository paymentAllocationRepository;
     private final AccountingPostingService accountingPostingService;
     private final InventoryService inventoryService;
     private final RestaurantTableRepository tableRepository;
@@ -116,6 +136,180 @@ public class OrderService {
     private final PushNotificationService pushNotificationService;
     private final TimezoneResolver timezoneResolver;
     private final CurrencyRepository currencyRepository;
+    private final OrderCalculationService orderCalculationService;
+    private final org.springframework.context.ApplicationContext applicationContext;
+
+    private void recalculateOrderTotals(Order order) {
+        if (order == null) return;
+        
+        boolean hasValidLines = false;
+        if (order.getLines() != null) {
+            hasValidLines = order.getLines().stream()
+                    .filter(line -> "Y".equalsIgnoreCase(line.getIsactive()))
+                    .anyMatch(line -> line.getUnitPrice() != null || line.getProductId() != null);
+        }
+        if (!hasValidLines) {
+            BigDecimal currentTotal = BigDecimal.ZERO;
+            if (order.getLines() != null) {
+                currentTotal = order.getLines().stream()
+                        .filter(OrderLine::isActive)
+                        .map(l -> l.getLineTotal() != null ? l.getLineTotal() : BigDecimal.ZERO)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+            }
+            if (currentTotal.compareTo(BigDecimal.ZERO) <= 0) {
+                currentTotal = order.getTotalAmount() != null && order.getTotalAmount().compareTo(BigDecimal.ZERO) > 0
+                        ? order.getTotalAmount()
+                        : (order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO);
+            }
+
+            BigDecimal disc = BigDecimal.ZERO;
+            if (order.getOrderDiscountValue() != null) {
+                if ("PERCENT".equalsIgnoreCase(order.getOrderDiscountType())) {
+                    disc = currentTotal.multiply(order.getOrderDiscountValue().divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP));
+                } else {
+                    disc = order.getOrderDiscountValue();
+                }
+            }
+            order.setTotalDiscountAmount(disc.setScale(2, RoundingMode.HALF_UP));
+
+            if (order.getDiscountSource() == com.restaurant.pos.order.domain.DiscountSource.MANUAL) {
+                BigDecimal roundOff = order.getRoundOffAmount() != null ? order.getRoundOffAmount() : BigDecimal.ZERO;
+                BigDecimal finalPayable = currentTotal.subtract(disc).add(roundOff).max(BigDecimal.ZERO);
+                order.setGrandTotal(finalPayable.setScale(2, RoundingMode.HALF_UP));
+            }
+            return;
+        }
+        
+        ConfigurationDto config = configurationService.getEffectiveConfigurationForBranch(order.getOrgId());
+        
+        List<CalculationLineRequest> lineRequests = new ArrayList<>();
+        if (order.getLines() != null) {
+            for (OrderLine line : order.getLines()) {
+                if (!"Y".equalsIgnoreCase(line.getIsactive())) continue;
+                CalculationLineRequest req = CalculationLineRequest.builder()
+                        .lineId(line.getId())
+                        .clientLineId(line.getClientLineId())
+                        .productId(line.getProductId())
+                        .variantId(line.getVariantId())
+                        .productName(line.getProductName())
+                        .categoryName(line.getCategoryName())
+                        .isPackagedGood(line.getIsPackagedGood())
+                        .quantity(line.getQuantity())
+                        .unitPrice(line.getUnitPrice())
+                        .taxRate(line.getTaxRate())
+                        .taxType(line.getTaxType() != null ? line.getTaxType().name() : null)
+                        .taxCode(line.getTaxCode())
+                        .taxName(line.getTaxName())
+                        .lineDiscountType(resolveLineDiscountType(line))
+                        .lineDiscountValue(resolveLineDiscountValue(line))
+                        .discountAmount(line.getManualDiscountAmount())
+                        .discountPercent(line.getManualDiscountPercent())
+                        .build();
+                lineRequests.add(req);
+            }
+        }
+        
+        CalculationRequest request = CalculationRequest.builder()
+                .lines(lineRequests)
+                .orderDiscountType(order.getOrderDiscountType())
+                .orderDiscountValue(order.getOrderDiscountValue())
+                .requestedRoundOff(order.getRoundOffAmount())
+                .roundOffMode(order.getRoundOffMode())
+                .orgId(order.getOrgId())
+                .build();
+                
+        CalculationResult result = orderCalculationService.calculate(request, config);
+        
+        order.setGrossAmount(result.getGrossAmount());
+        order.setTotalDiscountAmount(result.getLineDiscountDisplayAmount().add(result.getOrderDiscountDisplayAmount()));
+        order.setTotalTaxAmount(result.getTotalTax());
+        order.setTotalAmount(result.getTotalBeforeRoundOff());
+        order.setGrandTotal(result.getGrandTotal());
+        order.setRoundOffAmount(result.getRoundOffAmount());
+        
+        // Map transient fields for discount breakdown face/base
+        order.setLineDiscountFaceAmount(result.getLineDiscountDisplayAmount());
+        order.setLineDiscountBaseAmount(result.getTotalLineDiscountBase());
+        order.setOrderDiscountFaceAmount(result.getOrderDiscountDisplayAmount());
+        order.setOrderDiscountBaseAmount(result.getTotalOrderDiscountBase());
+
+        // Stamp the authoritative calculation version from result so Order and Invoice are always in sync
+        order.setDiscountCalculationVersion(result.getEngineVersion());
+        
+        java.util.Map<UUID, CalculatedLine> byLineId = result.getLines().stream()
+                .filter(cl -> cl.getLineId() != null)
+                .collect(Collectors.toMap(CalculatedLine::getLineId, cl -> cl));
+        java.util.Map<UUID, CalculatedLine> byClientLineId = result.getLines().stream()
+                .filter(cl -> cl.getClientLineId() != null)
+                .collect(Collectors.toMap(CalculatedLine::getClientLineId, cl -> cl));
+
+        if (order.getLines() != null) {
+            for (OrderLine line : order.getLines()) {
+                if (!"Y".equalsIgnoreCase(line.getIsactive())) continue;
+
+                CalculatedLine cl = null;
+                // Prefer stable clientLineId, fall back to persisted lineId — never positional index
+                if (line.getClientLineId() != null) {
+                    cl = byClientLineId.get(line.getClientLineId());
+                }
+                if (cl == null && line.getId() != null) {
+                    cl = byLineId.get(line.getId());
+                }
+                if (cl == null) {
+                    throw new IllegalStateException(
+                        "Financial integrity error: calculation result missing for active order line" +
+                        " [lineId=" + line.getId() + ", clientLineId=" + line.getClientLineId() + "]." +
+                        " This indicates a line identity mismatch. Aborting save.");
+                }
+
+                line.setGrossLineAmount(cl.getGrossFaceAmount());
+                line.setUnitPriceExTax(cl.getUnitPriceExTax());
+                line.setTaxableAmount(cl.getTaxableAmount());
+                line.setTaxType(cl.getTaxType());
+                line.setTaxRate(cl.getTaxRate());
+                line.setTaxSnapshotRate(cl.getTaxRate());
+                line.setTaxAmount(cl.getTaxAmount());
+                line.setLineTotal(cl.getLineTotal());
+
+                if ("PERCENT".equalsIgnoreCase(cl.getLineDiscountInputType())) {
+                    line.setManualDiscountPercent(cl.getLineDiscountInputValue());
+                    line.setManualDiscountAmount(null);
+                } else if ("AMOUNT".equalsIgnoreCase(cl.getLineDiscountInputType())) {
+                    line.setManualDiscountAmount(cl.getLineDiscountInputValue());
+                    line.setManualDiscountPercent(null);
+                } else {
+                    line.setManualDiscountAmount(null);
+                    line.setManualDiscountPercent(null);
+                }
+                line.setDiscountAmount(cl.getLineDiscountFaceAmount().add(cl.getAllocatedOrderDiscountFace()));
+                line.setAllocatedOrderDiscount(cl.getAllocatedOrderDiscountBase());
+            }
+        }
+    }
+
+    private String resolveLineDiscountType(OrderLine line) {
+        if (line.getManualDiscountPercent() != null
+                && line.getManualDiscountPercent().compareTo(BigDecimal.ZERO) > 0) {
+            return "PERCENT";
+        }
+        if (line.getManualDiscountAmount() != null
+                && line.getManualDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return "AMOUNT";
+        }
+        return null;
+    }
+
+    private BigDecimal resolveLineDiscountValue(OrderLine line) {
+        if (line.getManualDiscountPercent() != null
+                && line.getManualDiscountPercent().compareTo(BigDecimal.ZERO) > 0) {
+            return line.getManualDiscountPercent();
+        }
+        if (line.getManualDiscountAmount() != null
+                && line.getManualDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return line.getManualDiscountAmount();
+        }
+        return null;
+    }
 
     private void prepareSourceFields(Order order) {
         UUID terminalId = TenantContext.getCurrentTerminal();
@@ -162,12 +356,16 @@ public class OrderService {
     }
 
     private String resolveDocumentNumber(Order order, DocumentType documentType, String requestedNumber) {
-        if (requestedNumber != null && !requestedNumber.isBlank() && isMainOfflineSync(order)) {
-            offlineSequenceLeaseService.consumeLeasedNumber(
-                    documentType,
-                    requestedNumber,
-                    order.getSourceTerminalId() != null ? order.getSourceTerminalId() : order.getTerminalId());
-            return requestedNumber;
+        if (requestedNumber != null && !requestedNumber.isBlank()) {
+            if (isMainOfflineSync(order) || (order != null && (order.getOriginalOrderId() != null || (order.getRevisionNumber() != null && order.getRevisionNumber() > 0)))) {
+                if (isMainOfflineSync(order)) {
+                    offlineSequenceLeaseService.consumeLeasedNumber(
+                            documentType,
+                            requestedNumber,
+                            order.getSourceTerminalId() != null ? order.getSourceTerminalId() : order.getTerminalId());
+                }
+                return requestedNumber;
+            }
         }
         UUID orgId = order != null ? order.getOrgId() : null;
         if (orgId == null) {
@@ -218,18 +416,19 @@ public class OrderService {
     }
 
     private boolean shouldGenerateInvoice(Order order) {
-        if (order == null
-                || "DRAFT".equalsIgnoreCase(order.getOrderStatus())
-                || "CANCELLED".equalsIgnoreCase(order.getOrderStatus())
-                || "VOID".equalsIgnoreCase(order.getOrderStatus())) {
+        if (order == null) {
             return false;
         }
-        if (order.getOrderType() == OrderType.PURCHASE || order.getOrderType() == OrderType.SALE
-                || order.getOrderType() == null) {
-            return true;
+        String status = order.getOrderStatus();
+        if (order.getOrderType() == OrderType.SALE) {
+            return "KITCHEN".equalsIgnoreCase(status)
+                    || "CONFIRMED".equalsIgnoreCase(status)
+                    || "IN_PROGRESS".equalsIgnoreCase(status)
+                    || "READY".equalsIgnoreCase(status)
+                    || "BILLED".equalsIgnoreCase(status)
+                    || "COMPLETED".equalsIgnoreCase(status);
         }
-        return "COMPLETED".equalsIgnoreCase(order.getOrderStatus())
-                || "BILLED".equalsIgnoreCase(order.getOrderStatus());
+        return "BILLED".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status);
     }
 
     private void enqueueCloudPrintJobs(Order order) {
@@ -856,7 +1055,101 @@ public class OrderService {
     }
 
     private List<Order> hydrateOrderCustomers(List<Order> orders) {
-        orders.forEach(this::hydrateOrderCustomers);
+        if (orders == null || orders.isEmpty()) {
+            return orders;
+        }
+
+        List<UUID> orderIds = orders.stream()
+                .map(Order::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        if (orderIds.isEmpty()) {
+            return orders;
+        }
+
+        UUID clientId = orders.stream()
+                .map(Order::getClientId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+
+        if (clientId == null) {
+            return orders;
+        }
+
+        // 1. Fetch all customers linked to any of the orderIds in ONE query
+        List<Customer> linkedCustomers = customerRepository.findByClientIdAndOrderIds(clientId, orderIds);
+
+        // Map orderId -> List of linked customers
+        Map<UUID, List<Customer>> orderIdToCustomers = new java.util.HashMap<>();
+        for (Customer customer : linkedCustomers) {
+            if (customer.getOrderLinks() != null) {
+                for (Customer.OrderLink link : customer.getOrderLinks()) {
+                    if (link.getOrderId() != null) {
+                        orderIdToCustomers.computeIfAbsent(link.getOrderId(), k -> new ArrayList<>()).add(customer);
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch direct customers by customerId in ONE query if not already fetched
+        List<UUID> directCustomerIds = orders.stream()
+                .map(Order::getCustomerId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        Map<UUID, Customer> directCustomerMap = new java.util.HashMap<>();
+        if (!directCustomerIds.isEmpty()) {
+            List<Customer> directCustomers = customerRepository.findByIdInAndClientId(directCustomerIds, clientId);
+            for (Customer c : directCustomers) {
+                directCustomerMap.put(c.getId(), c);
+            }
+        }
+
+        // 3. Hydrate each order
+        for (Order order : orders) {
+            if (order.getId() == null) {
+                continue;
+            }
+            List<Customer> linked = orderIdToCustomers.getOrDefault(order.getId(), new ArrayList<>());
+
+            // Sort linked customers so the primary one is first
+            linked.sort((c1, c2) -> {
+                boolean p1 = isPrimaryForOrder(c1, order.getId());
+                boolean p2 = isPrimaryForOrder(c2, order.getId());
+                return Boolean.compare(!p1, !p2);
+            });
+
+            if (linked.isEmpty() && order.getCustomerId() != null) {
+                Customer dc = directCustomerMap.get(order.getCustomerId());
+                if (dc != null) {
+                    linked.add(dc);
+                }
+            }
+
+            List<OrderCustomerDto> customers = new ArrayList<>();
+            for (int i = 0; i < linked.size(); i++) {
+                Customer customer = linked.get(i);
+                boolean primary = isPrimaryForOrder(customer, order.getId()) || i == 0;
+                customers.add(toOrderCustomerDto(customer, primary));
+            }
+            customers.sort((a, b) -> Boolean.compare(!a.isPrimary(), !b.isPrimary()));
+            order.setCustomers(customers);
+            customers.stream().filter(OrderCustomerDto::isPrimary).findFirst().ifPresent(primary -> {
+                order.setCustomerId(primary.getId());
+                order.setCustomerName(primary.getName());
+                order.setCustomerPhone(primary.getPhone());
+            });
+            if (!customers.isEmpty() && (order.getCustomerName() == null || order.getCustomerName().isBlank())) {
+                OrderCustomerDto first = customers.get(0);
+                order.setCustomerName(first.getName());
+                order.setCustomerPhone(first.getPhone());
+            }
+        }
+
         return orders;
     }
 
@@ -1270,6 +1563,7 @@ public class OrderService {
                 pageable).map(this::toOrderSummary);
     }
 
+
     @Transactional(readOnly = true)
     public List<OrderSummaryDto> getSyncBootstrapOrders() {
         List<OrderSummaryDto> live = getLiveSalesOrders();
@@ -1383,12 +1677,13 @@ public class OrderService {
                 order.getLines().forEach(line -> line.setOrder(order));
             }
 
-            diagnosticPhase = "validate_gst_fields";
-            validateGstFields(order);
-
             diagnosticPhase = "hydrate_order_inputs";
             hydrateOrderLines(order);
+            recalculateOrderTotals(order);
             prepareCustomerFields(order);
+
+            diagnosticPhase = "validate_gst_fields";
+            validateGstFields(order);
 
             diagnosticPhase = "save_order";
             Order saved = orderRepository.save(order);
@@ -1491,6 +1786,80 @@ public class OrderService {
                 .map(this::hydrateOrder);
     }
 
+    public com.restaurant.pos.order.dto.IdempotentCreateResult createOrderIdempotently(Order order) {
+        if (order.getSourceLocalRef() != null && !order.getSourceLocalRef().isBlank()) {
+            UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+            order.setClientId(clientId);
+            UUID resolvedOrgId = resolveOrderWriteOrgId(order);
+            order.setOrgId(resolvedOrgId);
+
+            Optional<Order> existing = orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
+                    clientId, resolvedOrgId, order.getSourceLocalRef(), "VOID");
+            
+            if (existing.isPresent()) {
+                Order existingOrder = existing.get();
+                if (existingOrder.getRequestFingerprint() != null &&
+                        !existingOrder.getRequestFingerprint().equals(order.getRequestFingerprint())) {
+                    log.warn("Idempotency conflict (pre-check) | key={} | existingFingerprint={} | incomingFingerprint={}",
+                            order.getSourceLocalRef(), existingOrder.getRequestFingerprint(), order.getRequestFingerprint());
+                    throw new com.restaurant.pos.common.exception.DuplicateResourceException(
+                            "Idempotency conflict: a different request with the same key has already been processed.");
+                }
+                log.info("Idempotent create hit (pre-check) | sourceLocalRef={}", order.getSourceLocalRef());
+                return new com.restaurant.pos.order.dto.IdempotentCreateResult(hydrateOrder(existingOrder), false);
+            }
+            
+            try {
+                Order saved = self().createOrder(order);
+                return new com.restaurant.pos.order.dto.IdempotentCreateResult(saved, true);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                log.info("Data integrity violation on create, recovering... | sourceLocalRef={}", order.getSourceLocalRef());
+                Optional<Order> winner = orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
+                        clientId, resolvedOrgId, order.getSourceLocalRef(), "VOID");
+                if (winner.isPresent()) {
+                    Order winnerOrder = winner.get();
+                    if (winnerOrder.getRequestFingerprint() != null &&
+                            !winnerOrder.getRequestFingerprint().equals(order.getRequestFingerprint())) {
+                        throw new com.restaurant.pos.common.exception.DuplicateResourceException(
+                                "Idempotency conflict: a different request with the same key has already been processed.");
+                    }
+                    log.info("Idempotent create hit (recovery) | sourceLocalRef={}", order.getSourceLocalRef());
+                    return new com.restaurant.pos.order.dto.IdempotentCreateResult(hydrateOrder(winnerOrder), false);
+                }
+                throw e;
+            }
+        }
+        
+        Order saved = self().createOrder(order);
+        return new com.restaurant.pos.order.dto.IdempotentCreateResult(saved, true);
+    }
+
+    private OrderService self() {
+        return applicationContext.getBean(OrderService.class);
+    }
+
+    @Transactional(readOnly = true)
+    public Order getOrderBySourceLocalRef(UUID clientId, UUID orgId, String sourceLocalRef) {
+        if (sourceLocalRef == null || sourceLocalRef.isBlank()) {
+            return null;
+        }
+        return orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
+                clientId, orgId, sourceLocalRef, "VOID")
+                .map(this::hydrateOrder)
+                .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
+    public Order getOrderBySourceLocalRef(String sourceLocalRef) {
+        if (sourceLocalRef == null || sourceLocalRef.isBlank()) {
+            return null;
+        }
+        return orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
+                TenantContext.getCurrentTenant(), TenantContext.getCurrentOrg(), sourceLocalRef, "VOID")
+                .map(this::hydrateOrder)
+                .orElse(null);
+    }
+
     /**
      * Returns all revisions (current + all VOID predecessors) for the given order,
      * ordered from oldest to newest by revisionNumber.
@@ -1510,9 +1879,169 @@ public class OrderService {
                 .stream().map(this::hydrateOrder).toList();
     }
 
+    private boolean isDiscountOnlyUpdate(Order oldOrder, Order updates) {
+        if ("PAID".equalsIgnoreCase(oldOrder.getPaymentStatus()) 
+                || "COMPLETED".equalsIgnoreCase(oldOrder.getOrderStatus())
+                || "VOID".equalsIgnoreCase(oldOrder.getOrderStatus())) {
+            return false;
+        }
+        if (updates.getLines() == null || updates.getLines().isEmpty()) {
+            return true;
+        }
+        
+        List<OrderLine> oldActiveLines = oldOrder.getLines() == null ? new java.util.ArrayList<>() : oldOrder.getLines().stream()
+                .filter(ol -> "Y".equalsIgnoreCase(ol.getIsactive()))
+                .toList();
+        List<OrderLine> newActiveLines = updates.getLines().stream()
+                .filter(ol -> "Y".equalsIgnoreCase(ol.getIsactive()))
+                .toList();
+
+        if (oldActiveLines.size() != newActiveLines.size()) {
+            return false;
+        }
+
+        for (OrderLine upLine : newActiveLines) {
+            OrderLine match = oldActiveLines.stream()
+                .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
+                    || (Objects.equals(ol.getProductId(), upLine.getProductId())
+                        && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
+                .findFirst()
+                .orElse(null);
+            if (match == null) {
+                return false;
+            }
+            if (upLine.getQuantity() != null && match.getQuantity() != null 
+                    && upLine.getQuantity().compareTo(match.getQuantity()) != 0) {
+                return false;
+            }
+            if (upLine.getUnitPrice() != null && match.getUnitPrice() != null 
+                    && upLine.getUnitPrice().compareTo(match.getUnitPrice()) != 0) {
+                return false;
+            }
+        }
+
+        if (updates.getTableId() != null && !Objects.equals(oldOrder.getTableId(), updates.getTableId())) {
+            return false;
+        }
+        return true;
+    }
+
     @Transactional
     public Order updateOrder(UUID id, Order updates) {
         Order oldOrder = getOrder(id);
+
+        if (isDiscountOnlyUpdate(oldOrder, updates)) {
+            if (updates.getOrderStatus() != null) oldOrder.setOrderStatus(updates.getOrderStatus());
+            if (updates.getPaymentStatus() != null) oldOrder.setPaymentStatus(updates.getPaymentStatus());
+            if (updates.getIsCredit() != null) oldOrder.setIsCredit(updates.getIsCredit());
+            if (updates.getCreditCustomerId() != null) oldOrder.setCreditCustomerId(updates.getCreditCustomerId());
+            if (updates.getCustomerId() != null) oldOrder.setCustomerId(updates.getCustomerId());
+            if (updates.getCustomerName() != null) oldOrder.setCustomerName(updates.getCustomerName());
+            if (updates.getCustomerPhone() != null) oldOrder.setCustomerPhone(updates.getCustomerPhone());
+            if (updates.getCustomerIds() != null) oldOrder.setCustomerIds(updates.getCustomerIds());
+            if (updates.getPaymentMethod() != null) oldOrder.setPaymentMethod(updates.getPaymentMethod());
+            if (updates.getReference() != null) oldOrder.setReference(updates.getReference());
+            if (updates.getDescription() != null) oldOrder.setDescription(updates.getDescription());
+            if (updates.getOrderDiscountType() != null) oldOrder.setOrderDiscountType(updates.getOrderDiscountType());
+            if (updates.getOrderDiscountValue() != null) oldOrder.setOrderDiscountValue(updates.getOrderDiscountValue());
+            if (updates.getDiscountSource() != null) oldOrder.setDiscountSource(updates.getDiscountSource());
+            if (updates.getDiscountCalculationVersion() != null) oldOrder.setDiscountCalculationVersion(updates.getDiscountCalculationVersion());
+            if (updates.getRoundOffAmount() != null) oldOrder.setRoundOffAmount(updates.getRoundOffAmount());
+            if (updates.getRoundOffMode() != null) oldOrder.setRoundOffMode(updates.getRoundOffMode());
+
+            if (updates.getLines() != null) {
+                for (OrderLine upLine : updates.getLines()) {
+                    OrderLine match = oldOrder.getLines().stream()
+                        .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
+                            || (Objects.equals(ol.getProductId(), upLine.getProductId())
+                                && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
+                        .findFirst()
+                        .orElse(null);
+                    if (match != null) {
+                        if (upLine.getDiscountAmount() != null) match.setDiscountAmount(upLine.getDiscountAmount());
+                        if (upLine.getManualDiscountAmount() != null) match.setManualDiscountAmount(upLine.getManualDiscountAmount());
+                        if (upLine.getManualDiscountPercent() != null) match.setManualDiscountPercent(upLine.getManualDiscountPercent());
+                        if (upLine.getAllocatedOrderDiscount() != null) match.setAllocatedOrderDiscount(upLine.getAllocatedOrderDiscount());
+                        if (upLine.getTaxAmount() != null) match.setTaxAmount(upLine.getTaxAmount());
+                        if (upLine.getLineTotal() != null) match.setLineTotal(upLine.getLineTotal());
+                        if (upLine.getGrossLineAmount() != null) match.setGrossLineAmount(upLine.getGrossLineAmount());
+                        if (upLine.getUnitPriceExTax() != null) match.setUnitPriceExTax(upLine.getUnitPriceExTax());
+                        if (match.getUnitPriceExTax() == null) match.setUnitPriceExTax(upLine.getUnitPriceExTax());
+                        if (upLine.getTaxableAmount() != null) match.setTaxableAmount(upLine.getTaxableAmount());
+                        if (upLine.getTaxType() != null) match.setTaxType(upLine.getTaxType());
+                        if (upLine.getTaxSnapshotRate() != null) match.setTaxSnapshotRate(upLine.getTaxSnapshotRate());
+                        if (upLine.getTaxCode() != null) match.setTaxCode(upLine.getTaxCode());
+                        if (upLine.getTaxName() != null) match.setTaxName(upLine.getTaxName());
+                    }
+                }
+            }
+
+            hydrateOrderLines(oldOrder);
+            recalculateOrderTotals(oldOrder);
+            prepareCreditCustomer(oldOrder, Boolean.TRUE.equals(oldOrder.getIsCredit()));
+            prepareCustomerFields(oldOrder);
+
+            Order saved = orderRepository.saveAndFlush(oldOrder);
+            linkCustomersToSavedOrder(saved);
+
+            List<Invoice> existingInvoices = invoiceRepository.findByOrderId(saved.getId());
+            for (Invoice existingInv : existingInvoices) {
+                if (!"VOID".equalsIgnoreCase(existingInv.getStatus())) {
+                    existingInv.setTotalAmount(saved.getGrandTotal().subtract(saved.getRoundOffAmount() != null ? saved.getRoundOffAmount() : BigDecimal.ZERO));
+                    existingInv.setAmountDue(saved.getGrandTotal().subtract(saved.getRoundOffAmount() != null ? saved.getRoundOffAmount() : BigDecimal.ZERO));
+                    existingInv.setTotalDiscountAmount(saved.getTotalDiscountAmount());
+                    existingInv.setTotalTaxAmount(saved.getTotalTaxAmount());
+                    existingInv.setGrossAmount(saved.getGrossAmount());
+                    existingInv.setTaxableAmount(saved.getGrossAmount().subtract(saved.getTotalDiscountAmount()));
+
+                    if (existingInv.getLines() != null) {
+                        for (InvoiceLine invLine : existingInv.getLines()) {
+                            OrderLine ol = saved.getLines().stream()
+                                .filter(l -> Objects.equals(l.getProductId(), invLine.getProductId())
+                                    && Objects.equals(l.getVariantId(), invLine.getVariantId()))
+                                .findFirst()
+                                .orElse(null);
+                            if (ol != null) {
+                                invLine.setDiscountAmount(ol.getDiscountAmount());
+                                invLine.setManualDiscountAmount(ol.getManualDiscountAmount());
+                                invLine.setManualDiscountPercent(ol.getManualDiscountPercent());
+                                invLine.setAllocatedOrderDiscount(ol.getAllocatedOrderDiscount());
+                                invLine.setTaxAmount(ol.getTaxAmount());
+                                invLine.setLineTotal(ol.getLineTotal());
+                                invLine.setGrossLineAmount(ol.getGrossLineAmount());
+                                invLine.setUnitPriceExTax(ol.getUnitPriceExTax());
+                                invLine.setTaxableAmount(ol.getTaxableAmount());
+                            }
+                        }
+                    }
+
+                    invoiceRepository.save(existingInv);
+                    accountingPostingService.replaceInvoiceJournal(saved, existingInv,
+                            "Invoice amount corrected after discount/roundoff update");
+                }
+            }
+
+            if ("PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+                List<Payment> existingPayments = paymentRepository.findByOrderId(saved.getId());
+                if (!existingPayments.isEmpty()) {
+                    for (Payment existingPay : existingPayments) {
+                        if (!"VOID".equalsIgnoreCase(existingPay.getDocStatus())) {
+                            existingPay.setAmountPaid(saved.getGrandTotal());
+                            existingPay.setInvoiceTotal(saved.getGrandTotal());
+                            existingPay.setRoundOffAmount(saved.getRoundOffAmount());
+                            paymentRepository.save(existingPay);
+                            accountingPostingService.reversePayment(existingPay, "Payment amount corrected after discount/roundoff update");
+                            accountingPostingService.postPayment(saved, existingPay);
+                        }
+                    }
+                } else {
+                    String salePaymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
+                    generatePayment(saved, salePaymentMethod, null);
+                }
+            }
+
+            return hydrateOrder(saved);
+        }
 
         // 1. Create a deep copy of the old order as a VOID record
         String originalOrderNo = oldOrder.getOrderNo();
@@ -1531,25 +2060,33 @@ public class OrderService {
 
         // 2. VOID the linked invoice
         List<UUID> oldInvoiceIdList = new java.util.ArrayList<>();
-        invoiceRepository.findByOrderId(id).forEach(inv -> {
+        String originalInvoiceNo = null;
+        for (Invoice inv : invoiceRepository.findByOrderId(id)) {
             oldInvoiceIdList.add(inv.getId());
+            if (originalInvoiceNo == null) {
+                originalInvoiceNo = inv.getInvoiceNo();
+            }
             accountingPostingService.reverseInvoice(inv, "Order revised");
             inv.setInvoiceNo(inv.getInvoiceNo() + "_VOID_"
                     + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
             inv.setStatus("VOID");
             invoiceRepository.saveAndFlush(inv);
-        });
+        }
 
         List<PaymentSplit> oldSplits = new java.util.ArrayList<>();
-        paymentRepository.findByOrderId(id).forEach(payment -> {
+        String originalPaymentNo = null;
+        for (Payment payment : paymentRepository.findByOrderId(id)) {
             oldSplits.addAll(paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(payment.getId()));
+            if (originalPaymentNo == null) {
+                originalPaymentNo = payment.getReferenceNo();
+            }
             accountingPostingService.reversePayment(payment, "Order revised");
             payment.setReferenceNo((payment.getReferenceNo() != null ? payment.getReferenceNo() : "PAYMENT")
                     + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
             payment.setDocStatus("VOID");
             payment.setIsactive("N");
             paymentRepository.saveAndFlush(payment);
-        });
+        }
 
         // 3. Create the correct entity subtype to preserve the JPA discriminator value.
         // Using Order.builder().build() always creates the base Order class
@@ -1676,11 +2213,14 @@ public class OrderService {
                 copy.setManualDiscountAmount(oldLine.getManualDiscountAmount());
                 copy.setManualDiscountPercent(oldLine.getManualDiscountPercent());
                 copy.setAllocatedOrderDiscount(oldLine.getAllocatedOrderDiscount());
+                // Preserve transient client-generated line identity for stable recalculation mapping
+                copy.setClientLineId(oldLine.getClientLineId());
                 // ──────────────────────────────────────────────────────────────────────
                 newOrder.addLine(copy);
             }
         }
         hydrateOrderLines(newOrder);
+        recalculateOrderTotals(newOrder);
         prepareCreditCustomer(newOrder, Boolean.TRUE.equals(newOrder.getIsCredit()));
         prepareCustomerFields(newOrder);
 
@@ -1719,7 +2259,7 @@ public class OrderService {
         // 4. Generate new ERP documents (Invoice/Payment)
         UUID oldInvId = oldInvoiceIdList.isEmpty() ? null : oldInvoiceIdList.get(0);
         if (shouldGenerateInvoice(saved)) {
-            generateInvoice(saved, oldInvId);
+            generateInvoice(saved, oldInvId, originalInvoiceNo);
         }
         // Resolve payment method safely
         String paymentMethod = newOrder.getPaymentMethod();
@@ -1733,7 +2273,7 @@ public class OrderService {
 
         if (saved.getOrderType() == OrderType.PURCHASE) {
             if (!"DRAFT".equalsIgnoreCase(saved.getOrderStatus()) && !isCredit) {
-                generatePayment(saved, paymentMethod);
+                generatePayment(saved, paymentMethod, originalPaymentNo);
             }
             if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
                 processInventoryForOrder(saved);
@@ -1771,9 +2311,9 @@ public class OrderService {
                 }
                 
                 if (!paymentSplits.isEmpty()) {
-                    generatePayment(saved, salePaymentMethod, null, saved.getGrandTotal(), null, null, null, paymentSplits);
+                    generatePayment(saved, salePaymentMethod, originalPaymentNo, saved.getGrandTotal(), null, null, null, paymentSplits);
                 } else {
-                    generatePayment(saved, salePaymentMethod);
+                    generatePayment(saved, salePaymentMethod, originalPaymentNo);
                 }
                 accountingPostingService.postSaleCogs(saved);
             } else if (isCompletedCreditSale(saved)) {
@@ -1797,14 +2337,38 @@ public class OrderService {
         return hydrated;
     }
 
+    private void validateStatusTransition(String from, String to) {
+        String fromUpper = from == null ? "DRAFT" : from.toUpperCase();
+        String toUpper = to == null ? "DRAFT" : to.toUpperCase();
+
+        if (fromUpper.equals(toUpper)) {
+            return;
+        }
+
+        if (FINANCIAL_STATUS_NAMES.contains(fromUpper)) {
+            throw new BusinessException("Cannot modify status of a completed, billed, or cancelled order.");
+        }
+
+        if (FINANCIAL_STATUS_NAMES.contains(toUpper)) {
+            throw new BusinessException("Status transition to '" + toUpper + "' must go through dedicated command endpoints (/bill, /settle, /cancel, /complete-credit).");
+        }
+
+        Set<String> allowed = ALLOWED_OPERATIONAL_TRANSITIONS.get(fromUpper);
+        if (allowed == null || !allowed.contains(toUpper)) {
+            throw new BusinessException("Invalid order status transition from '" + fromUpper + "' to '" + toUpper + "'.");
+        }
+    }
+
     @Transactional
     @org.springframework.retry.annotation.Retryable(value = {
             org.springframework.orm.ObjectOptimisticLockingFailureException.class }, maxAttempts = 3, backoff = @org.springframework.retry.annotation.Backoff(delay = 50))
     public Order updateOrderStatus(UUID id, String status, String paymentStatus, String description) {
         Order order = getOrder(id);
         String oldStatus = order.getOrderStatus();
-        if (status != null)
+        if (status != null && !status.equalsIgnoreCase(oldStatus)) {
+            validateStatusTransition(oldStatus, status.toUpperCase());
             order.setOrderStatus(status);
+        }
         if (paymentStatus != null)
             order.setPaymentStatus(paymentStatus);
         if (description != null)
@@ -1995,105 +2559,25 @@ public class OrderService {
         if (hasExplicitPaymentSplits(safeRequest)) {
             paymentMethod = "MIXED";
         }
+        
         BigDecimal discountAmount = moneyValue(safeRequest.getDiscountAmount());
         BigDecimal roundOffAmount = moneyValue(safeRequest.getRoundOffAmount());
-        BigDecimal currentTotal = calculateUnroundedLinesTotal(order);
-        if (currentTotal.compareTo(BigDecimal.ZERO) <= 0) {
-            currentTotal = moneyValue(
-                    order.getTotalAmount() != null && order.getTotalAmount().compareTo(BigDecimal.ZERO) > 0
-                            ? order.getTotalAmount()
-                            : order.getGrandTotal());
-        }
-        BigDecimal existingDiscount = moneyValue(order.getTotalDiscountAmount());
 
-        BigDecimal additionalDiscount = discountAmount.subtract(existingDiscount);
-        if (additionalDiscount.compareTo(BigDecimal.ZERO) > 0) {
-            order.setTotalDiscountAmount(existingDiscount.add(additionalDiscount));
+        // First, calculate line-level discounts only by setting order discount to zero
+        order.setOrderDiscountValue(BigDecimal.ZERO);
+        recalculateOrderTotals(order);
+        BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount() : BigDecimal.ZERO;
 
-            // Allocate the discount proportionally across lines so that:
-            //  • the per-line DISCOUNT column shows correctly in document viewer
-            //  • taxableAmount / taxAmount / lineTotal are recalculated correctly
-            //  • calculateTaxExclusiveDiscount returns the right ex-tax value
-            if (order.getLines() != null && !order.getLines().isEmpty()) {
-                // Compute the total gross (inc-tax) across active lines as the distribution base.
-                BigDecimal totalLineGross = order.getLines().stream()
-                        .filter(OrderLine::isActive)
-                        .map(l -> l.getGrossLineAmount() != null ? l.getGrossLineAmount()
-                                : (l.getLineTotal() != null ? l.getLineTotal() : BigDecimal.ZERO))
-                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal requestedTotalDiscount = moneyValue(safeRequest.getDiscountAmount());
+        BigDecimal orderDiscountValue = requestedTotalDiscount.subtract(lineDiscountSum).max(BigDecimal.ZERO);
 
-                if (totalLineGross.compareTo(BigDecimal.ZERO) > 0) {
-                    BigDecimal updatedTotalTax = BigDecimal.ZERO;
-                    for (OrderLine line : order.getLines()) {
-                        if (!line.isActive()) continue;
-                        BigDecimal gross = line.getGrossLineAmount() != null ? line.getGrossLineAmount()
-                                : (line.getLineTotal() != null ? line.getLineTotal() : BigDecimal.ZERO);
-                        // Proportional share of the order discount for this line (inc-tax)
-                        BigDecimal lineDiscShare = additionalDiscount
-                                .multiply(gross)
-                                .divide(totalLineGross, 4, RoundingMode.HALF_UP);
-                        // Accumulate allocatedOrderDiscount on the line
-                        BigDecimal prevAlloc = line.getAllocatedOrderDiscount() != null
-                                ? line.getAllocatedOrderDiscount() : BigDecimal.ZERO;
-                        line.setAllocatedOrderDiscount(prevAlloc.add(lineDiscShare).setScale(2, RoundingMode.HALF_UP));
-                        // Also update discountAmount (total line-level discount)
-                        BigDecimal prevDisc = line.getDiscountAmount() != null
-                                ? line.getDiscountAmount() : BigDecimal.ZERO;
-                        line.setDiscountAmount(prevDisc.add(lineDiscShare).setScale(2, RoundingMode.HALF_UP));
+        order.setOrderDiscountType("AMOUNT");
+        order.setOrderDiscountValue(orderDiscountValue);
+        order.setDiscountSource(com.restaurant.pos.order.domain.DiscountSource.MANUAL);
+        order.setRoundOffAmount(roundOffAmount);
+        order.setRoundOffMode(safeRequest.getRoundOffMode());
 
-                        // Recalculate ex-tax taxable base and tax amount for the line
-                        if (line.getGrossLineAmount() != null && line.getTaxType() != null) {
-                            BigDecimal taxRate = line.getTaxRate() != null ? line.getTaxRate() : BigDecimal.ZERO;
-                            boolean inclusive = "INCLUSIVE".equalsIgnoreCase(String.valueOf(line.getTaxType()));
-                            // Convert the line's discount share to ex-tax
-                            BigDecimal lineDiscExTax = inclusive
-                                    ? lineDiscShare.divide(
-                                            BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP)),
-                                            4, RoundingMode.HALF_UP)
-                                    : lineDiscShare;
-                            BigDecimal oldTaxable = line.getTaxableAmount() != null
-                                    ? line.getTaxableAmount() : BigDecimal.ZERO;
-                            BigDecimal newTaxable = oldTaxable.subtract(lineDiscExTax).max(BigDecimal.ZERO)
-                                    .setScale(2, RoundingMode.HALF_UP);
-                            line.setTaxableAmount(newTaxable);
-                            BigDecimal newTax = newTaxable
-                                    .multiply(taxRate)
-                                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
-                            line.setTaxAmount(newTax);
-                            updatedTotalTax = updatedTotalTax.add(newTax);
-                            // lineTotal = taxable base + tax
-                            line.setLineTotal(newTaxable.add(newTax).setScale(2, RoundingMode.HALF_UP));
-                        }
-                    }
-                    // Sync order-level tax total so tax report is correct
-                    if (updatedTotalTax.compareTo(BigDecimal.ZERO) > 0) {
-                        order.setTotalTaxAmount(updatedTotalTax.setScale(2, RoundingMode.HALF_UP));
-                    }
-                    // Set grossAmount (pre-discount inc-tax face value) for accounting/reporting
-                    if (order.getGrossAmount() == null || order.getGrossAmount().compareTo(BigDecimal.ZERO) == 0) {
-                        order.setGrossAmount(totalLineGross.setScale(2, RoundingMode.HALF_UP));
-                    }
-                    // Set discount metadata so reports can query it
-                    if (order.getOrderDiscountType() == null) {
-                        order.setOrderDiscountType("AMOUNT");
-                        order.setOrderDiscountValue(discountAmount);
-                        order.setDiscountSource(com.restaurant.pos.order.domain.DiscountSource.MANUAL);
-                    }
-                }
-            }
-        }
-
-        BigDecimal payable = currentTotal
-                .subtract(additionalDiscount.compareTo(BigDecimal.ZERO) > 0 ? additionalDiscount : BigDecimal.ZERO)
-                .add(roundOffAmount);
-        if (payable.compareTo(BigDecimal.ZERO) < 0) {
-            payable = BigDecimal.ZERO;
-        }
-        payable = payable.setScale(2, RoundingMode.HALF_UP);
-
-        if (additionalDiscount.compareTo(BigDecimal.ZERO) > 0 || roundOffAmount.compareTo(BigDecimal.ZERO) != 0) {
-            order.setGrandTotal(payable);
-        }
+        recalculateOrderTotals(order);
 
         order.setReference(paymentMethod);
         order.setOrderStatus("COMPLETED");
@@ -2108,25 +2592,25 @@ public class OrderService {
 
         // Fix: update existing invoice if discount/roundoff changed the total
         Invoice linkedInvoice = null;
-        if (additionalDiscount.compareTo(BigDecimal.ZERO) > 0 || roundOffAmount.compareTo(BigDecimal.ZERO) != 0) {
-            List<Invoice> existingInvoices = invoiceRepository.findByOrderId(saved.getId());
-            for (Invoice existingInv : existingInvoices) {
-                if (!"VOID".equalsIgnoreCase(existingInv.getStatus())) {
-                    existingInv.setTotalAmount(saved.getGrandTotal().subtract(roundOffAmount));
-                    existingInv.setAmountDue(saved.getGrandTotal().subtract(roundOffAmount));
-                    invoiceRepository.save(existingInv);
-                    accountingPostingService.replaceInvoiceJournal(saved, existingInv,
-                            "Invoice amount corrected after discount/roundoff");
-                    linkedInvoice = existingInv;
-                }
+        List<Invoice> existingInvoices = invoiceRepository.findByOrderId(saved.getId());
+        for (Invoice existingInv : existingInvoices) {
+            if (!"VOID".equalsIgnoreCase(existingInv.getStatus())) {
+                existingInv.setTotalAmount(saved.getGrandTotal().subtract(roundOffAmount));
+                existingInv.setAmountDue(saved.getGrandTotal().subtract(roundOffAmount));
+                invoiceRepository.save(existingInv);
+                accountingPostingService.replaceInvoiceJournal(saved, existingInv,
+                        "Invoice amount corrected after discount/roundoff");
+                linkedInvoice = existingInv;
             }
         }
+        
         saved.setRoundOffAmount(roundOffAmount);
         Invoice generatedInv = generateInvoice(saved);
         if (linkedInvoice == null) {
             linkedInvoice = generatedInv;
         }
 
+        BigDecimal payable = saved.getGrandTotal();
         BigDecimal amountPaid = safeRequest.getAmountPaid() != null
                 ? moneyValue(safeRequest.getAmountPaid())
                 : payable;
@@ -2181,23 +2665,22 @@ public class OrderService {
 
         BigDecimal discountAmount = moneyValue(safeRequest.getDiscountAmount());
         BigDecimal roundOffAmount = moneyValue(safeRequest.getRoundOffAmount());
-        BigDecimal currentTotal = moneyValue(order.getGrandTotal());
-        BigDecimal existingDiscount = moneyValue(order.getTotalDiscountAmount());
 
-        BigDecimal additionalDiscount = discountAmount.subtract(existingDiscount);
-        if (additionalDiscount.compareTo(BigDecimal.ZERO) > 0) {
-            order.setTotalDiscountAmount(existingDiscount.add(additionalDiscount));
-        }
-        BigDecimal payable = currentTotal
-                .subtract(additionalDiscount.compareTo(BigDecimal.ZERO) > 0 ? additionalDiscount : BigDecimal.ZERO)
-                .add(roundOffAmount);
-        if (payable.compareTo(BigDecimal.ZERO) < 0) {
-            payable = BigDecimal.ZERO;
-        }
-        payable = payable.setScale(2, RoundingMode.HALF_UP);
-        if (additionalDiscount.compareTo(BigDecimal.ZERO) > 0 || roundOffAmount.compareTo(BigDecimal.ZERO) != 0) {
-            order.setGrandTotal(payable);
-        }
+        // First, calculate line-level discounts only by setting order discount to zero
+        order.setOrderDiscountValue(BigDecimal.ZERO);
+        recalculateOrderTotals(order);
+        BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount() : BigDecimal.ZERO;
+
+        BigDecimal requestedTotalDiscount = moneyValue(safeRequest.getDiscountAmount());
+        BigDecimal orderDiscountValue = requestedTotalDiscount.subtract(lineDiscountSum).max(BigDecimal.ZERO);
+
+        order.setOrderDiscountType("AMOUNT");
+        order.setOrderDiscountValue(orderDiscountValue);
+        order.setDiscountSource(com.restaurant.pos.order.domain.DiscountSource.MANUAL);
+        order.setRoundOffAmount(roundOffAmount);
+        order.setRoundOffMode(safeRequest.getRoundOffMode());
+
+        recalculateOrderTotals(order);
 
         order.setReference("CREDIT");
         order.setOrderStatus("COMPLETED");
@@ -2371,6 +2854,8 @@ public class OrderService {
 
         if (order.getLines() != null) {
             for (OrderLine ol : order.getLines()) {
+                // Skip soft-deleted / inactive lines — they must not appear on the invoice
+                if (!"Y".equalsIgnoreCase(ol.getIsactive())) continue;
                 InvoiceLine il = InvoiceLine.builder()
                         .orderLineId(ol.getId())
                         .productId(ol.getProductId())
@@ -2386,8 +2871,8 @@ public class OrderService {
                         .discountAmount(ol.getDiscountAmount())
                         .lineTotal(ol.getLineTotal())
                         .isactive(ol.getIsactive())
-                        .createdBy(ol.getCreatedBy())
-                        .updatedBy(ol.getUpdatedBy())
+                        .createdBy(ol.getCreatedBy() != null ? ol.getCreatedBy().toString() : null)
+                        .updatedBy(ol.getUpdatedBy() != null ? ol.getUpdatedBy().toString() : null)
                         // GST Enrichment snapshot (V1_110) — immutable; reuse for credit notes
                         .grossLineAmount(ol.getGrossLineAmount())
                         .unitPriceExTax(ol.getUnitPriceExTax())
@@ -2479,7 +2964,10 @@ public class OrderService {
 
         // Try to find the invoice
         List<Invoice> invoices = invoiceRepository.findByOrderId(order.getId());
-        Invoice invoice = invoices.isEmpty() ? generateInvoice(order) : invoices.get(0);
+        if (invoices.isEmpty()) {
+            throw new BusinessException("Cannot generate payment: no active invoice found for order " + order.getId());
+        }
+        Invoice invoice = invoices.get(0);
         if (invoice != null) {
             accountingPostingService.postInvoice(order, invoice);
         }
@@ -2535,6 +3023,22 @@ public class OrderService {
 
         Payment savedPayment = paymentRepository.save(payment);
         savePaymentSplits(savedPayment, storedPaymentMethod, amountPaid, cashAmount, onlineAmount, paymentSplits);
+
+        if (invoice != null) {
+            PaymentAllocation allocation = PaymentAllocation.builder()
+                    .paymentId(savedPayment.getId())
+                    .invoiceId(invoice.getId())
+                    .orderId(order.getId())
+                    .creditCustomerId(order.getCreditCustomerId())
+                    .allocatedAmount(moneyValue(amountPaid))
+                    .allocationDate(savedPayment.getPaymentDate())
+                    .status("POSTED")
+                    .notes("Checkout payment allocation")
+                    .build();
+            allocation.setClientId(savedPayment.getClientId());
+            allocation.setOrgId(savedPayment.getOrgId());
+            paymentAllocationRepository.save(allocation);
+        }
 
         // Update Invoice status if it exists
         if (invoice != null) {
@@ -2856,14 +3360,6 @@ public class OrderService {
                 parts.add("Online: " + moneyValue(request.getOnlineAmount()));
             }
         }
-        if (request.getDiscountAmount() != null
-                && moneyValue(request.getDiscountAmount()).compareTo(BigDecimal.ZERO) > 0) {
-            parts.add("Discount: " + moneyValue(request.getDiscountAmount()));
-        }
-        if (request.getRoundOffAmount() != null
-                && moneyValue(request.getRoundOffAmount()).compareTo(BigDecimal.ZERO) != 0) {
-            parts.add("Round off: " + moneyValue(request.getRoundOffAmount()));
-        }
         if (request.getDescription() != null && !request.getDescription().isBlank()) {
             parts.add(request.getDescription().trim());
         }
@@ -2963,6 +3459,55 @@ public class OrderService {
                     return splits;
                 })
                 .orElse(List.of());
+    }
+
+    @Transactional(readOnly = true)
+    public List<OrderPaymentDto> getOrderPayments(UUID orderId) {
+        List<OrderPaymentDto> list = new ArrayList<>();
+
+        // 1. Direct payments linked via payment.orderId
+        List<Payment> directPayments = paymentRepository.findByOrderId(orderId);
+        for (Payment p : directPayments) {
+            if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus()) && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
+                list.add(OrderPaymentDto.builder()
+                        .paymentId(p.getId())
+                        .referenceNo(p.getReferenceNo())
+                        .paymentDate(p.getPaymentDate())
+                        .amount(p.getAmountPaid())
+                        .paymentMethod(p.getPaymentMethod())
+                        .description(p.getDescription())
+                        .build());
+            }
+        }
+
+        // 2. Allocated payments linked via payment_allocations table
+        List<PaymentAllocation> allocations = paymentAllocationRepository.findByOrderIdAndIsactive(orderId, "Y");
+        for (PaymentAllocation alloc : allocations) {
+            boolean alreadyAdded = list.stream().anyMatch(dto -> dto.getPaymentId().equals(alloc.getPaymentId()));
+            if (!alreadyAdded) {
+                paymentRepository.findById(alloc.getPaymentId()).ifPresent(p -> {
+                    if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus()) && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
+                        list.add(OrderPaymentDto.builder()
+                                .paymentId(p.getId())
+                                .referenceNo(p.getReferenceNo())
+                                .paymentDate(alloc.getAllocationDate())
+                                .amount(alloc.getAllocatedAmount())
+                                .paymentMethod(p.getPaymentMethod())
+                                .description(p.getDescription())
+                                .build());
+                    }
+                });
+            }
+        }
+
+        list.sort((a, b) -> {
+            if (a.getPaymentDate() == null && b.getPaymentDate() == null) return 0;
+            if (a.getPaymentDate() == null) return 1;
+            if (b.getPaymentDate() == null) return -1;
+            return b.getPaymentDate().compareTo(a.getPaymentDate());
+        });
+
+        return list;
     }
 
     private String resolveUserDisplayName(String uidStr) {

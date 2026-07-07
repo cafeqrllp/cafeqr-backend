@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Data
+@ToString(exclude = "invoice")
 @Entity
 @Builder
 @NoArgsConstructor
@@ -137,10 +138,10 @@ public class InvoiceLine {
     private LocalDateTime updatedAt;
 
     @Column(name = "created_by")
-    private UUID createdBy;
+    private String createdBy;
 
     @Column(name = "updated_by")
-    private UUID updatedBy;
+    private String updatedBy;
 
     @PrePersist
     protected void onCreate() {
@@ -150,10 +151,10 @@ public class InvoiceLine {
             UUID userId = com.restaurant.pos.common.util.SecurityUtils.getCurrentUserId();
             if (userId != null) {
                 if (this.createdBy == null) {
-                    this.createdBy = userId;
+                    this.createdBy = userId.toString();
                 }
                 if (this.updatedBy == null) {
-                    this.updatedBy = userId;
+                    this.updatedBy = userId.toString();
                 }
             }
         } catch (Exception ignored) {}
@@ -165,7 +166,7 @@ public class InvoiceLine {
         try {
             UUID userId = com.restaurant.pos.common.util.SecurityUtils.getCurrentUserId();
             if (userId != null) {
-                this.updatedBy = userId;
+                this.updatedBy = userId.toString();
             }
         } catch (Exception ignored) {}
     }

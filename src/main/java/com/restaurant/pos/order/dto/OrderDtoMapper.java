@@ -182,7 +182,8 @@ public class OrderDtoMapper {
         }
     }
 
-    private void applyGstLineFields(OrderLine line, CreateOrderRequest.CreateOrderLineRequest lineReq) {
+    private void applyTaxLineFields(OrderLine line, CreateOrderRequest.CreateOrderLineRequest lineReq) {
+        if (lineReq.getClientLineId() != null) line.setClientLineId(lineReq.getClientLineId());
         line.setGrossLineAmount(lineReq.getGrossLineAmount());
         line.setUnitPriceExTax(lineReq.getUnitPriceExTax());
         line.setTaxableAmount(lineReq.getTaxableAmount());
@@ -195,7 +196,7 @@ public class OrderDtoMapper {
         line.setAllocatedOrderDiscount(lineReq.getAllocatedOrderDiscount());
     }
 
-    private void applyGstOrderFields(Order order, CreateOrderRequest request) {
+    private void applyTaxOrderFields(Order order, CreateOrderRequest request) {
         if (request.getGrossAmount() != null)
             order.setGrossAmount(request.getGrossAmount());
         if (request.getOrderDiscountType() != null)
@@ -219,6 +220,12 @@ public class OrderDtoMapper {
         order.setOrderNo(request.getOrderNo());
         order.setOfflineInvoiceNo(request.getOfflineInvoiceNo());
         order.setOfflinePaymentNo(request.getOfflinePaymentNo());
+        // Idempotency / offline-sync source fields
+        if (request.getSourceLocalRef() != null) order.setSourceLocalRef(request.getSourceLocalRef());
+        if (request.getSourceOperationId() != null) order.setSourceOperationId(request.getSourceOperationId());
+        if (request.getSourceDeviceId() != null) order.setSourceDeviceId(request.getSourceDeviceId());
+        if (request.getSourceTerminalId() != null) order.setSourceTerminalId(request.getSourceTerminalId());
+        if (request.getSyncOrigin() != null) order.setSyncOrigin(request.getSyncOrigin());
         order.setTableId(request.getTableId());
         order.setTableNumber(request.getTableNumber());
         order.setWarehouseId(request.getWarehouseId());
@@ -269,11 +276,11 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
-                applyGstLineFields(line, lineReq);
+                applyTaxLineFields(line, lineReq);
                 order.addLine(line);
             }
         }
-        applyGstOrderFields(order, request);
+        applyTaxOrderFields(order, request);
 
         // Transient payment fields for direct-settle orders (MIXED payment from
         // counter)
@@ -353,7 +360,7 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
-                applyGstLineFields(line, lineReq);
+                applyTaxLineFields(line, lineReq);
                 existing.addLine(line);
             }
         }
@@ -419,7 +426,7 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
-                applyGstLineFields(line, lineReq);
+                applyTaxLineFields(line, lineReq);
                 order.addLine(line);
             }
         }

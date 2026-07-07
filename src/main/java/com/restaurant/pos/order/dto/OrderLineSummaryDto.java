@@ -29,7 +29,7 @@ public class OrderLineSummaryDto {
     private BigDecimal discountAmount;
     private BigDecimal lineTotal;
 
-    // GST Enrichment Fields (V1_110)
+    // Tax Enrichment Fields (V1_110)
     private BigDecimal grossLineAmount;
     private BigDecimal unitPriceExTax;
     private BigDecimal taxableAmount;

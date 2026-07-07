@@ -54,6 +54,13 @@ public class PricelistProduct extends BaseEntity {
         return pricelist != null ? pricelist.getId() : null;
     }
 
+    @JsonProperty("pricelistId")
+    public void setPricelistId(UUID pricelistId) {
+        if (pricelistId != null) {
+            this.pricelist = Pricelist.builder().id(pricelistId).build();
+        }
+    }
+
     @JsonProperty("pricelistName")
     public String getPricelistName() {
         return pricelist != null ? pricelist.getName() : null;

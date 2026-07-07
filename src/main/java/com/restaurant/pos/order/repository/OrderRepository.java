@@ -95,6 +95,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     @EntityGraph(attributePaths = "lines")
     Optional<Order> findBySourceOperationIdAndClientId(String sourceOperationId, UUID clientId);
 
+    @EntityGraph(attributePaths = "lines")
+    Optional<Order> findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(UUID clientId, UUID orgId, String sourceLocalRef, String orderStatus);
+
     org.springframework.data.domain.Page<Order> findByClientId(UUID clientId, org.springframework.data.domain.Pageable pageable);
 
     org.springframework.data.domain.Page<Order> findByClientIdAndOrgId(UUID clientId, UUID orgId, org.springframework.data.domain.Pageable pageable);

@@ -268,7 +268,8 @@ public class ReportService {
         for (Order o : orders) {
             List<Payment> payments = paymentsByOrder.getOrDefault(o.getId(), List.of());
             if (payments.isEmpty()) {
-                addPaymentBreakdownBucket(payMethodMap, "UNASSIGNED", safe(o.getGrandTotal()));
+                String fallbackMethod = Boolean.TRUE.equals(o.getIsCredit()) ? "CREDIT" : "UNASSIGNED";
+                addPaymentBreakdownBucket(payMethodMap, fallbackMethod, safe(o.getGrandTotal()));
             } else {
                 for (Payment p : payments) {
                     List<PaymentSplit> splits = splitsByPaymentId.getOrDefault(p.getId(), List.of());
