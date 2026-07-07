@@ -56,12 +56,6 @@ services:
       - SPRING_DATA_REDIS_PORT=6379
       - SPRING_DATA_REDIS_PASSWORD=
       - SPRING_DATA_REDIS_SSL=false
-      - SPRING_RABBITMQ_HOST=rabbitmq
-      - SPRING_RABBITMQ_PORT=5672
-      - SPRING_RABBITMQ_USERNAME=${RABBITMQ_USER:-cafeqr}
-      - SPRING_RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
-      - SPRING_RABBITMQ_VHOST=/
-      - SPRING_RABBITMQ_SSL=false
       - SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:-25}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
     volumes:
@@ -70,8 +64,6 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health >/dev/null || exit 1"]
@@ -178,31 +170,6 @@ services:
         limits:
           memory: 192M
 
-  # ── Message Queue (RabbitMQ 3) ──
-  rabbitmq:
-    image: rabbitmq:3-alpine
-    container_name: cafeqr-rabbitmq
-    restart: unless-stopped
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-cafeqr}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
-      # Limit Erlang VM memory to prevent OOM on 4 GB VPS
-      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit vm_memory_high_watermark 0.4"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - backend_net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-
 # ── Networks ──
 # Two isolated networks ensure the database/cache/queue
 # are NEVER reachable from the public internet.
@@ -221,5 +188,4 @@ volumes:
   caddy_config:
   postgres_data:
   redis_data:
-  rabbitmq_data:
   backend_backups:

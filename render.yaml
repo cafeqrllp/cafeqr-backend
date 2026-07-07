@@ -26,33 +26,14 @@ services:
         sync: false
       - key: SPRING_DATA_REDIS_PASSWORD
         sync: false
-<<<<<<< HEAD
       - key: SPRING_DATA_REDIS_SSL
         value: true
-
-      # CloudAMQP RabbitMQ.
-      - key: SPRING_RABBITMQ_HOST
-        sync: false
-      - key: SPRING_RABBITMQ_PORT
-        sync: false
-      - key: SPRING_RABBITMQ_USERNAME
-        sync: false
-      - key: SPRING_RABBITMQ_PASSWORD
-        sync: false
-      - key: SPRING_RABBITMQ_VHOST
-        sync: false
-      - key: SPRING_RABBITMQ_SSL
-        value: true
-
-      # App URLs and security.
-=======
 
       # Security & Mail
       # Render free web services block outbound SMTP ports 25, 465, and 587.
       # Keep free hosting by using Gmail API over HTTPS instead of Gmail SMTP.
       - key: JWT_SECRET
         generateValue: true
->>>>>>> testsrc/main
       - key: ALLOWED_ORIGINS
         sync: false
       - key: FRONTEND_URL

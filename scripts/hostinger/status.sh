@@ -31,7 +31,7 @@ docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\
 
 echo ""
 echo "── Health Checks ──"
-for svc in caddy backend frontend db redis rabbitmq; do
+for svc in caddy backend frontend db redis; do
   CONTAINER="cafeqr-${svc}"
   if docker inspect "${CONTAINER}" &>/dev/null; then
     STATUS=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "${CONTAINER}" 2>/dev/null)
