@@ -16,17 +16,18 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:pos_password}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:20}
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:30}
       minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:5}
       idle-timeout: 30000
       max-lifetime: 1800000
-      leak-detection-threshold: 2000
+      connection-timeout: 20000
+      leak-detection-threshold: 60000 
 
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: none
-    show-sql: true
+    show-sql: false
   flyway:
     baseline-on-migrate: true
     validate-on-migrate: false
@@ -46,8 +47,6 @@ spring:
       ssl:
         enabled: ${SPRING_DATA_REDIS_SSL:false}
 
-
-
   mail:
     host: ${SMTP_HOST:smtp.gmail.com}
     port: 587
@@ -61,11 +60,11 @@ spring:
           starttls:
             enable: true
             required: true
-          connectiontimeout: ${SMTP_CONNECTION_TIMEOUT:10000}
-          timeout: ${SMTP_TIMEOUT:10000}
-          writetimeout: ${SMTP_WRITE_TIMEOUT:10000}
+          connectiontimeout: ${SPRING_MAIL_CONNECTION_TIMEOUT:10000}
+          timeout: ${SPRING_MAIL_TIMEOUT:10000}
+          writetimeout: ${SPRING_MAIL_WRITE_TIMEOUT:10000}
           ssl:
-            trust: ${SMTP_SSL_TRUST:${SMTP_HOST:smtp.gmail.com}}
+            trust: ${SPRING_MAIL_SSL_TRUST:${SMTP_HOST:smtp.gmail.com}}
 
 email:
   provider: ${EMAIL_PROVIDER:smtp}
@@ -94,12 +93,6 @@ management:
       probes:
         enabled: true
   health:
-    # Disable Redis and RabbitMQ health indicators.
-    # The reactive Redis health check runs during startup and throws
-    # InterruptedException when Redis DNS hasn't resolved yet, which
-    # crashes the entire Spring context. Redis/RabbitMQ connectivity
-    # is not critical for the health probe — the app gracefully
-    # reconnects on its own.
     redis:
       enabled: false
     rabbit:
@@ -128,5 +121,4 @@ subscription:
 
 logging:
   level:
-    org.hibernate.orm.jdbc.bind: ERROR # Reduced for production
-
+    org.hibernate.orm.jdbc.bind: ERROR
