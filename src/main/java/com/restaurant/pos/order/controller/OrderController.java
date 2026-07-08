@@ -177,7 +177,7 @@ public class OrderController {
             @Parameter(description = "Generic search term for order number or notes") @RequestParam(required = false) String searchTerm,
             @RequestParam(required = false) UUID terminalId,
             @Parameter(description = "Zero-indexed page number", example = "0") @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "Page size (maximum 200)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 200, message = "Page size cannot exceed 200") int size) {
+            @Parameter(description = "Page size (maximum 10000)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 10000, message = "Page size cannot exceed 10000") int size) {
         OrderSearchCriteria criteria = OrderSearchCriteria.builder()
                 .orderType(type)
                 .fromDate(fromDate)
