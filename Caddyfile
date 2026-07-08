@@ -1,14 +1,6 @@
 {$CADDY_SITE_ADDRESS} {
 	encode gzip
 
-	handle /api/ai/* {
-		reverse_proxy frontend:3000
-	}
-
-	handle /api/push/* {
-		reverse_proxy frontend:3000
-	}
-
 	handle /api/* {
 		reverse_proxy backend:8080
 	}
@@ -22,7 +14,7 @@
 	}
 
 	handle {
-		reverse_proxy frontend:3000
+		respond "Not Found" 404
 	}
 }
 

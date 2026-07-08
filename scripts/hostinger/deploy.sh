@@ -4,8 +4,8 @@
 # Usage:
 #   ./deploy.sh              # Deploy all services
 #   ./deploy.sh backend      # Deploy backend after dependencies are healthy
-#   ./deploy.sh frontend     # Deploy frontend and ensure Caddy is running
 #
+
 # Set PULL_REPO=false when the caller already performed git pull --ff-only.
 
 set -euo pipefail
@@ -33,14 +33,13 @@ die() {
 }
 
 usage() {
-  echo "Usage: $0 [backend|frontend|all]" >&2
+  echo "Usage: $0 [backend|all]" >&2
 }
 
 require_files() {
   [ -d "${APP_DIR}" ] || die "App directory not found: ${APP_DIR}"
   [ -f "${COMPOSE_FILE}" ] || die "Compose file not found: ${COMPOSE_FILE}"
   [ -f "${APP_DIR}/.env" ] || die "Missing ${APP_DIR}/.env. Create it from .env.production.example before deploying."
-  [ -f "${APP_DIR}/.env.frontend" ] || die "Missing ${APP_DIR}/.env.frontend. Create it from .env.frontend.example before deploying."
 }
 
 update_repo() {
@@ -150,7 +149,7 @@ show_status() {
 
   echo ""
   echo "-- Health summary --"
-  for service in caddy backend frontend db redis; do
+  for service in caddy backend db redis; do
     local container="cafeqr-${service}"
     printf "  %-10s state=%-10s health=%s\n" "${service}" "$(container_state "${container}")" "$(container_health "${container}")"
   done
@@ -171,31 +170,19 @@ deploy_backend() {
   wait_for_service backend "${BACKEND_WAIT_ATTEMPTS}" "${BACKEND_WAIT_DELAY}"
 }
 
-deploy_frontend() {
-  echo "-- Pulling and restarting frontend --"
-  "${COMPOSE[@]}" pull frontend
-  "${COMPOSE[@]}" up -d --no-deps frontend
-  wait_for_service frontend 30 5
-
-  echo "-- Ensuring Caddy is running --"
-  "${COMPOSE[@]}" up -d caddy
-  wait_for_service caddy 12 5
-}
-
 deploy_all() {
   deploy_dependencies
   echo "-- Pulling application images --"
-  "${COMPOSE[@]}" pull backend frontend
+  "${COMPOSE[@]}" pull backend
 
   echo "-- Restarting application stack --"
-  "${COMPOSE[@]}" up -d --remove-orphans backend frontend caddy
+  "${COMPOSE[@]}" up -d --remove-orphans backend caddy
   wait_for_service backend "${BACKEND_WAIT_ATTEMPTS}" "${BACKEND_WAIT_DELAY}"
-  wait_for_service frontend 30 5
   wait_for_service caddy 12 5
 }
 
 case "${SERVICE}" in
-  backend|frontend|all)
+  backend|all)
     ;;
   *)
     usage
@@ -217,9 +204,6 @@ validate_compose
 case "${SERVICE}" in
   backend)
     deploy_backend
-    ;;
-  frontend)
-    deploy_frontend
     ;;
   all)
     deploy_all

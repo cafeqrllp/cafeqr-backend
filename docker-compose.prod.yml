@@ -82,25 +82,6 @@ services:
         limits:
           memory: 1024M
 
-  # ── Frontend (Next.js) ──
-  frontend:
-    image: ${FRONTEND_IMAGE:-ghcr.io/cafeqrllp/cafeqr-frontend:latest}
-    container_name: cafeqr-frontend
-    restart: unless-stopped
-    env_file: .env.frontend
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:3000 >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    networks:
-      - frontend_net
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
   # ── Database (PostgreSQL 15) ──
   db:
     image: postgres:15-alpine
