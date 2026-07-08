@@ -340,7 +340,7 @@ public class OrderController {
     // -----------------------------------------------------------------
 
     @PostMapping("/{id}/bill")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER') or hasAuthority('ORDER_BILL')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF') or hasAuthority('ORDER_BILL')")
     @Operation(summary = "Bill order", description = "Marks the order as BILLED and generates a customer invoice. Replays identically if a duplicate Idempotency-Key is provided.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Successfully marked order as billed and generated invoice"),
