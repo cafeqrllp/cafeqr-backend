@@ -357,7 +357,8 @@ public class OrderService {
 
     private String resolveDocumentNumber(Order order, DocumentType documentType, String requestedNumber) {
         if (requestedNumber != null && !requestedNumber.isBlank()) {
-            if (isMainOfflineSync(order) || (order != null && (order.getOriginalOrderId() != null || (order.getRevisionNumber() != null && order.getRevisionNumber() > 0)))) {
+            boolean isTemporaryOfflineNumber = requestedNumber.startsWith("OFFLINE-");
+            if (!isTemporaryOfflineNumber && (isMainOfflineSync(order) || (order != null && (order.getOriginalOrderId() != null || (order.getRevisionNumber() != null && order.getRevisionNumber() > 0))))) {
                 if (isMainOfflineSync(order)) {
                     offlineSequenceLeaseService.consumeLeasedNumber(
                             documentType,
