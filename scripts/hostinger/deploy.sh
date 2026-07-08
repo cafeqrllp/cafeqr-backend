@@ -150,7 +150,7 @@ show_status() {
 
   echo ""
   echo "-- Health summary --"
-  for service in caddy backend frontend db redis rabbitmq; do
+  for service in caddy backend frontend db redis; do
     local container="cafeqr-${service}"
     printf "  %-10s state=%-10s health=%s\n" "${service}" "$(container_state "${container}")" "$(container_health "${container}")"
   done
@@ -158,10 +158,9 @@ show_status() {
 
 deploy_dependencies() {
   echo "-- Starting database/cache/queue dependencies --"
-  "${COMPOSE[@]}" up -d db redis rabbitmq
+  "${COMPOSE[@]}" up -d db redis
   wait_for_service db 30 5
   wait_for_service redis 20 3
-  wait_for_service rabbitmq 30 5
 }
 
 deploy_backend() {
