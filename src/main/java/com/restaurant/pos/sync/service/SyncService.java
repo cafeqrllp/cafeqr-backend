@@ -8,6 +8,10 @@ import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderStatus;
 import com.restaurant.pos.order.domain.PaymentStatus;
+import com.restaurant.pos.order.dto.OrderSettleRequest;
+import com.restaurant.pos.order.dto.OrderCancelRequest;
+import com.restaurant.pos.order.dto.OrderCreditCompletionRequest;
+import com.restaurant.pos.order.dto.OrderMoveTableRequest;
 import com.restaurant.pos.order.service.OrderService;
 import com.restaurant.pos.product.domain.Category;
 import com.restaurant.pos.product.domain.Product;
@@ -84,6 +88,111 @@ public class SyncService {
                 .build();
     }
 
+    /**
+     * Re-processes all FAILED_PERMANENT operations for the current tenant.
+     * This is used after adding new dispatch routes (e.g. /settle, /bill) to
+     * recover operations that were previously unsupported.
+     *
+     * @return a summary map with counts of recovered, still-failed, and skipped operations
+     */
+    public Map<String, Object> replayFailedOperations() {
+        UUID clientId = TenantContext.getCurrentTenant();
+        log.info("[Offline Sync Recovery] Starting replay of FAILED_PERMANENT operations for clientId={}", clientId);
+
+        List<Map<String, Object>> failedRows = jdbcTemplate.queryForList(
+                """
+                SELECT id, operation_id, method, url, payload_json::text AS payload_text, error_message
+                FROM sync_operations
+                WHERE client_id = ? AND status = 'FAILED_PERMANENT'
+                ORDER BY created_at ASC
+                """,
+                clientId
+        );
+
+        int recovered = 0;
+        int stillFailed = 0;
+        int skipped = 0;
+
+        for (Map<String, Object> row : failedRows) {
+            String operationId = (String) row.get("operation_id");
+            String id = row.get("id").toString();
+            String payloadText = (String) row.get("payload_text");
+
+            try {
+                Object payloadObj = payloadText != null ? objectMapper.readValue(payloadText, Object.class) : null;
+
+                SyncOperationRequest replayOp = new SyncOperationRequest();
+                replayOp.setId(operationId);
+                replayOp.setOperationId(operationId);
+                replayOp.setMethod((String) row.get("method"));
+                replayOp.setUrl((String) row.get("url"));
+                replayOp.setPayload(payloadObj);
+
+                Object result = transactionTemplate.execute(status -> {
+                    try {
+                        return dispatch(replayOp);
+                    } catch (Exception ex) {
+                        status.setRollbackOnly();
+                        throw ex;
+                    }
+                });
+
+                // Update the record to SYNCED
+                String responseJson = objectMapper.writeValueAsString(
+                        SyncOperationResult.builder()
+                                .operationId(operationId)
+                                .success(true)
+                                .status("SYNCED")
+                                .message("Recovered via replay")
+                                .data(result)
+                                .build());
+                jdbcTemplate.update(
+                        """
+                        UPDATE sync_operations
+                        SET status = 'SYNCED', error_message = NULL,
+                            response_json = CAST(? AS jsonb),
+                            processed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = CAST(? AS uuid)
+                        """,
+                        responseJson, id
+                );
+
+                log.info("[Offline Sync Recovery]   ✓ Recovered operationId={}", operationId);
+                recovered++;
+            } catch (IllegalArgumentException ex) {
+                // Still unsupported — skip
+                log.warn("[Offline Sync Recovery]   ⊘ Still unsupported operationId={}: {}", operationId, ex.getMessage());
+                skipped++;
+            } catch (Exception ex) {
+                log.error("[Offline Sync Recovery]   ✗ Failed to replay operationId={}: {}", operationId, ex.getMessage(), ex);
+
+                // Update error message but keep status as FAILED_PERMANENT
+                try {
+                    jdbcTemplate.update(
+                            """
+                            UPDATE sync_operations
+                            SET error_message = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = CAST(? AS uuid)
+                            """,
+                            "Replay failed: " + ex.getMessage(), id
+                    );
+                } catch (Exception ignored) {}
+
+                stillFailed++;
+            }
+        }
+
+        log.info("[Offline Sync Recovery] Complete for clientId={}. Total={}, Recovered={}, StillFailed={}, Skipped={}",
+                clientId, failedRows.size(), recovered, stillFailed, skipped);
+
+        return Map.of(
+                "total", failedRows.size(),
+                "recovered", recovered,
+                "stillFailed", stillFailed,
+                "skipped", skipped
+        );
+    }
+
     public Instant decodeSyncToken(String token) {
         if (token == null || token.isBlank()) return null;
         try {
@@ -107,16 +216,28 @@ public class SyncService {
             throw new IllegalArgumentException("Unsupported offline sync schema version: " + request.getSchemaVersion());
         }
 
+        int totalOps = request.getOperations() == null ? 0 : request.getOperations().size();
+        log.info("[Offline Sync Push] Received {} operations from client={}, org={}, terminal={}",
+                totalOps, TenantContext.getCurrentTenant(), TenantContext.getCurrentOrg(), TenantContext.getCurrentTerminal());
+
         java.util.Set<String> failedOperationIds = new java.util.HashSet<>();
         java.util.List<SyncOperationResult> results = new java.util.ArrayList<>();
+        int successCount = 0;
+        int failCount = 0;
 
         for (SyncOperationRequest operation : request.getOperations()) {
             SyncOperationResult result = processOperationSafely(operation, failedOperationIds);
             results.add(result);
-            if (!result.isSuccess()) {
+            if (result.isSuccess()) {
+                successCount++;
+            } else {
+                failCount++;
                 failedOperationIds.add(result.getOperationId() != null ? result.getOperationId() : operation.getId());
             }
         }
+
+        log.info("[Offline Sync Push] Completed. total={}, success={}, failed={}, client={}",
+                totalOps, successCount, failCount, TenantContext.getCurrentTenant());
 
         return SyncPushResponse.builder()
                 .serverTime(Instant.now())
@@ -177,6 +298,8 @@ public class SyncService {
                             .data(data)
                             .build();
                     storeOperation(operation, result);
+                    log.info("[Offline Sync Push]   ✓ operationId={} method={} path={}",
+                            operationId, safeMethod(operation), resolvePath(operation));
                     return result;
                 } catch (Exception ex) {
                     status.setRollbackOnly();
@@ -184,8 +307,8 @@ public class SyncService {
                 }
             });
         } catch (Exception ex) {
-            log.warn("Offline sync operation failed. operationId={}, method={}, path={}, message={}",
-                    operationId, operation.getMethod(), resolvePath(operation), ex.getMessage());
+            log.warn("[Offline Sync Push]   ✗ operationId={} method={} path={} error={}",
+                    operationId, safeMethod(operation), resolvePath(operation), ex.getMessage());
             
             // Exception Classification: Permanent vs Retryable
             String status = classifyFailure(ex);
@@ -237,6 +360,40 @@ public class SyncService {
             if (order.getSourceLocalRef() == null) order.setSourceLocalRef(operation.getClientRequestId());
             if (order.getSyncOrigin() == null || order.getSyncOrigin().isBlank()) order.setSyncOrigin("OFFLINE_QUEUE");
             return orderService.createOrder(order);
+        }
+        if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/settle")) {
+            UUID orderId = extractUuid(path, 3);
+            OrderSettleRequest settleRequest = convert(operation.getPayload(), OrderSettleRequest.class);
+            return orderService.settleOrder(orderId, settleRequest);
+        }
+        if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/bill")) {
+            UUID orderId = extractUuid(path, 3);
+            @SuppressWarnings("unchecked")
+            List<String> skipPrintKinds = operation.getPayload() != null
+                    ? objectMapper.convertValue(
+                            ((java.util.Map<String, Object>) operation.getPayload()).get("skipAutoPrintKinds"),
+                            new TypeReference<List<String>>() {})
+                    : null;
+            return orderService.billOrder(orderId, skipPrintKinds);
+        }
+        if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/cancel")) {
+            UUID orderId = extractUuid(path, 3);
+            OrderCancelRequest cancelRequest = operation.getPayload() != null
+                    ? convert(operation.getPayload(), OrderCancelRequest.class)
+                    : null;
+            return orderService.cancelOrder(orderId, cancelRequest);
+        }
+        if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/complete-credit")) {
+            UUID orderId = extractUuid(path, 3);
+            OrderCreditCompletionRequest creditRequest = operation.getPayload() != null
+                    ? convert(operation.getPayload(), OrderCreditCompletionRequest.class)
+                    : null;
+            return orderService.completeCreditOrder(orderId, creditRequest);
+        }
+        if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/move-table")) {
+            UUID orderId = extractUuid(path, 3);
+            OrderMoveTableRequest moveRequest = convert(operation.getPayload(), OrderMoveTableRequest.class);
+            return orderService.moveTable(orderId, moveRequest);
         }
         if ("PUT".equals(method) && path.startsWith("/api/v1/orders/")) {
             return orderService.updateOrder(extractUuid(path, 3), convert(operation.getPayload(), Order.class));
