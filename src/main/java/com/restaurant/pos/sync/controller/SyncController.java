@@ -50,4 +50,14 @@ public class SyncController {
     public ResponseEntity<ApiResponse<SyncPushResponse>> push(@RequestBody SyncPushRequest request) {
         return ResponseEntity.ok(ApiResponse.success(syncService.push(request)));
     }
+
+    /**
+     * Re-processes all FAILED_PERMANENT sync operations for the current tenant.
+     * Call this after deploying a fix that adds missing dispatch routes (e.g. /settle).
+     */
+    @PostMapping("/replay-failed")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> replayFailed() {
+        return ResponseEntity.ok(ApiResponse.success(syncService.replayFailedOperations()));
+    }
 }
