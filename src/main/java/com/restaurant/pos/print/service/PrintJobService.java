@@ -73,6 +73,13 @@ public class PrintJobService {
 
     @Transactional
     public PrintJob enqueueForOrder(Order order, PrintJobKind kind, String reason) {
+        if (kind == PrintJobKind.KOT) {
+            ConfigurationDto config = systemConfigurationService.getEffectiveConfigurationForBranch(order.getOrgId());
+            if (config == null || !config.isSendToKitchenEnabled()) {
+                log.info("enqueueForOrder: skipping KOT print job because KOT module/feature is disabled or expired for branch={}", order.getOrgId());
+                return null;
+            }
+        }
         UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
         String dedupeKey = buildDedupeKey(order, kind, reason);
         log.info("enqueueForOrder: orderId={}, kind={}, reason={}, dedupeKey={}", order.getId(), kind, reason, dedupeKey);
@@ -227,7 +234,7 @@ public class PrintJobService {
     private PrintJob createJob(Order order, PrintJobKind kind, String reason, String dedupeKey, UUID clientId) {
         try {
             Map<String, Object> payloadMap = new LinkedHashMap<>();
-            payloadMap.put("order", orderSnapshot(order));
+            payloadMap.put("order", orderSnapshot(order, kind));
             payloadMap.put("jobKind", kind.name().toLowerCase());
             payloadMap.put("reason", reason == null ? "auto" : reason);
             payloadMap.put("restaurant", buildRestaurantDetails(clientId, order.getOrgId()));
@@ -264,6 +271,11 @@ public class PrintJobService {
 
     @Transactional
     public PrintJob enqueueKotEditJob(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines, String reason) {
+        ConfigurationDto config = systemConfigurationService.getEffectiveConfigurationForBranch(order.getOrgId());
+        if (config == null || !config.isSendToKitchenEnabled()) {
+            log.info("enqueueKotEditJob: skipping KOT edit print job because KOT module/feature is disabled or expired for branch={}", order.getOrgId());
+            return null;
+        }
         UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
         String dedupeKey = buildDedupeKey(order, PrintJobKind.KOT, reason);
         log.info("enqueueKotEditJob: orderId={}, addedLines={}, removedLines={}, dedupeKey={}", order.getId(), (addedLines != null ? addedLines.size() : 0), (removedLines != null ? removedLines.size() : 0), dedupeKey);
@@ -272,17 +284,17 @@ public class PrintJobService {
 
     private PrintJob createKotEditJob(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines, String reason, String dedupeKey, UUID clientId) {
         try {
-            Map<String, Object> orderSnap = orderSnapshot(order);
+            Map<String, Object> orderSnap = orderSnapshot(order, PrintJobKind.KOT);
             List<Map<String, Object>> addedSnaps = addedLines == null
                     ? List.of()
-                    : addedLines.stream().map(this::lineSnapshot).toList();
+                    : addedLines.stream().map(line -> this.lineSnapshot(line, PrintJobKind.KOT)).toList();
             orderSnap.put("lines", addedSnaps);
             orderSnap.put("orderLines", addedSnaps);
             orderSnap.put("order_items", addedSnaps);
 
             List<Map<String, Object>> removedSnaps = removedLines == null
                     ? List.of()
-                    : removedLines.stream().map(this::lineSnapshot).toList();
+                    : removedLines.stream().map(line -> this.lineSnapshot(line, PrintJobKind.KOT)).toList();
             orderSnap.put("removed_items", removedSnaps);
             orderSnap.put("removedItems", removedSnaps);
             orderSnap.put("is_edited", true);
@@ -339,7 +351,7 @@ public class PrintJobService {
         job.setNextAttemptAt(null);
     }
 
-    private Map<String, Object> orderSnapshot(Order order) {
+    private Map<String, Object> orderSnapshot(Order order, PrintJobKind kind) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", order.getId());
         out.put("orgId", order.getOrgId());
@@ -387,14 +399,14 @@ public class PrintJobService {
 
         List<Map<String, Object>> lines = order.getLines() == null
                 ? List.of()
-                : order.getLines().stream().map(this::lineSnapshot).toList();
+                : order.getLines().stream().map(line -> this.lineSnapshot(line, kind)).toList();
         out.put("lines", lines);
         out.put("orderLines", lines);
         out.put("order_items", lines);
         return out;
     }
 
-    private Map<String, Object> lineSnapshot(OrderLine line) {
+    private Map<String, Object> lineSnapshot(OrderLine line, PrintJobKind kind) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", line.getId());
         out.put("productId", line.getProductId());
@@ -420,6 +432,13 @@ public class PrintJobService {
         out.put("discount_amount", line.getDiscountAmount());
         out.put("isPackagedGood", line.getIsPackagedGood());
         out.put("is_packaged_good", line.getIsPackagedGood());
+        // Per-item kitchen notes — shown below item name on KOT only if kind is KOT and note is not empty
+        if (kind == PrintJobKind.KOT && line.getDescription() != null && !line.getDescription().trim().isEmpty()) {
+            out.put("description", line.getDescription());
+            out.put("notes", line.getDescription());
+            out.put("line_notes", line.getDescription());
+            out.put("itemNotes", line.getDescription());
+        }
         return out;
     }
 
@@ -518,6 +537,10 @@ public class PrintJobService {
                     if (config.getPrintLogoRows() != null) {
                         details.put("print_logo_rows", config.getPrintLogoRows());
                         details.put("printLogoRows", config.getPrintLogoRows());
+                    }
+                    if (config.getTaxLabelGlobal() != null) {
+                        details.put("taxLabelGlobal", config.getTaxLabelGlobal());
+                        details.put("tax_label_global", config.getTaxLabelGlobal());
                     }
                 }
             } catch (Exception configEx) {

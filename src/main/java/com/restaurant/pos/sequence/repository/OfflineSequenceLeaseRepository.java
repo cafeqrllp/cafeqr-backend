@@ -36,4 +36,10 @@ public interface OfflineSequenceLeaseRepository extends JpaRepository<OfflineSeq
             Long endNumber,
             Long startNumber
     );
+
+    List<OfflineSequenceLease> findByClientIdAndOrgIdAndDocumentType(
+            UUID clientId,
+            UUID orgId,
+            DocumentType documentType
+    );
 }

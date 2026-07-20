@@ -3,6 +3,7 @@ package com.restaurant.pos.sync.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.pos.common.dto.ConfigurationDto;
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.order.domain.Order;
@@ -57,6 +58,7 @@ public class SyncService {
 
     @Transactional(readOnly = true)
     public SyncBootstrapResponse bootstrap() {
+        validateOfflineSyncEnabled();
         Instant now = Instant.now();
         return SyncBootstrapResponse.builder()
                 .serverTime(now)
@@ -73,6 +75,7 @@ public class SyncService {
 
     @Transactional(readOnly = true)
     public SyncChangesResponse changes(Instant since) {
+        validateOfflineSyncEnabled();
         Instant now = Instant.now();
         return SyncChangesResponse.builder()
                 .since(since)
@@ -211,6 +214,7 @@ public class SyncService {
     }
 
     public SyncPushResponse push(SyncPushRequest request) {
+        validateOfflineSyncEnabled();
         // Schema Version check
         if (request.getSchemaVersion() != null && request.getSchemaVersion() < 1) {
             throw new IllegalArgumentException("Unsupported offline sync schema version: " + request.getSchemaVersion());
@@ -282,7 +286,7 @@ public class SyncService {
         }
 
         SyncOperationResult existing = findStoredResult(operationId);
-        if (existing != null) {
+        if (existing != null && existing.isSuccess()) {
             return existing;
         }
 
@@ -362,12 +366,28 @@ public class SyncService {
             return orderService.createOrder(order);
         }
         if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/settle")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
+            ensureTerminalContext(orderId);
+            try {
+                Order order = orderService.getOrder(orderId);
+                if ("COMPLETED".equalsIgnoreCase(order.getOrderStatus()) || "PAID".equalsIgnoreCase(order.getPaymentStatus())) {
+                    log.info("[Sync Service] Order {} is already settled/completed. Treating settle as successful no-op.", orderId);
+                    return order;
+                }
+            } catch (Exception ignored) {}
             OrderSettleRequest settleRequest = convert(operation.getPayload(), OrderSettleRequest.class);
             return orderService.settleOrder(orderId, settleRequest);
         }
         if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/bill")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
+            ensureTerminalContext(orderId);
+            try {
+                Order order = orderService.getOrder(orderId);
+                if ("BILLED".equalsIgnoreCase(order.getOrderStatus()) || "COMPLETED".equalsIgnoreCase(order.getOrderStatus()) || "PAID".equalsIgnoreCase(order.getPaymentStatus())) {
+                    log.info("[Sync Service] Order {} is already billed/completed. Treating bill as successful no-op.", orderId);
+                    return order;
+                }
+            } catch (Exception ignored) {}
             @SuppressWarnings("unchecked")
             List<String> skipPrintKinds = operation.getPayload() != null
                     ? objectMapper.convertValue(
@@ -377,29 +397,38 @@ public class SyncService {
             return orderService.billOrder(orderId, skipPrintKinds);
         }
         if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/cancel")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
+            ensureTerminalContext(orderId);
+            try {
+                Order order = orderService.getOrder(orderId);
+                if ("CANCELLED".equalsIgnoreCase(order.getOrderStatus()) || "VOID".equalsIgnoreCase(order.getOrderStatus())) {
+                    log.info("[Sync Service] Order {} is already cancelled. Treating cancel as successful no-op.", orderId);
+                    return order;
+                }
+            } catch (Exception ignored) {}
             OrderCancelRequest cancelRequest = operation.getPayload() != null
                     ? convert(operation.getPayload(), OrderCancelRequest.class)
                     : null;
             return orderService.cancelOrder(orderId, cancelRequest);
         }
         if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/complete-credit")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
+            ensureTerminalContext(orderId);
             OrderCreditCompletionRequest creditRequest = operation.getPayload() != null
                     ? convert(operation.getPayload(), OrderCreditCompletionRequest.class)
                     : null;
             return orderService.completeCreditOrder(orderId, creditRequest);
         }
         if ("POST".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/move-table")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
             OrderMoveTableRequest moveRequest = convert(operation.getPayload(), OrderMoveTableRequest.class);
             return orderService.moveTable(orderId, moveRequest);
         }
         if ("PUT".equals(method) && path.startsWith("/api/v1/orders/")) {
-            return orderService.updateOrder(extractUuid(path, 3), convert(operation.getPayload(), Order.class));
+            return orderService.updateOrder(resolveRealOrderId(extractUuid(path, 3)), convert(operation.getPayload(), Order.class));
         }
         if ("PATCH".equals(method) && path.startsWith("/api/v1/orders/") && path.endsWith("/status")) {
-            UUID orderId = extractUuid(path, 3);
+            UUID orderId = resolveRealOrderId(extractUuid(path, 3));
             String statusStr = stringParam(operation, "status");
             String paymentStatusStr = stringParam(operation, "paymentStatus");
             String description = stringParam(operation, "description");
@@ -524,6 +553,28 @@ public class SyncService {
         return value == null ? null : String.valueOf(value);
     }
 
+    /**
+     * Ensures TenantContext has a terminal ID set before dispatching command operations
+     * (settle, bill, cancel, etc.) that require it for offline document sequence leasing.
+     * The terminal ID is resolved from the order entity stored in the database.
+     */
+    private void ensureTerminalContext(UUID orderId) {
+        if (TenantContext.getCurrentTerminal() != null) {
+            return; // Already set (e.g. from X-Terminal-ID header)
+        }
+        try {
+            Order order = orderService.getOrder(orderId);
+            UUID terminalId = order.getTerminalId() != null ? order.getTerminalId()
+                    : order.getSourceTerminalId();
+            if (terminalId != null) {
+                TenantContext.setCurrentTerminal(terminalId);
+                log.debug("[Offline Sync] Set terminal context from order {} → {}", orderId, terminalId);
+            }
+        } catch (Exception ex) {
+            log.warn("[Offline Sync] Could not resolve terminal from order {}: {}", orderId, ex.getMessage());
+        }
+    }
+
     private SyncOperationResult findStoredResult(String operationId) {
         try {
             String json = jdbcTemplate.queryForObject(
@@ -552,7 +603,11 @@ public class SyncService {
                         payload_json, response_json, processed_at, updated_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    ON CONFLICT (client_id, operation_id) DO NOTHING
+                    ON CONFLICT (client_id, operation_id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        error_message = EXCLUDED.error_message,
+                        response_json = EXCLUDED.response_json,
+                        updated_at = CURRENT_TIMESTAMP
                     """,
                     TenantContext.getCurrentTenant(),
                     TenantContext.getCurrentOrg(),
@@ -570,6 +625,25 @@ public class SyncService {
             );
         } catch (Exception ex) {
             log.warn("Unable to record sync operation. operationId={}", result.getOperationId(), ex);
+        }
+    }
+
+    private UUID resolveRealOrderId(UUID clientOrderId) {
+        if (clientOrderId == null) return null;
+        try {
+            orderService.getOrder(clientOrderId);
+            return clientOrderId;
+        } catch (Exception e) {
+            return orderService.findBySourceOperationId(clientOrderId.toString())
+                    .map(Order::getId)
+                    .orElse(clientOrderId);
+        }
+    }
+
+    private void validateOfflineSyncEnabled() {
+        ConfigurationDto config = configurationService.getConfiguration();
+        if (config == null || !config.isOfflineSyncEnabled()) {
+            throw new BusinessException("Offline Sync is disabled for this organization.");
         }
     }
 }

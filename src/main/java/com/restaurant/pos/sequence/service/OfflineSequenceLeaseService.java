@@ -13,6 +13,8 @@ import com.restaurant.pos.sequence.domain.OfflineSequenceLease;
 import com.restaurant.pos.sequence.repository.DocumentSequenceRepository;
 import com.restaurant.pos.sequence.repository.OfflineSequenceLeaseRepository;
 import lombok.RequiredArgsConstructor;
+import com.restaurant.pos.common.service.SystemConfigurationService;
+import com.restaurant.pos.common.dto.ConfigurationDto;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,9 +35,11 @@ public class OfflineSequenceLeaseService {
     private final OrderRepository orderRepository;
     private final InvoiceRepository invoiceRepository;
     private final PaymentRepository paymentRepository;
+    private final SystemConfigurationService configurationService;
 
     @Transactional
     public List<OfflineSequenceLease> reserveDefaults(UUID requestedTerminalId, Integer requestedBlockSize) {
+        validateOfflineSyncEnabled();
         UUID terminalId = resolveTerminalId(requestedTerminalId);
         int blockSize = normalizeBlockSize(requestedBlockSize);
         return List.of(
@@ -47,6 +51,7 @@ public class OfflineSequenceLeaseService {
 
     @Transactional(readOnly = true)
     public List<OfflineSequenceLease> active(UUID requestedTerminalId) {
+        validateOfflineSyncEnabled();
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = getEffectiveOrgId();
         UUID terminalId = resolveTerminalId(requestedTerminalId);
@@ -61,7 +66,15 @@ public class OfflineSequenceLeaseService {
 
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = getEffectiveOrgId();
-        UUID terminalId = resolveTerminalId(requestedTerminalId);
+        
+        UUID terminalId = requestedTerminalId != null ? requestedTerminalId : TenantContext.getCurrentTerminal();
+        if (terminalId == null) {
+            terminalId = findTerminalIdFromLeases(clientId, orgId, documentType, documentNo);
+        }
+        if (terminalId == null) {
+            throw new BusinessException("A terminal is required for offline sequence leasing.");
+        }
+
         List<OfflineSequenceLease> leases = leaseRepository
                 .findByClientIdAndOrgIdAndTerminalIdAndDocumentTypeAndStatusOrderByStartNumberAsc(
                         clientId, orgId, terminalId, documentType, "ACTIVE");
@@ -86,6 +99,18 @@ public class OfflineSequenceLeaseService {
         }
 
         throw new BusinessException("Offline " + documentType + " number is outside the reserved range for this main terminal.");
+    }
+
+    private UUID findTerminalIdFromLeases(UUID clientId, UUID orgId, DocumentType documentType, String documentNo) {
+        List<OfflineSequenceLease> leases = leaseRepository.findByClientIdAndOrgIdAndDocumentType(clientId, orgId, documentType);
+        for (OfflineSequenceLease lease : leases) {
+            for (long number = lease.getStartNumber(); number <= lease.getEndNumber(); number++) {
+                if (format(lease.getPrefix(), lease.getSuffix(), lease.getPaddingLength(), number).equals(documentNo)) {
+                    return lease.getTerminalId();
+                }
+            }
+        }
+        return null;
     }
 
     private OfflineSequenceLease reserve(DocumentType documentType, UUID terminalId, int blockSize) {
@@ -251,5 +276,12 @@ public class OfflineSequenceLeaseService {
         seq.setClientId(clientId);
         seq.setOrgId(orgId);
         return sequenceRepository.saveAndFlush(seq);
+    }
+
+    private void validateOfflineSyncEnabled() {
+        ConfigurationDto config = configurationService.getConfiguration();
+        if (config == null || !config.isOfflineSyncEnabled()) {
+            throw new BusinessException("Offline Sync is disabled for this organization.");
+        }
     }
 }

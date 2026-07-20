@@ -32,6 +32,9 @@ Thumbs.db
 .env
 .env.frontend
 .env.local
+oracle.env
+*.pem
+*.key
 application-local.yml
 
 # DB scripts

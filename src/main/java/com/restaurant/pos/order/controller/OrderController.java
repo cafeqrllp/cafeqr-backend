@@ -78,6 +78,31 @@ public class OrderController {
     // Query endpoints
     // -----------------------------------------------------------------
 
+    /**
+     * Maps a page of Order entities to OrderResponseDto while pre-loading user names and
+     * payment/split data in bulk — eliminating N+1 queries on the user and payment tables.
+     */
+    private Page<OrderResponseDto> mapPageWithCache(Page<Order> entityPage) {
+        try {
+            // Collect all user uid strings and order IDs needed by the page
+            java.util.Set<String> uids = new java.util.HashSet<>();
+            java.util.Set<UUID> orderIds = new java.util.HashSet<>();
+            for (Order o : entityPage.getContent()) {
+                if (o.getCreatedBy() != null) uids.add(o.getCreatedBy());
+                if (o.getUpdatedBy() != null) uids.add(o.getUpdatedBy());
+                if ("MIXED".equalsIgnoreCase(o.getPaymentMethod())
+                        || "MIXED".equalsIgnoreCase(o.getReference())) {
+                    orderIds.add(o.getId());
+                }
+            }
+            orderDtoMapper.warmUserCache(uids);
+            orderDtoMapper.warmPaymentCache(orderIds);
+            return entityPage.map(orderDtoMapper::toResponseDto);
+        } finally {
+            orderDtoMapper.clearRequestCaches();
+        }
+    }
+
     @GetMapping
     @Operation(summary = "List orders paginated", description = "Returns a paginated list of all orders, optionally filtered by status.")
     @ApiResponses(value = {
@@ -92,7 +117,7 @@ public class OrderController {
             @Parameter(description = "Page size (maximum 200)", example = "20") @RequestParam(defaultValue = "20") @Min(1) @Max(value = 200, message = "Page size cannot exceed 200") int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> entityPage = orderService.getOrders(status, pageable);
-        Page<OrderResponseDto> dtoPage = entityPage.map(orderDtoMapper::toResponseDto);
+        Page<OrderResponseDto> dtoPage = mapPageWithCache(entityPage);
         return ResponseEntity.ok(ApiResponse.success(dtoPage));
     }
 
@@ -116,7 +141,7 @@ public class OrderController {
         }
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> orders = orderService.getOrdersByType(orderType, pageable);
-        Page<OrderResponseDto> dtos = orders.map(orderDtoMapper::toResponseDto);
+        Page<OrderResponseDto> dtos = mapPageWithCache(orders);
         return ResponseEntity.ok(ApiResponse.success(dtos));
     }
 
@@ -193,7 +218,7 @@ public class OrderController {
                 .build();
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Order> entityPage = orderService.searchOrders(criteria, pageable);
-        Page<OrderResponseDto> dtoPage = entityPage.map(orderDtoMapper::toResponseDto);
+        Page<OrderResponseDto> dtoPage = mapPageWithCache(entityPage);
         return ResponseEntity.ok(ApiResponse.success(dtoPage));
     }
 

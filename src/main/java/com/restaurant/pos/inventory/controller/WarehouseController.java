@@ -14,6 +14,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/warehouses")
 @RequiredArgsConstructor
+@com.restaurant.pos.subscription.annotation.RequireModule(com.restaurant.pos.subscription.domain.ModuleName.INVENTORY)
 public class WarehouseController {
 
     private final InventoryService inventoryService;

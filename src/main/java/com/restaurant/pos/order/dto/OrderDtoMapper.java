@@ -27,16 +27,99 @@ public class OrderDtoMapper {
         return ldt.atZone(java.time.ZoneId.systemDefault()).toInstant();
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Per-request caches (ThreadLocal so they never leak across threads)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Maps user UUID string → display name, populated in bulk before mapping lists.
+     * Must be cleared after each batch via {@link #clearRequestCaches()}.
+     */
+    private final ThreadLocal<java.util.Map<String, String>> userNameCache =
+            ThreadLocal.withInitial(java.util.HashMap::new);
+
+    /**
+     * Maps orderId → list of active payments, pre-loaded before mapping lists.
+     * Avoids a per-order query when the payment method is MIXED.
+     */
+    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>>>
+            paymentsByOrderId = ThreadLocal.withInitial(java.util.HashMap::new);
+
+    /**
+     * Maps paymentId → list of splits, pre-loaded before mapping lists.
+     */
+    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>>>
+            splitsByPaymentId = ThreadLocal.withInitial(java.util.HashMap::new);
+
+    /** Pre-populate user names for the given set of raw uid strings in ONE query. */
+    public void warmUserCache(java.util.Collection<String> uidStrings) {
+        java.util.Map<String, String> cache = userNameCache.get();
+        java.util.List<java.util.UUID> uuids = new java.util.ArrayList<>();
+        for (String uid : uidStrings) {
+            if (uid == null || uid.isBlank() || "SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid)) continue;
+            try { uuids.add(java.util.UUID.fromString(uid)); } catch (Exception ignored) { cache.put(uid, uid); }
+        }
+        if (!uuids.isEmpty()) {
+            userRepository.findAllById(uuids).forEach(u -> {
+                String name = u.getFirstName()
+                        + (u.getLastName() != null && !u.getLastName().isBlank() ? " " + u.getLastName() : "");
+                cache.put(u.getId().toString(), name);
+            });
+        }
+    }
+
+    /** Pre-populate payment + split maps for a set of order IDs in TWO queries. */
+    public void warmPaymentCache(java.util.Collection<java.util.UUID> orderIds) {
+        if (orderIds == null || orderIds.isEmpty()) return;
+        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pMap = paymentsByOrderId.get();
+        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sMap = splitsByPaymentId.get();
+
+        java.util.List<com.restaurant.pos.order.domain.Payment> allPayments =
+                paymentRepository.findByOrderIdIn(orderIds);
+        java.util.List<java.util.UUID> paymentIds = new java.util.ArrayList<>();
+        for (com.restaurant.pos.order.domain.Payment p : allPayments) {
+            if (p.getOrderId() != null) {   // guard: skip orphaned payments with no order reference
+                pMap.computeIfAbsent(p.getOrderId(), k -> new java.util.ArrayList<>()).add(p);
+            }
+            if (p.getId() != null
+                    && "Y".equalsIgnoreCase(p.getIsactive())
+                    && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
+                paymentIds.add(p.getId());
+            }
+        }
+        if (!paymentIds.isEmpty()) {
+            paymentSplitRepository.findByPaymentIdInOrderByCreatedAtAsc(paymentIds)
+                    .forEach(s -> {
+                        if (s.getPaymentId() != null) {   // guard: skip splits with no payment reference
+                            sMap.computeIfAbsent(s.getPaymentId(), k -> new java.util.ArrayList<>()).add(s);
+                        }
+                    });
+        }
+    }
+
+    /** Must be called after each batch mapping to prevent ThreadLocal leaks. */
+    public void clearRequestCaches() {
+        userNameCache.get().clear();
+        paymentsByOrderId.get().clear();
+        splitsByPaymentId.get().clear();
+    }
+
     private String resolveUserDisplayName(String uidStr) {
         if (uidStr == null || uidStr.isBlank() || "SYSTEM".equalsIgnoreCase(uidStr)) {
             return "SYSTEM";
         }
+        java.util.Map<String, String> cache = userNameCache.get();
+        if (cache.containsKey(uidStr)) {
+            return cache.get(uidStr);
+        }
         try {
             java.util.UUID userId = java.util.UUID.fromString(uidStr);
-            return userRepository.findById(userId)
+            String name = userRepository.findById(userId)
                     .map(u -> u.getFirstName()
                             + (u.getLastName() != null && !u.getLastName().isBlank() ? " " + u.getLastName() : ""))
                     .orElse(uidStr);
+            cache.put(uidStr, name);
+            return name;
         } catch (Exception e) {
             return uidStr;
         }
@@ -59,10 +142,19 @@ public class OrderDtoMapper {
 
         if ("MIXED".equalsIgnoreCase(order.getPaymentMethod()) || "MIXED".equalsIgnoreCase(referenceNo)) {
             try {
-                java.util.List<com.restaurant.pos.order.domain.Payment> payments = paymentRepository.findByOrderId(order.getId());
+                // Use pre-loaded cache when available (populated by warmPaymentCache), else fall back to DB
+                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId.get();
+                java.util.List<com.restaurant.pos.order.domain.Payment> payments = pCache.containsKey(order.getId())
+                        ? pCache.get(order.getId())
+                        : paymentRepository.findByOrderId(order.getId());
+
+                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sCache = splitsByPaymentId.get();
+
                 for (com.restaurant.pos.order.domain.Payment p : payments) {
                     if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
-                        java.util.List<com.restaurant.pos.order.domain.PaymentSplit> splits = paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
+                        java.util.List<com.restaurant.pos.order.domain.PaymentSplit> splits = sCache.containsKey(p.getId())
+                                ? sCache.get(p.getId())
+                                : paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
                         for (com.restaurant.pos.order.domain.PaymentSplit s : splits) {
                             if ("CASH".equalsIgnoreCase(s.getPaymentMethod())) {
                                 cashAmount = (cashAmount == null) ? s.getAmount() : cashAmount.add(s.getAmount());
@@ -71,7 +163,8 @@ public class OrderDtoMapper {
                             }
                         }
                         if ((splits == null || splits.isEmpty()) && p.getAmountPaid() != null) {
-                            BigDecimal half = p.getAmountPaid().divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+                            BigDecimal half = p.getAmountPaid().divide(BigDecimal.valueOf(2), 2,
+                                    java.math.RoundingMode.HALF_UP);
                             cashAmount = half;
                             onlineAmount = p.getAmountPaid().subtract(half);
                         }
@@ -155,6 +248,7 @@ public class OrderDtoMapper {
                 .manualDiscountPercent(line.getManualDiscountPercent())
                 .allocatedOrderDiscount(line.getAllocatedOrderDiscount())
                 .isPackagedGood(line.getIsPackagedGood())
+                .description(line.getDescription())
                 .build();
     }
 
@@ -183,7 +277,8 @@ public class OrderDtoMapper {
     }
 
     private void applyTaxLineFields(OrderLine line, CreateOrderRequest.CreateOrderLineRequest lineReq) {
-        if (lineReq.getClientLineId() != null) line.setClientLineId(lineReq.getClientLineId());
+        if (lineReq.getClientLineId() != null)
+            line.setClientLineId(lineReq.getClientLineId());
         line.setGrossLineAmount(lineReq.getGrossLineAmount());
         line.setUnitPriceExTax(lineReq.getUnitPriceExTax());
         line.setTaxableAmount(lineReq.getTaxableAmount());
@@ -221,11 +316,16 @@ public class OrderDtoMapper {
         order.setOfflineInvoiceNo(request.getOfflineInvoiceNo());
         order.setOfflinePaymentNo(request.getOfflinePaymentNo());
         // Idempotency / offline-sync source fields
-        if (request.getSourceLocalRef() != null) order.setSourceLocalRef(request.getSourceLocalRef());
-        if (request.getSourceOperationId() != null) order.setSourceOperationId(request.getSourceOperationId());
-        if (request.getSourceDeviceId() != null) order.setSourceDeviceId(request.getSourceDeviceId());
-        if (request.getSourceTerminalId() != null) order.setSourceTerminalId(request.getSourceTerminalId());
-        if (request.getSyncOrigin() != null) order.setSyncOrigin(request.getSyncOrigin());
+        if (request.getSourceLocalRef() != null)
+            order.setSourceLocalRef(request.getSourceLocalRef());
+        if (request.getSourceOperationId() != null)
+            order.setSourceOperationId(request.getSourceOperationId());
+        if (request.getSourceDeviceId() != null)
+            order.setSourceDeviceId(request.getSourceDeviceId());
+        if (request.getSourceTerminalId() != null)
+            order.setSourceTerminalId(request.getSourceTerminalId());
+        if (request.getSyncOrigin() != null)
+            order.setSyncOrigin(request.getSyncOrigin());
         order.setTableId(request.getTableId());
         order.setTableNumber(request.getTableNumber());
         order.setWarehouseId(request.getWarehouseId());
@@ -276,6 +376,7 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
+                line.setDescription(lineReq.getDescription());
                 applyTaxLineFields(line, lineReq);
                 order.addLine(line);
             }
@@ -360,6 +461,7 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
+                line.setDescription(lineReq.getDescription());
                 applyTaxLineFields(line, lineReq);
                 existing.addLine(line);
             }
@@ -426,6 +528,7 @@ public class OrderDtoMapper {
                 line.setTaxAmount(lineReq.getTaxAmount());
                 line.setDiscountAmount(lineReq.getDiscountAmount());
                 line.setLineTotal(lineReq.getLineTotal());
+                line.setDescription(lineReq.getDescription());
                 applyTaxLineFields(line, lineReq);
                 order.addLine(line);
             }

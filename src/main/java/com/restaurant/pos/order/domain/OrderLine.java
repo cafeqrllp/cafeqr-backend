@@ -129,10 +129,15 @@ public class OrderLine {
     @Column(name = "allocated_order_discount", precision = 15, scale = 2)
     private BigDecimal allocatedOrderDiscount;
 
+    /** Optional kitchen note for this line item — printed on KOT below the item name. */
+    @Column(name = "description", length = 500)
+    private String description;
+
     @Builder.Default
     @JsonProperty("isActive")
     @Column(name = "isactive", length = 1)
     private String isactive = "Y";
+
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

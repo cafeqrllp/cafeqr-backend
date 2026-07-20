@@ -15,6 +15,7 @@ import java.util.UUID;
 public interface PaymentRepository extends JpaRepository<Payment, UUID>, JpaSpecificationExecutor<Payment> {
     long countByClientId(UUID clientId);
     List<com.restaurant.pos.order.domain.Payment> findByOrderId(UUID orderId);
+    List<com.restaurant.pos.order.domain.Payment> findByOrderIdIn(java.util.Collection<UUID> orderIds);
     List<Payment> findByExpenseId(UUID expenseId);
     @Query("""
             SELECT p FROM Payment p

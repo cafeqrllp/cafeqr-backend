@@ -12,6 +12,8 @@ import com.restaurant.pos.sequence.domain.DocumentType;
 import com.restaurant.pos.sequence.domain.OfflineSequenceLease;
 import com.restaurant.pos.sequence.repository.DocumentSequenceRepository;
 import com.restaurant.pos.sequence.repository.OfflineSequenceLeaseRepository;
+import com.restaurant.pos.common.service.SystemConfigurationService;
+import com.restaurant.pos.common.dto.ConfigurationDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +34,7 @@ class OfflineSequenceLeaseServiceTest {
     private OrderRepository orderRepository;
     private InvoiceRepository invoiceRepository;
     private PaymentRepository paymentRepository;
+    private SystemConfigurationService configurationService;
 
     private OfflineSequenceLeaseService leaseService;
     private UUID clientId;
@@ -46,6 +49,7 @@ class OfflineSequenceLeaseServiceTest {
         orderRepository = mock(OrderRepository.class);
         invoiceRepository = mock(InvoiceRepository.class);
         paymentRepository = mock(PaymentRepository.class);
+        configurationService = mock(SystemConfigurationService.class);
 
         leaseService = new OfflineSequenceLeaseService(
                 sequenceRepository,
@@ -53,8 +57,13 @@ class OfflineSequenceLeaseServiceTest {
                 organizationRepository,
                 orderRepository,
                 invoiceRepository,
-                paymentRepository
+                paymentRepository,
+                configurationService
         );
+
+        when(configurationService.getConfiguration()).thenReturn(ConfigurationDto.builder()
+                .offlineSyncEnabled(true)
+                .build());
 
         clientId = UUID.randomUUID();
         orgId = UUID.randomUUID();

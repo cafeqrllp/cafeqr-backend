@@ -16,7 +16,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class ClientSubscriptionModule {
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @Column(name = "client_id", nullable = false)

@@ -139,6 +139,15 @@ public class OrderService {
     private final OrderCalculationService orderCalculationService;
     private final org.springframework.context.ApplicationContext applicationContext;
 
+    /**
+     * Per-thread user display name cache. Each request thread gets its own map so that
+     * concurrent requests never interfere with each other's cache warm/clear lifecycle.
+     * Populated in bulk by {@link #warmUserNameCache} and cleared in a finally block
+     * after the batch mapping completes.
+     */
+    private final ThreadLocal<Map<String, String>> userNameCache =
+            ThreadLocal.withInitial(java.util.HashMap::new);
+
     private void recalculateOrderTotals(Order order) {
         if (order == null) return;
         
@@ -668,7 +677,70 @@ public class OrderService {
     }
 
     private List<Order> hydrateOrderLines(List<Order> orders) {
-        orders.forEach(this::hydrateOrderLines);
+        if (orders == null || orders.isEmpty()) {
+            return orders;
+        }
+
+        boolean needsHydration = false;
+        for (Order order : orders) {
+            if (order.getLines() != null) {
+                for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+                    if (line.getProductId() != null
+                            && (line.getProductName() == null || line.getProductName().isBlank()
+                                    || line.getCategoryName() == null || line.getCategoryName().isBlank()
+                                    || line.getIsPackagedGood() == null)) {
+                        needsHydration = true;
+                        break;
+                    }
+                }
+            }
+            if (needsHydration) break;
+        }
+
+        if (!needsHydration) {
+            return orders;
+        }
+
+        List<UUID> productIds = orders.stream()
+                .filter(order -> order.getLines() != null)
+                .flatMap(order -> order.getLines().stream())
+                .map(com.restaurant.pos.order.domain.OrderLine::getProductId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        if (productIds.isEmpty()) {
+            return orders;
+        }
+
+        Map<UUID, Product> productsById = productRepository.findByIdIn(productIds).stream()
+                .collect(Collectors.toMap(Product::getId, product -> product));
+
+        for (Order order : orders) {
+            if (order.getLines() == null) continue;
+            for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+                Product product = productsById.get(line.getProductId());
+                if (product == null) continue;
+
+                if (order.getOrderType() == OrderType.PURCHASE) {
+                    if (product.getRecipeLines() != null && !product.getRecipeLines().isEmpty()) {
+                        throw new BusinessException(
+                                "Product '" + product.getName() + "' has ingredients and cannot be purchased directly.");
+                    }
+                }
+
+                if (line.getProductName() == null || line.getProductName().isBlank()) {
+                    line.setProductName(product.getName());
+                }
+                if (line.getCategoryName() == null || line.getCategoryName().isBlank()) {
+                    line.setCategoryName(product.getCategory() != null ? product.getCategory().getName() : null);
+                }
+                if (line.getIsPackagedGood() == null) {
+                    line.setIsPackagedGood(product.isPackagedGood());
+                }
+            }
+        }
+
         return orders;
     }
 
@@ -1154,8 +1226,7 @@ public class OrderService {
         return orders;
     }
 
-    private OrderSummaryDto toOrderSummary(Order order) {
-        Order hydrated = hydrateOrderCustomers(hydrateOrderLines(order));
+    private OrderSummaryDto toOrderSummary(Order hydrated) {
         List<OrderCustomerDto> customers = hydrated.getCustomers() == null ? List.of() : hydrated.getCustomers();
         OrderCustomerDto primaryCustomer = customers.stream()
                 .filter(OrderCustomerDto::isPrimary)
@@ -1504,10 +1575,16 @@ public class OrderService {
     public List<OrderSummaryDto> getLiveSalesOrders() {
         UUID tenantId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
-        return orderRepository.findLiveOrders(tenantId, orgId, OrderType.SALE, CLOSED_SALE_STATUSES)
-                .stream()
-                .map(this::toOrderSummary)
-                .toList();
+        List<Order> orders = orderRepository.findLiveOrders(tenantId, orgId, OrderType.SALE, CLOSED_SALE_STATUSES);
+        hydrateOrders(orders);
+        warmUserNameCache(orders);
+        try {
+            return orders.stream()
+                    .map(this::toOrderSummary)
+                    .toList();
+        } finally {
+            userNameCache.get().clear();
+        }
     }
 
     @Transactional(readOnly = true)
@@ -1546,7 +1623,13 @@ public class OrderService {
                     salesHistorySpec(orgId, terminalId, null, null, normalizedSearch, true, Set.of(), Set.of(), status),
                     pageable);
             if (exactDocumentMatches.hasContent()) {
-                return exactDocumentMatches.map(this::toOrderSummary);
+                hydrateOrders(exactDocumentMatches.getContent());
+                warmUserNameCache(exactDocumentMatches.getContent());
+                try {
+                    return exactDocumentMatches.map(this::toOrderSummary);
+                } finally {
+                    userNameCache.get().clear();
+                }
             }
         }
 
@@ -1558,10 +1641,17 @@ public class OrderService {
                 ? Set.of()
                 : findCustomerSearchOrderIds(tenantId, orgId, normalizedSearch);
 
-        return orderRepository.findAll(
+        Page<Order> pageResult = orderRepository.findAll(
                 salesHistorySpec(orgId, terminalId, effectiveFrom, effectiveTo, normalizedSearch, false, customerIds,
                         customerOrderIds, status),
-                pageable).map(this::toOrderSummary);
+                pageable);
+        hydrateOrders(pageResult.getContent());
+        warmUserNameCache(pageResult.getContent());
+        try {
+            return pageResult.map(this::toOrderSummary);
+        } finally {
+            userNameCache.get().clear();
+        }
     }
 
 
@@ -1583,15 +1673,22 @@ public class OrderService {
         LocalDateTime updatedAfter = LocalDateTime.ofInstant(safeSince, ZoneOffset.UTC);
         UUID tenantId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
-        return orderRepository.findChangedOrders(
+        org.springframework.data.domain.Slice<Order> changedSlice = orderRepository.findChangedOrders(
                 tenantId,
                 orgId,
                 OrderType.SALE,
                 updatedAfter,
-                PageRequest.of(0, MAX_SYNC_ORDER_CHANGES))
-                .stream()
-                .map(this::toOrderSummary)
-                .toList();
+                PageRequest.of(0, MAX_SYNC_ORDER_CHANGES));
+        List<Order> changed = changedSlice.getContent();
+        hydrateOrders(changed);
+        warmUserNameCache(changed);
+        try {
+            return changed.stream()
+                    .map(this::toOrderSummary)
+                    .toList();
+        } finally {
+            userNameCache.get().clear();
+        }
     }
 
     @Transactional(readOnly = true)
@@ -3515,14 +3612,48 @@ public class OrderService {
         if (uidStr == null || uidStr.isBlank() || "SYSTEM".equalsIgnoreCase(uidStr)) {
             return "SYSTEM";
         }
+        Map<String, String> cache = userNameCache.get();
+        if (cache.containsKey(uidStr)) {
+            return cache.get(uidStr);
+        }
         try {
             UUID userId = UUID.fromString(uidStr);
-            return userRepository.findById(userId)
+            String name = userRepository.findById(userId)
                     .map(u -> u.getFirstName()
                             + (u.getLastName() != null && !u.getLastName().isBlank() ? " " + u.getLastName() : ""))
                     .orElse(uidStr);
+            cache.put(uidStr, name);
+            return name;
         } catch (Exception e) {
             return uidStr;
+        }
+    }
+
+    /**
+     * Pre-loads user display names for a list of orders in ONE query, caching them in
+     * {@link #userNameCache} so that {@link #resolveUserDisplayName} does not hit the DB
+     * per order.
+     * <p>
+     * Always clear the cache after the batch via {@code userNameCache.clear()}.
+     */
+    private void warmUserNameCache(List<Order> orders) {
+        Map<String, String> cache = userNameCache.get();
+        Set<String> uidStrings = new java.util.HashSet<>();
+        for (Order o : orders) {
+            if (o.getCreatedBy() != null && !o.getCreatedBy().isBlank()) uidStrings.add(o.getCreatedBy());
+            if (o.getUpdatedBy() != null && !o.getUpdatedBy().isBlank()) uidStrings.add(o.getUpdatedBy());
+        }
+        List<UUID> uuids = new ArrayList<>();
+        for (String uid : uidStrings) {
+            if ("SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid)) continue;
+            try { uuids.add(UUID.fromString(uid)); } catch (Exception ignored) { cache.put(uid, uid); }
+        }
+        if (!uuids.isEmpty()) {
+            userRepository.findAllById(uuids).forEach(u -> {
+                String name = u.getFirstName()
+                        + (u.getLastName() != null && !u.getLastName().isBlank() ? " " + u.getLastName() : "");
+                cache.put(u.getId().toString(), name);
+            });
         }
     }
 }

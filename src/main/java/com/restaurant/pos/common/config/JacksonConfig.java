@@ -12,6 +12,8 @@ public class JacksonConfig {
         Hibernate6Module module = new Hibernate6Module();
         // Disable failing on lazy loading if necessary, but @JsonIgnoreProperties is usually safer
         // module.configure(Hibernate6Module.Feature.FORCE_LAZY_LOADING, false);
+        module.disable(Hibernate6Module.Feature.USE_TRANSIENT_ANNOTATION);
         return module;
     }
 }
+

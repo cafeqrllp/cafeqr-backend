@@ -110,6 +110,8 @@ public class ReportService {
 
     public List<OrderReportDto> getSalesOrders(Instant from, Instant to, UUID orgId, UUID terminalId) {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
+        UUID clientId = TenantContext.getCurrentTenant();
+        Map<UUID, List<OrderCustomerDto>> customerMap = batchLinkedCustomers(orders, clientId);
 
         return orders.stream().map(o -> {
             List<OrderReportDto.OrderLineReportDto> lines = (o.getLines() == null) ? List.of()
@@ -129,7 +131,7 @@ public class ReportService {
                         .collect(Collectors.toList());
 
             Instant od = o.getOrderDate();
-            List<OrderCustomerDto> customers = linkedCustomers(o);
+            List<OrderCustomerDto> customers = customerMap.getOrDefault(o.getId(), List.of());
             return OrderReportDto.builder()
                     .id(o.getId())
                     .orderNo(o.getOrderNo())
@@ -156,32 +158,88 @@ public class ReportService {
     // ─── Unified Sales + Invoices ───────────────────────────────────────────
 
     public List<SalesInvoiceReportDto> getSalesInvoices(Instant from, Instant to, String filterType, UUID orgId, UUID terminalId) {
-        List<SalesInvoiceReportDto> rows = new ArrayList<>();
-        Set<UUID> includedOrderIds = new HashSet<>();
+        List<Order> saleOrders = fetchSaleOrders(from, to, orgId, terminalId);
+        List<Invoice> customerInvoices = fetchCustomerInvoices(from, to, orgId, terminalId);
 
-        for (Order order : fetchSaleOrders(from, to, orgId, terminalId)) {
-            includedOrderIds.add(order.getId());
-            Invoice invoice = selectDisplayInvoice(invoiceRepository.findByOrderId(order.getId()));
-            Payment payment = latestPayment(paymentRepository.findByOrderId(order.getId()));
-            SalesInvoiceReportDto row = buildSalesInvoiceRow(order, invoice, payment, true);
+        Set<UUID> allOrderIds = new HashSet<>();
+        for (Order o : saleOrders) {
+            allOrderIds.add(o.getId());
+        }
+        for (Invoice inv : customerInvoices) {
+            if (inv.getOrderId() != null) {
+                allOrderIds.add(inv.getOrderId());
+            }
+        }
+
+        // Batch fetch invoices
+        Map<UUID, List<Invoice>> invoicesByOrderMap = new HashMap<>();
+        if (!allOrderIds.isEmpty()) {
+            invoiceRepository.findByOrderIdIn(allOrderIds).forEach(inv -> {
+                if (inv.getOrderId() != null) {
+                    invoicesByOrderMap.computeIfAbsent(inv.getOrderId(), k -> new ArrayList<>()).add(inv);
+                }
+            });
+        }
+
+        // Batch fetch payments
+        Map<UUID, List<Payment>> paymentsByOrderMap = new HashMap<>();
+        if (!allOrderIds.isEmpty()) {
+            paymentRepository.findByOrderIdIn(allOrderIds).forEach(pay -> {
+                if (pay.getOrderId() != null) {
+                    paymentsByOrderMap.computeIfAbsent(pay.getOrderId(), k -> new ArrayList<>()).add(pay);
+                }
+            });
+        }
+
+        // Batch fetch orders not in saleOrders (for linked customer invoices)
+        Set<UUID> missingOrderIds = new HashSet<>();
+        Set<UUID> includedOrderIds = new HashSet<>();
+        for (Order o : saleOrders) {
+            includedOrderIds.add(o.getId());
+        }
+        for (Invoice inv : customerInvoices) {
+            UUID orderId = inv.getOrderId();
+            if (orderId != null && !includedOrderIds.contains(orderId)) {
+                missingOrderIds.add(orderId);
+            }
+        }
+
+        Map<UUID, Order> orderLookupMap = new HashMap<>();
+        for (Order o : saleOrders) {
+            orderLookupMap.put(o.getId(), o);
+        }
+        if (!missingOrderIds.isEmpty()) {
+            orderRepository.findAllById(missingOrderIds).forEach(o -> orderLookupMap.put(o.getId(), o));
+        }
+
+        // Batch fetch customer mappings for all orders
+        UUID clientId = TenantContext.getCurrentTenant();
+        Map<UUID, List<OrderCustomerDto>> customerMap = batchLinkedCustomers(orderLookupMap.values(), clientId);
+
+        List<SalesInvoiceReportDto> rows = new ArrayList<>();
+
+        for (Order order : saleOrders) {
+            Invoice invoice = selectDisplayInvoice(invoicesByOrderMap.get(order.getId()));
+            Payment payment = latestPayment(paymentsByOrderMap.get(order.getId()));
+            SalesInvoiceReportDto row = buildSalesInvoiceRow(order, invoice, payment, true, customerMap);
             if (matchesSalesInvoiceFilter(row, filterType)) {
                 rows.add(row);
             }
         }
 
-        for (Invoice invoice : fetchCustomerInvoices(from, to, orgId, terminalId)) {
+        for (Invoice invoice : customerInvoices) {
             UUID orderId = invoice.getOrderId();
             if (orderId != null && includedOrderIds.contains(orderId)) {
                 continue;
             }
 
-            Optional<Order> linkedOrder = orderId != null ? orderRepository.findById(orderId) : Optional.empty();
-            if (linkedOrder.isPresent() && linkedOrder.get().getOrderType() != OrderType.SALE) {
+            Order linkedOrder = orderId != null ? orderLookupMap.get(orderId) : null;
+            if (linkedOrder != null && linkedOrder.getOrderType() != OrderType.SALE) {
                 continue;
             }
 
-            Payment payment = orderId != null ? latestPayment(paymentRepository.findByOrderId(orderId)) : null;
-            SalesInvoiceReportDto row = buildSalesInvoiceRow(linkedOrder.orElse(null), invoice, payment, false);
+            Payment payment = orderId != null ? latestPayment(paymentsByOrderMap.get(orderId)) : null;
+            SalesInvoiceReportDto row = buildSalesInvoiceRow(linkedOrder, invoice, payment, false, customerMap);
             if (matchesSalesInvoiceFilter(row, filterType)) {
                 rows.add(row);
             }
@@ -241,19 +299,31 @@ public class ReportService {
 
     public List<PaymentBreakdownDto> getPaymentBreakdown(Instant from, Instant to, UUID orgId, UUID terminalId) {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
+        return getPaymentBreakdown(orders);
+    }
 
+    public List<PaymentBreakdownDto> getPaymentBreakdown(List<Order> orders) {
         BigDecimal totalRevenue = BigDecimal.ZERO;
         Map<String, BigDecimal[]> payMethodMap = new LinkedHashMap<>();
         Map<UUID, List<Payment>> paymentsByOrder = new LinkedHashMap<>();
         List<Payment> activePayments = new ArrayList<>();
 
+        List<UUID> orderIds = orders.stream()
+                .map(Order::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+
+        if (!orderIds.isEmpty()) {
+            paymentRepository.findByOrderIdIn(orderIds).forEach(pay -> {
+                if (pay.getOrderId() != null && isActivePayment(pay)) {
+                    paymentsByOrder.computeIfAbsent(pay.getOrderId(), k -> new ArrayList<>()).add(pay);
+                    activePayments.add(pay);
+                }
+            });
+        }
+
         for (Order o : orders) {
             totalRevenue = totalRevenue.add(safe(o.getGrandTotal()));
-            List<Payment> payments = paymentRepository.findByOrderId(o.getId()).stream()
-                    .filter(this::isActivePayment)
-                    .collect(Collectors.toList());
-            paymentsByOrder.put(o.getId(), payments);
-            activePayments.addAll(payments);
         }
 
         Set<UUID> paymentIds = activePayments.stream()
@@ -429,24 +499,42 @@ public class ReportService {
                     .collect(Collectors.toList());
         }
 
+        Set<UUID> orderIds = filtered.stream()
+                .map(Invoice::getOrderId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<UUID, List<Payment>> paymentsByOrderMap = new HashMap<>();
+        if (!orderIds.isEmpty()) {
+            paymentRepository.findByOrderIdIn(orderIds).forEach(pay -> {
+                if (pay.getOrderId() != null) {
+                    paymentsByOrderMap.computeIfAbsent(pay.getOrderId(), k -> new ArrayList<>()).add(pay);
+                }
+            });
+        }
+
+        Map<UUID, Order> orderMap = new HashMap<>();
+        if (!orderIds.isEmpty()) {
+            orderRepository.findAllById(orderIds).forEach(o -> orderMap.put(o.getId(), o));
+        }
+
+        Map<UUID, List<OrderCustomerDto>> customerMap = batchLinkedCustomers(orderMap.values(), clientId);
+
         return filtered.stream().map(inv -> {
             String paymentMethod = null;
             String paymentNo = null;
             String customerName = null;
 
             if (inv.getOrderId() != null) {
-                List<Payment> payments = paymentRepository.findByOrderId(inv.getOrderId());
+                List<Payment> payments = paymentsByOrderMap.getOrDefault(inv.getOrderId(), List.of());
                 if (!payments.isEmpty()) {
                     Payment latest = payments.get(payments.size() - 1);
                     paymentMethod = latest.getPaymentMethod();
                     paymentNo = latest.getReferenceNo();
                 }
-                orderRepository.findById(inv.getOrderId()).ifPresent(order -> {
-                    // can't assign to local var directly in lambda, handled below
-                });
-                Optional<Order> linkedOrder = orderRepository.findById(inv.getOrderId());
-                if (linkedOrder.isPresent()) {
-                    customerName = customerDisplay(linkedCustomers(linkedOrder.get()));
+                Order linkedOrder = orderMap.get(inv.getOrderId());
+                if (linkedOrder != null) {
+                    customerName = customerDisplay(customerMap.getOrDefault(linkedOrder.getId(), List.of()));
                 }
             }
 
@@ -482,6 +570,19 @@ public class ReportService {
         BigDecimal billedTotal = BigDecimal.ZERO;
         BigDecimal cogs = BigDecimal.ZERO;
 
+        List<UUID> productIds = orders.stream()
+                .filter(o -> o.getLines() != null)
+                .flatMap(o -> o.getLines().stream())
+                .filter(line -> line != null && line.isActive() && line.getProductId() != null)
+                .map(OrderLine::getProductId)
+                .distinct()
+                .collect(Collectors.toList());
+
+        Map<UUID, Product> productMap = new HashMap<>();
+        if (!productIds.isEmpty()) {
+            productRepository.findByIdIn(productIds).forEach(p -> productMap.put(p.getId(), p));
+        }
+
         for (Order o : orders) {
             billedTotal = billedTotal.add(safe(o.getGrandTotal()));
             discounts = discounts.add(accountingService.calculateTaxExclusiveDiscount(o));
@@ -493,9 +594,10 @@ public class ReportService {
                     if (line != null && line.isActive()) {
                         BigDecimal unitCost = BigDecimal.ZERO;
                         if (line.getProductId() != null) {
-                            unitCost = productRepository.findById(line.getProductId())
-                                    .map(Product::getCostPrice)
-                                    .orElse(BigDecimal.ZERO);
+                            Product p = productMap.get(line.getProductId());
+                            if (p != null && p.getCostPrice() != null) {
+                                unitCost = p.getCostPrice();
+                            }
                         }
                         cogs = cogs.add(safe(unitCost).multiply(safe(line.getQuantity())));
                     }
@@ -522,7 +624,7 @@ public class ReportService {
         BigDecimal netProfit = netSales.subtract(totalExpenses);
 
         // Payment breakdown collected
-        BigDecimal paymentCollected = getPaymentBreakdown(from, to, resolvedOrgId, terminalId).stream()
+        BigDecimal paymentCollected = getPaymentBreakdown(orders).stream()
                 .map(PaymentBreakdownDto::getTotalAmount)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -600,6 +702,10 @@ public class ReportService {
     // ─── Private Helpers ────────────────────────────────────────────────────
 
     private SalesInvoiceReportDto buildSalesInvoiceRow(Order order, Invoice invoice, Payment payment, boolean preferOrderDate) {
+        return buildSalesInvoiceRow(order, invoice, payment, preferOrderDate, null);
+    }
+
+    private SalesInvoiceReportDto buildSalesInvoiceRow(Order order, Invoice invoice, Payment payment, boolean preferOrderDate, Map<UUID, List<OrderCustomerDto>> customerMap) {
         ZoneId zoneId = ZoneOffset.UTC;
         LocalDateTime orderDate = order != null && order.getOrderDate() != null
                 ? LocalDateTime.ofInstant(order.getOrderDate(), zoneId)
@@ -614,7 +720,9 @@ public class ReportService {
         UUID invoiceId = invoice != null ? invoice.getId() : null;
         String id = orderId != null ? orderId.toString() : (invoiceId != null ? invoiceId.toString() : UUID.randomUUID().toString());
 
-        List<OrderCustomerDto> customers = linkedCustomers(order);
+        List<OrderCustomerDto> customers = (order != null && customerMap != null)
+                ? customerMap.getOrDefault(order.getId(), List.of())
+                : linkedCustomers(order);
 
         String voidReason = null;
         if (invoice != null && "VOID".equalsIgnoreCase(invoice.getStatus())) {
@@ -786,6 +894,92 @@ public class ReportService {
         return customer.getOrderLinks().stream()
                 .anyMatch(link -> Objects.equals(orderId, link.getOrderId()) && Boolean.TRUE.equals(link.getIsPrimary()));
     }
+
+    private Map<UUID, List<Customer>> batchLinkedCustomerEntities(Collection<Order> orders, UUID clientId) {
+        if (orders == null || orders.isEmpty()) {
+            return Map.of();
+        }
+
+        Set<UUID> orderIds = orders.stream()
+                .map(Order::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<Customer> linkedCustomers = customerRepository.findByClientIdAndOrderIds(clientId, orderIds);
+
+        Set<UUID> directCustomerIds = orders.stream()
+                .map(Order::getCustomerId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<Customer> directCustomers = directCustomerIds.isEmpty() ? List.of()
+                : customerRepository.findByIdInAndClientId(directCustomerIds, clientId);
+
+        Map<UUID, Set<Customer>> orderToCustomers = new HashMap<>();
+
+        for (Customer customer : linkedCustomers) {
+            if (customer.getOrderLinks() != null) {
+                for (com.restaurant.pos.purchasing.domain.Customer.OrderLink link : customer.getOrderLinks()) {
+                    if (link != null && link.getOrderId() != null && orderIds.contains(link.getOrderId())) {
+                        orderToCustomers.computeIfAbsent(link.getOrderId(), k -> new LinkedHashSet<>()).add(customer);
+                    }
+                }
+            }
+        }
+
+        Map<UUID, Customer> directCustomerMap = directCustomers.stream()
+                .collect(Collectors.toMap(Customer::getId, c -> c, (a, b) -> a));
+
+        for (Order order : orders) {
+            if (order.getCustomerId() != null) {
+                Customer directCustomer = directCustomerMap.get(order.getCustomerId());
+                if (directCustomer != null) {
+                    orderToCustomers.computeIfAbsent(order.getId(), k -> new LinkedHashSet<>()).add(directCustomer);
+                }
+            }
+        }
+
+        Map<UUID, List<Customer>> result = new HashMap<>();
+        for (Order order : orders) {
+            UUID orderId = order.getId();
+            Set<Customer> customers = orderToCustomers.get(orderId);
+            if (customers == null || customers.isEmpty()) {
+                result.put(orderId, List.of());
+                continue;
+            }
+
+            List<Customer> customerList = new ArrayList<>(customers);
+            customerList.sort((a, b) -> {
+                boolean aPrimary = isPrimaryForOrder(a, orderId);
+                boolean bPrimary = isPrimaryForOrder(b, orderId);
+                return Boolean.compare(!aPrimary, !bPrimary);
+            });
+            result.put(orderId, customerList);
+        }
+        return result;
+    }
+
+    private Map<UUID, List<OrderCustomerDto>> batchLinkedCustomers(Collection<Order> orders, UUID clientId) {
+        Map<UUID, List<Customer>> entitiesMap = batchLinkedCustomerEntities(orders, clientId);
+        Map<UUID, List<OrderCustomerDto>> result = new HashMap<>();
+        for (Map.Entry<UUID, List<Customer>> entry : entitiesMap.entrySet()) {
+            UUID orderId = entry.getKey();
+            List<Customer> customers = entry.getValue();
+            List<OrderCustomerDto> dtoList = new ArrayList<>();
+            for (int i = 0; i < customers.size(); i++) {
+                Customer customer = customers.get(i);
+                dtoList.add(OrderCustomerDto.builder()
+                        .id(customer.getId())
+                        .name(customer.getName())
+                        .phone(customer.getPhone())
+                        .primary(isPrimaryForOrder(customer, orderId) || i == 0)
+                        .build());
+            }
+            result.put(orderId, dtoList);
+        }
+        return result;
+    }
+
 
     private String orderNeedle(UUID orderId, boolean primary) {
         if (primary) {
@@ -1010,6 +1204,8 @@ public class ReportService {
         UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
         ZoneId zoneId = ZoneOffset.UTC;
 
+        Map<UUID, List<Customer>> customerEntitiesMap = batchLinkedCustomerEntities(orders, clientId);
+
         // 1. Group lines by tax rate for HSN summary
         Map<BigDecimal, BigDecimal[]> hsnMap = new TreeMap<>();
         // Key: taxRate. Values: [taxableAmount, cgst, sgst, totalQuantity]
@@ -1035,11 +1231,10 @@ public class ReportService {
             String invoiceDateStr = ldt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"));
 
             // Check if order has a linked B2B customer (customer with GST number)
-            List<OrderCustomerDto> customers = linkedCustomers(o);
+            List<Customer> customers = customerEntitiesMap.getOrDefault(o.getId(), List.of());
             Customer b2bCustomer = null;
-            for (OrderCustomerDto c : customers) {
-                Customer cust = customerRepository.findById(c.getId()).orElse(null);
-                if (cust != null && cust.getGstNumber() != null && !cust.getGstNumber().isBlank()) {
+            for (Customer cust : customers) {
+                if (cust.getGstNumber() != null && !cust.getGstNumber().isBlank()) {
                     b2bCustomer = cust;
                     break;
                 }

@@ -39,10 +39,11 @@ public class SubscriptionCheckFilter extends OncePerRequestFilter {
 
         String path = request.getServletPath();
 
-        // Exempt public, auth, debug, and subscription endpoints from the lockout check
+        // Exempt public, auth, debug, founder, and subscription endpoints from the lockout check
         if (path.contains("/api/v1/auth/") || 
             path.contains("/api/v1/debug/") || 
             path.contains("/api/v1/public/") || 
+            path.contains("/api/v1/founder/") || 
             path.contains("/api/v1/subscription/")) {
             filterChain.doFilter(request, response);
             return;

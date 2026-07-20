@@ -67,7 +67,7 @@ public class AuthController {
             HttpServletRequest request,
             HttpServletResponse response
     ) {
-        String refreshToken = getCookieValue(request, "refresh_token");
+        String refreshToken = getRefreshToken(request);
         if (refreshToken == null) {
             return ResponseEntity.status(401).body(ApiResponse.error("Refresh token missing"));
         }
@@ -90,12 +90,31 @@ public class AuthController {
             HttpServletRequest request,
             HttpServletResponse response
     ) {
-        String refreshToken = getCookieValue(request, "refresh_token");
+        String refreshToken = getRefreshToken(request);
         if (refreshToken != null) {
             service.logout(refreshToken);
         }
         cookieUtil.clearAuthCookies(response);
         return ResponseEntity.ok(ApiResponse.success("Logged out successfully"));
+    }
+
+    /**
+     * Extract the refresh token from the request. Checks the HttpOnly cookie
+     * first (same-domain deployments), then falls back to the Authorization
+     * header (cross-domain deployments where browsers block third-party cookies).
+     */
+    private String getRefreshToken(HttpServletRequest request) {
+        // 1. Try the HttpOnly cookie (works when frontend & backend share the same domain)
+        String fromCookie = getCookieValue(request, "refresh_token");
+        if (fromCookie != null) {
+            return fromCookie;
+        }
+        // 2. Fall back to Authorization header (cross-domain: Vercel/Cloudflare → Hugging Face/Render)
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7);
+        }
+        return null;
     }
 
     private String getCookieValue(HttpServletRequest request, String name) {

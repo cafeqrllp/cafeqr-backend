@@ -52,9 +52,8 @@ public class PublicMenuController {
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getMenu(
             @PathVariable UUID clientId,
             @PathVariable String orgId) {
-        validateSubscription(clientId);
-
         UUID orgUuid = (orgId == null || "null".equals(orgId)) ? null : UUID.fromString(orgId);
+        validateSubscription(clientId, orgUuid);
         List<Product> products = productRepository
                 .findByClientIdAndOrgIdOrGlobalAndIsActiveTrue(clientId, orgUuid);
 
@@ -88,9 +87,9 @@ public class PublicMenuController {
             @PathVariable UUID clientId,
             @PathVariable String orgId,
             @PathVariable UUID tableId) {
-        validateSubscription(clientId);
-
         UUID orgUuid = (orgId == null || "null".equals(orgId)) ? null : UUID.fromString(orgId);
+        validateSubscription(clientId, orgUuid);
+
         Optional<RestaurantTable> tableOpt = tableRepository.findById(tableId);
 
         if (tableOpt.isEmpty()) {
@@ -167,9 +166,8 @@ public class PublicMenuController {
             @PathVariable UUID clientId,
             @PathVariable String orgId,
             @RequestBody Map<String, Object> payload) {
-        validateSubscription(clientId);
-
         UUID orgUuid = (orgId == null || "null".equals(orgId)) ? null : UUID.fromString(orgId);
+        validateSubscription(clientId, orgUuid);
 
         String tableNumber = (String) payload.getOrDefault("tableNumber", "QR");
         @SuppressWarnings("unchecked")
@@ -329,11 +327,24 @@ public class PublicMenuController {
         });
     }
 
-    private void validateSubscription(UUID clientId) {
+    private void validateSubscription(UUID clientId, UUID orgId) {
         if (clientId != null) {
             com.restaurant.pos.client.domain.Client client = clientRepository.findById(clientId).orElse(null);
             if (client == null || !client.isSubscriptionActive()) {
                 throw new BusinessException("The restaurant's subscription has expired. Online menu and ordering are currently unavailable.");
+            }
+            
+            // Validate TABLE_QR module
+            boolean tableQrActive = false;
+            String status = client.getSubscriptionStatus();
+            if (status != null && "TRIAL".equalsIgnoreCase(status.trim()) && client.getSubscriptionExpiryDate() != null && client.getSubscriptionExpiryDate().isAfter(java.time.LocalDateTime.now())) {
+                tableQrActive = true;
+            } else {
+                tableQrActive = systemConfigurationService.isModuleActive(clientId, orgId, com.restaurant.pos.subscription.domain.ModuleName.TABLE_QR);
+            }
+            
+            if (!tableQrActive) {
+                throw new BusinessException("Online Ordering is not active for this branch. Please contact restaurant administration.");
             }
         }
     }

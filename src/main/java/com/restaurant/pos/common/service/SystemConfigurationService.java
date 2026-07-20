@@ -227,7 +227,7 @@ public class SystemConfigurationService {
                 .discountEnabled(true)
                 .purchaseEnabled(true)
                 .defaultBillingUiMode("standard")
-                .offlineSyncEnabled(true)
+                .offlineSyncEnabled(false)
                 .offlineSyncInterval(60)
                 .offlineLeaseBlockSize(100)
                 .offlineFailOpenPayments(false)
@@ -380,18 +380,18 @@ public class SystemConfigurationService {
 
         return ConfigurationDto.builder()
                 .onlinePaymentEnabled(entity.isOnlinePaymentEnabled())
-                .menuImagesEnabled(entity.isMenuImagesEnabled())
-                .creditEnabled(entity.isCreditEnabled())
+                .menuImagesEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.MENU_IMAGES, entity.isMenuImagesEnabled()))
+                .creditEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CREDIT_LEDGER, entity.isCreditEnabled()))
                 .creditAllocationMode(normalizeCreditAllocationMode(entity.getCreditAllocationMode()))
                 .tableManagementEnabled(entity.isTableManagementEnabled())
-                .qrOrderingEnabled(entity.isQrOrderingEnabled())
-                .inventoryEnabled(entity.isInventoryEnabled())
-                .purchaseEnabled(entity.isPurchaseEnabled())
-                .productionEnabled(entity.isProductionEnabled())
-                .customersEnabled(entity.isCustomersEnabled())
-                .loyaltyEnabled(entity.isLoyaltyEnabled())
-                .sendToKitchenEnabled(entity.isSendToKitchenEnabled())
-                .onlineDeliveryEnabled(entity.isOnlineDeliveryEnabled())
+                .qrOrderingEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.TABLE_QR, entity.isQrOrderingEnabled()))
+                .inventoryEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.INVENTORY, entity.isInventoryEnabled()))
+                .purchaseEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.INVENTORY, entity.isPurchaseEnabled()))
+                .productionEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.INVENTORY, entity.isProductionEnabled()))
+                .customersEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CRM, entity.isCustomersEnabled()))
+                .loyaltyEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CRM, entity.isLoyaltyEnabled()))
+                .sendToKitchenEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.KOT, entity.isSendToKitchenEnabled()))
+                .onlineDeliveryEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.ONLINE_DELIVERY, entity.isOnlineDeliveryEnabled()))
                 .allowMultipleCustomersPerOrder(entity.isAllowMultipleCustomersPerOrder())
                 .customerAgeEnabled(entity.isCustomerAgeEnabled())
                 .posProductListingEnabled(entity.isPosProductListingEnabled())
@@ -545,14 +545,46 @@ public class SystemConfigurationService {
         if ((dto.isCustomersEnabled() || dto.isLoyaltyEnabled()) && !isModuleActive(clientId, orgId, ModuleName.CRM)) {
             throw new BusinessException("Subscription required: Customer CRM & Loyalty is not active. Please visit the billing center.");
         }
+        if (dto.isQrOrderingEnabled() && !isModuleActive(clientId, orgId, ModuleName.TABLE_QR)) {
+            throw new BusinessException("Subscription required: Table QR Ordering is not active. Please visit the billing center.");
+        }
+        if (dto.isMenuImagesEnabled() && !isModuleActive(clientId, orgId, ModuleName.MENU_IMAGES)) {
+            throw new BusinessException("Subscription required: Menu Images module is not active. Please visit the billing center.");
+        }
+        if (dto.isOnlineDeliveryEnabled() && !isModuleActive(clientId, orgId, ModuleName.ONLINE_DELIVERY)) {
+            throw new BusinessException("Subscription required: Online Delivery module is not active. Please visit the billing center.");
+        }
     }
 
-    private boolean isModuleActive(UUID clientId, UUID orgId, ModuleName moduleName) {
+    private boolean isFeatureEnabled(UUID clientId, UUID orgId, ModuleName module, boolean configValue) {
+        if (!configValue) {
+            return false;
+        }
+        if (clientId == null) {
+            return true;
+        }
+        Optional<Client> clientOpt = clientRepository.findById(clientId);
+        if (clientOpt.isPresent()) {
+            Client client = clientOpt.get();
+            String status = client.getSubscriptionStatus();
+            if (status != null) {
+                status = status.trim().toUpperCase();
+                if ("TRIAL".equals(status) && client.getSubscriptionExpiryDate() != null && client.getSubscriptionExpiryDate().isAfter(java.time.LocalDateTime.now())) {
+                    return true;
+                }
+            }
+        }
+        return isModuleActive(clientId, orgId, module);
+    }
+
+    public boolean isModuleActive(UUID clientId, UUID orgId, ModuleName moduleName) {
         List<ClientSubscriptionModule> activeModules = clientSubscriptionModuleRepository.findByClientId(clientId);
         for (ClientSubscriptionModule m : activeModules) {
             if (m.getModuleName() == moduleName && "ACTIVE".equalsIgnoreCase(m.getStatus())) {
                 if (m.getExpiryDate() == null || m.getExpiryDate().isAfter(java.time.LocalDateTime.now())) {
-                    return true;
+                    if (m.getOrgId() == null || m.getOrgId().equals(orgId)) {
+                        return true;
+                    }
                 }
             }
         }

@@ -1,6 +1,7 @@
 package com.restaurant.pos.sync.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.order.service.OrderService;
@@ -63,6 +64,10 @@ class SyncServiceTest {
                 objectMapper,
                 transactionTemplate
         );
+
+        when(configurationService.getConfiguration()).thenReturn(ConfigurationDto.builder()
+                .offlineSyncEnabled(true)
+                .build());
 
         tenantId = UUID.randomUUID();
         TenantContext.setCurrentTenant(tenantId);

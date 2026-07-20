@@ -19,5 +19,5 @@ COPY --from=build /app/target/*.jar app.jar
 # Expose the port (Render will use this)
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-XX:+UseG1GC", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
 

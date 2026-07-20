@@ -43,6 +43,7 @@ public class SecurityConfig {
                                         "/api/v1/auth/**",
                                         "/api/v1/debug/**",
                                         "/api/v1/public/**",
+                                        "/api/v1/founder/**",
                                         "/api/delivery/**",
                                         "/delivery/**",
                                         "/v2/api-docs",
@@ -85,7 +86,8 @@ public class SecurityConfig {
             "https://cafe-qr-delivery-website.vercel.app," +
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
-            "https://*.pages.dev" +
+            "https://*.pages.dev," +
+            "https://pos.cafeqr.in" +
             "}")
     private String[] allowedOrigins;
 
