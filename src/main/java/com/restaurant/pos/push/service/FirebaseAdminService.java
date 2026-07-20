@@ -102,10 +102,28 @@ public class FirebaseAdminService {
 
             // Attach Android-specific config with the notification channel for custom sounds
             if (channelId != null && !channelId.isBlank()) {
+                AndroidNotification.Builder androidNotificationBuilder = AndroidNotification.builder()
+                        .setChannelId(channelId);
+
+                // For backward compatibility (Android 7.1 and below): set the sound resource name directly
+                String soundName = null;
+                if ("channel_delivery".equals(channelId)) soundName = "delivery";
+                else if ("channel_kitchen".equals(channelId)) soundName = "kitchen";
+                else if ("channel_takeaway".equals(channelId)) soundName = "takeaway";
+                else if ("channel_settle".equals(channelId)) soundName = "settle";
+
+                if (soundName != null) {
+                    androidNotificationBuilder.setSound(soundName);
+                }
+
+                // Add Accept/Decline action click_action for Delivery orders
+                String category = data != null ? data.get("category") : null;
+                if ("DELIVERY".equalsIgnoreCase(category)) {
+                    androidNotificationBuilder.setClickAction("DELIVERY_ACTIONS");
+                }
+
                 AndroidConfig androidConfig = AndroidConfig.builder()
-                        .setNotification(AndroidNotification.builder()
-                                .setChannelId(channelId)
-                                .build())
+                        .setNotification(androidNotificationBuilder.build())
                         .build();
                 builder.setAndroidConfig(androidConfig);
             }
