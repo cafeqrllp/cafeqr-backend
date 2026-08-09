@@ -1,11 +1,4 @@
-# ──────────────────────────────────────────────────────────────
-# CafeQR 2.0 Backend — Build & Deploy to Hostinger VPS
-# ──────────────────────────────────────────────────────────────
-# Triggers on push to main. Builds the Docker image using the
-# multi-stage Dockerfile, pushes to GitHub Container Registry,
-# then SSHes into the VPS to pull and restart.
-# ──────────────────────────────────────────────────────────────
-name: Deploy Backend
+name: Deploy Production Backend
 
 on:
   push:
@@ -14,7 +7,7 @@ on:
       - '**.md'
       - '.gitignore'
 
-  workflow_dispatch:     # Allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -65,8 +58,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ── Deploy to VPS ──
-      - name: Deploy to Hostinger VPS
+      # ── Deploy to Oracle Cloud VPS ──
+      - name: Deploy to Oracle Cloud VPS
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -76,10 +69,15 @@ jobs:
           command_timeout: 15m
           script: |
             set -euo pipefail
-            cd /home/cafeqr/app
-            # Temporary fix: move .env.frontend out of the way so git status is clean for the pull
-            if [ -f .env.frontend ]; then mv .env.frontend ../.env.frontend.tmp; fi
-            git pull --ff-only || true
-            if [ -f ../.env.frontend.tmp ]; then mv ../.env.frontend.tmp .env.frontend; fi
-            chmod +x scripts/hostinger/deploy.sh
-            ./scripts/hostinger/deploy.sh backend
+            
+            # Log in to GHCR on the Oracle server to pull the package
+            echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Pull the new backend image
+            sudo docker compose pull backend 2>/dev/null || sudo docker-compose pull backend 2>/dev/null || true
+            
+            # Restart the backend service
+            sudo docker compose up -d backend 2>/dev/null || sudo docker-compose up -d backend 2>/dev/null || true
+            
+            # Clean up old unused images to save disk space
+            sudo docker image prune -f
