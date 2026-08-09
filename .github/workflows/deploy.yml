@@ -73,6 +73,13 @@ jobs:
             APP_DIR="/home/ubuntu/cafeqr-production/cafeqr-backend"
             COMPOSE_FILE="docker-compose.prod.yml"
             
+            # If the .env file is actually in the parent directory, use the parent directory's docker-compose.yml
+            if [ ! -f "$APP_DIR/.env" ] && [ -f "/home/ubuntu/cafeqr-production/.env" ]; then
+              echo "Found .env in parent directory. Switching to parent directory deployment."
+              APP_DIR="/home/ubuntu/cafeqr-production"
+              COMPOSE_FILE="docker-compose.yml"
+            fi
+            
             echo "Navigating to app directory: $APP_DIR"
             cd "$APP_DIR"
             
