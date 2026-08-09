@@ -70,32 +70,38 @@ jobs:
           script: |
             set -euo pipefail
             
-            # Find the app directory (usually ~/app)
-            if [ -d "$HOME/app" ]; then
-              cd "$HOME/app"
-            elif [ -d "/home/cafeqr/app" ]; then
-              cd "/home/cafeqr/app"
-            else
-              echo "Error: Could not find app directory!"
+            echo "Searching for docker-compose file..."
+            APP_DIR=""
+            COMPOSE_FILE=""
+            
+            # Find any docker-compose file that defines a 'backend' service
+            for file in $(find "$HOME" /opt /var/www /home -maxdepth 4 -type f -name "docker-compose*.yml" 2>/dev/null); do
+              if grep -q "backend:" "$file"; then
+                APP_DIR=$(dirname "$file")
+                COMPOSE_FILE=$(basename "$file")
+                break
+              fi
+            done
+            
+            if [ -z "$APP_DIR" ]; then
+              echo "Error: Could not find any docker-compose file with a backend service!"
               exit 1
             fi
+            
+            echo "Found app directory at: $APP_DIR"
+            echo "Using compose file: $COMPOSE_FILE"
+            cd "$APP_DIR"
             
             # Log in to GHCR on the Oracle server to pull the package
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # Determine which docker-compose file to use
-            COMPOSE_FILE="docker-compose.yml"
-            if [ -f "docker-compose.prod.yml" ]; then
-              COMPOSE_FILE="docker-compose.prod.yml"
-            fi
-            
             # Pull the new backend image
             if command -v docker-compose &> /dev/null; then
-              sudo docker-compose -f $COMPOSE_FILE pull backend
-              sudo docker-compose -f $COMPOSE_FILE up -d backend
+              sudo docker-compose -f "$COMPOSE_FILE" pull backend
+              sudo docker-compose -f "$COMPOSE_FILE" up -d backend
             else
-              sudo docker compose -f $COMPOSE_FILE pull backend
-              sudo docker compose -f $COMPOSE_FILE up -d backend
+              sudo docker compose -f "$COMPOSE_FILE" pull backend
+              sudo docker compose -f "$COMPOSE_FILE" up -d backend
             fi
             
             # Clean up old unused images to save disk space
