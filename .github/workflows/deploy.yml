@@ -86,22 +86,13 @@ jobs:
             # Log in to GHCR on the Oracle server to pull the package
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # Pull the latest backend image
+            # Pull the new backend image using Docker Compose V2 if available, to avoid V1 'ContainerConfig' bug
             if sudo docker compose version &> /dev/null; then
               sudo docker compose -f "$COMPOSE_FILE" pull backend
+              sudo docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate backend
             elif command -v docker-compose &> /dev/null; then
               sudo docker-compose -f "$COMPOSE_FILE" pull backend
-            fi
-            
-            # Stop and remove the old backend container to bypass the legacy docker-compose v1 ContainerConfig inspect bug
-            sudo docker stop cafeqr-backend 2>/dev/null || true
-            sudo docker rm -f cafeqr-backend 2>/dev/null || true
-            
-            # Start fresh backend container
-            if sudo docker compose version &> /dev/null; then
-              sudo docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
-            elif command -v docker-compose &> /dev/null; then
-              sudo docker-compose -f "$COMPOSE_FILE" up -d --no-deps backend
+              sudo docker-compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate backend
             else
               echo "Error: Neither docker compose nor docker-compose found."
               exit 1
