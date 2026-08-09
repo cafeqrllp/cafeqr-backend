@@ -74,10 +74,13 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
             # Pull the new backend image
-            sudo docker compose pull backend 2>/dev/null || sudo docker-compose pull backend 2>/dev/null || true
-            
-            # Restart the backend service
-            sudo docker compose up -d backend 2>/dev/null || sudo docker-compose up -d backend 2>/dev/null || true
+            if command -v docker-compose &> /dev/null; then
+              sudo docker-compose pull backend
+              sudo docker-compose up -d backend
+            else
+              sudo docker compose pull backend
+              sudo docker compose up -d backend
+            fi
             
             # Clean up old unused images to save disk space
             sudo docker image prune -f
