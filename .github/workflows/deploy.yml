@@ -86,13 +86,16 @@ jobs:
             # Log in to GHCR on the Oracle server to pull the package
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # Pull the new backend image
-            if command -v docker-compose &> /dev/null; then
+            # Pull the new backend image using Docker Compose V2 if available, to avoid V1 'ContainerConfig' bug
+            if sudo docker compose version &> /dev/null; then
+              sudo docker compose -f "$COMPOSE_FILE" pull backend
+              sudo docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            elif command -v docker-compose &> /dev/null; then
               sudo docker-compose -f "$COMPOSE_FILE" pull backend
               sudo docker-compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-              sudo docker compose -f "$COMPOSE_FILE" pull backend
-              sudo docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+              echo "Error: Neither docker compose nor docker-compose found."
+              exit 1
             fi
             
             # Clean up old unused images to save disk space
