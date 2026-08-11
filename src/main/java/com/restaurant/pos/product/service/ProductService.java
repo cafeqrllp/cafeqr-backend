@@ -253,7 +253,7 @@ public class ProductService {
         VariantGroup group = variantGroupRepository.findById(java.util.Objects.requireNonNull(groupId))
                 .orElseThrow(() -> new ResourceNotFoundException("Variant Group not found"));
         validateOwnership(group.getClientId(), group.getOrgId(), "Variant Group", false);
-        return variantOptionRepository.findByGroup_Id(groupId)
+        return variantOptionRepository.findByGroup_IdOrderByCreatedAtAsc(groupId)
                 .stream()
                 .map(option -> mapVariantOptionToDto(option, groupId))
                 .collect(Collectors.toList());
@@ -430,6 +430,7 @@ public class ProductService {
                     .isActive(product.isActive())
                     .isPackagedGood(product.isPackagedGood())
                     .isIngredient(product.isIngredient())
+                    .isVariablePrice(product.isVariablePrice())
                     .productType(product.getProductType())
                     .hasVariants(product.getVariantMappings() != null && !product.getVariantMappings().isEmpty())
                     .variantCount(product.getVariantMappings() != null ? product.getVariantMappings().size() : 0)
@@ -479,6 +480,8 @@ public class ProductService {
         List<ProductDetailDto.VariantPricingDto> pricings = product.getVariantPricings() == null
                 ? List.of()
                 : product.getVariantPricings().stream()
+                        .sorted(java.util.Comparator.comparing(
+                                pricing -> pricing.getCreatedAt() != null ? pricing.getCreatedAt() : java.time.LocalDateTime.MIN))
                         .map(pricing -> ProductDetailDto.VariantPricingDto.builder()
                                 .id(pricing.getId())
                                 .overridePrice(pricing.getOverridePrice())
@@ -531,6 +534,7 @@ public class ProductService {
                 .isVariant(product.isVariant())
                 .isPackagedGood(product.isPackagedGood())
                 .isIngredient(product.isIngredient())
+                .isVariablePrice(product.isVariablePrice())
                 .productCode(product.getProductCode())
                 .taxRate(product.getTaxRate())
                 .taxCode(product.getTaxCode())
@@ -553,6 +557,8 @@ public class ProductService {
         List<VariantOptionDto> options = group.getOptions() == null
                 ? List.of()
                 : group.getOptions().stream()
+                        .sorted(java.util.Comparator.comparing(
+                                option -> option.getCreatedAt() != null ? option.getCreatedAt() : java.time.LocalDateTime.MIN))
                         .map(option -> mapVariantOptionToDto(option, group.getId()))
                         .collect(Collectors.toList());
 
@@ -590,13 +596,13 @@ public class ProductService {
             throw new BusinessException("Product name is required");
         }
         if (product.getPrice() == null) {
-            if (product.isIngredient() || product.isVariant()) {
+            if (product.isIngredient() || product.isVariant() || product.isVariablePrice()) {
                 product.setPrice(java.math.BigDecimal.ZERO);
             } else {
                 throw new BusinessException("Product price is required");
             }
         }
-        if (!product.isIngredient() && !product.isVariant() && product.getPrice().compareTo(java.math.BigDecimal.ZERO) < 0) {
+        if (!product.isIngredient() && !product.isVariant() && !product.isVariablePrice() && product.getPrice().compareTo(java.math.BigDecimal.ZERO) < 0) {
             throw new BusinessException("Product price cannot be negative");
         }
 
@@ -785,13 +791,13 @@ public class ProductService {
             throw new BusinessException("Product name is required");
         }
         if (product.getPrice() == null) {
-            if (product.isIngredient() || product.isVariant()) {
+            if (product.isIngredient() || product.isVariant() || product.isVariablePrice()) {
                 product.setPrice(java.math.BigDecimal.ZERO);
             } else {
                 throw new BusinessException("Product price is required");
             }
         }
-        if (!product.isIngredient() && !product.isVariant() && product.getPrice().compareTo(java.math.BigDecimal.ZERO) < 0) {
+        if (!product.isIngredient() && !product.isVariant() && !product.isVariablePrice() && product.getPrice().compareTo(java.math.BigDecimal.ZERO) < 0) {
             throw new BusinessException("Product price cannot be negative");
         }
 
@@ -821,6 +827,7 @@ public class ProductService {
         existing.setVariant(product.isVariant());
         existing.setPackagedGood(product.isPackagedGood());
         existing.setIngredient(product.isIngredient());
+        existing.setVariablePrice(product.isVariablePrice());
 
         String newCode = product.getProductCode() != null && product.getProductCode().trim().isEmpty() ? null
                 : product.getProductCode();

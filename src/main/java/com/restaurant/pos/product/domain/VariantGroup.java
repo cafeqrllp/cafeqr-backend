@@ -16,6 +16,7 @@ import lombok.NoArgsConstructor;
 
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import org.hibernate.annotations.BatchSize;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +49,7 @@ public class VariantGroup extends AuditableEntity {
     private UUID orgId;
 
     @OneToMany(mappedBy = "group", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("createdAt ASC")
     @Builder.Default
     @BatchSize(size = 20)
     private List<VariantOption> options = new ArrayList<>();
