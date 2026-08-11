@@ -36,6 +36,9 @@ public class ProductDetailDto {
     @JsonProperty("isIngredient")
     private boolean isIngredient;
 
+    @JsonProperty("isVariablePrice")
+    private boolean isVariablePrice;
+
     private String productCode;
     private BigDecimal taxRate;
     private String taxCode;
