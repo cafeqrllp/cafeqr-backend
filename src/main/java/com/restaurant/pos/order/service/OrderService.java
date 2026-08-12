@@ -2816,8 +2816,10 @@ public class OrderService {
         }
 
         // Validate payment invariant: amount_paid = invoice_total + round_off_amount
+        // (Invoice total amount already includes the round-off, so we must subtract it
+        // here to satisfy the validation logic).
         BigDecimal invoiceTotal = linkedInvoice != null
-                ? moneyValue(linkedInvoice.getTotalAmount())
+                ? moneyValue(linkedInvoice.getTotalAmount()).subtract(settleRoundOff)
                 : moneyValue(saved.getGrandTotal()).subtract(settleRoundOff);
         validatePaymentInvariant(invoiceTotal, settleRoundOff, amountPaid);
 
@@ -3222,7 +3224,12 @@ public class OrderService {
                 // GST round-off: round_off_amount lives on Payment ONLY
                 // Invariant: amount_paid = invoice_total + round_off_amount
                 .invoiceTotal(
-                        invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
+                        (invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
+                            .subtract(
+                                roundOffAmount != null ? roundOffAmount.setScale(2, RoundingMode.HALF_UP) : 
+                                (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO)
+                            )
+                )
                 .roundOffAmount(
                         roundOffAmount != null ? roundOffAmount.setScale(2, RoundingMode.HALF_UP) : 
                         (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO))
