@@ -1,8 +1,10 @@
 package com.restaurant.pos.product.service;
 
+import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
+import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.product.domain.Category;
 import com.restaurant.pos.product.domain.Product;
@@ -48,6 +50,21 @@ public class ProductService {
     private final VariantGroupRepository variantGroupRepository;
     private final VariantOptionRepository variantOptionRepository;
     private final PricelistRepository pricelistRepository;
+    private final SystemConfigurationService systemConfigurationService;
+
+    /**
+     * Returns true when the current tenant/branch configuration has menuImagesEnabled=true.
+     * Falls back to true on any error so that images are never accidentally hidden.
+     */
+    private boolean isMenuImagesEnabled() {
+        try {
+            ConfigurationDto cfg = systemConfigurationService.getConfiguration();
+            return cfg != null && cfg.isMenuImagesEnabled();
+        } catch (Exception e) {
+            log.warn("Could not read menuImagesEnabled from configuration, defaulting to true", e);
+            return true;
+        }
+    }
 
     @Transactional(readOnly = true)
     // @Cacheable(value = "products_categories_v2", key =
@@ -320,14 +337,16 @@ public class ProductService {
     public List<ProductListDto> getProducts() {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
+        boolean includeImages = isMenuImagesEnabled();
 
         System.out
-                .println("===> [DEBUG] ProductService: Fetching products for Client: " + clientId + " | Org: " + orgId);
+                .println("===> [DEBUG] ProductService: Fetching products for Client: " + clientId + " | Org: " + orgId
+                        + " | includeImages: " + includeImages);
         List<Product> products = productRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId);
         System.out.println("===> [DEBUG] ProductService: Repository returned " + products.size() + " products");
 
         return products.stream()
-                .map(this::mapToDto)
+                .map(p -> mapToDto(p, includeImages))
                 .collect(Collectors.toList());
     }
 
@@ -338,10 +357,11 @@ public class ProductService {
         }
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
+        boolean includeImages = isMenuImagesEnabled();
         LocalDateTime updatedAfter = LocalDateTime.ofInstant(since, ZoneOffset.UTC);
         return productRepository.findChangedByClientIdAndOrgIdOrGlobal(clientId, orgId, updatedAfter)
                 .stream()
-                .map(this::mapToDto)
+                .map(p -> mapToDto(p, includeImages))
                 .collect(Collectors.toList());
     }
 
@@ -409,6 +429,10 @@ public class ProductService {
     }
 
     private ProductListDto mapToDto(Product product) {
+        return mapToDto(product, true);
+    }
+
+    private ProductListDto mapToDto(Product product, boolean includeImages) {
         try {
             return ProductListDto.builder()
                     .id(product.getId())
@@ -418,7 +442,7 @@ public class ProductService {
                     .costPrice(product.getCostPrice())
                     .mrp(product.getMrp())
                     .isAvailable(product.isAvailable())
-                    .imageUrl(product.getImageUrl())
+                    .imageUrl(includeImages ? product.getImageUrl() : null)
                     .categoryId(product.getCategory() != null ? product.getCategory().getId() : null)
                     .categoryName(product.getCategory() != null ? product.getCategory().getName() : null)
                     .uomId(product.getUom() != null ? product.getUom().getId() : null)

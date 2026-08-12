@@ -9,6 +9,7 @@ import com.restaurant.pos.product.repository.UomRepository;
 import com.restaurant.pos.product.repository.VariantGroupRepository;
 import com.restaurant.pos.product.repository.VariantOptionRepository;
 import com.restaurant.pos.purchasing.repository.PricelistRepository;
+import com.restaurant.pos.common.service.SystemConfigurationService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,8 @@ class ProductServiceTest {
                 mock(UomRepository.class),
                 mock(VariantGroupRepository.class),
                 mock(VariantOptionRepository.class),
-                mock(PricelistRepository.class)
+                mock(PricelistRepository.class),
+                mock(SystemConfigurationService.class)
         );
         clientId = UUID.randomUUID();
         branchId = UUID.randomUUID();
