@@ -139,5 +139,45 @@ public class FirebaseAdminService {
             return null;
         }
     }
+
+    /**
+     * Sends a data-only multicast message (NO notification block) with HIGH priority.
+     * On Android, this ensures onMessageReceived() is ALWAYS invoked in the custom
+     * CafeQrMessagingService, even when the app is in the background or killed.
+     * This allows the native service to build rich notifications with Accept/Decline
+     * action buttons for delivery orders.
+     *
+     * The title and body are placed inside the data payload so the native service
+     * can extract and display them in the custom notification.
+     */
+    public BatchResponse sendDataOnlyMulticast(String title, String body, Map<String, String> data, List<String> tokens) {
+        if (tokens == null || tokens.isEmpty()) {
+            return null;
+        }
+        try {
+            // Ensure title and body are available in the data payload
+            if (data == null) {
+                data = new java.util.HashMap<>();
+            }
+            data.putIfAbsent("title", title != null ? title : "New Order");
+            data.putIfAbsent("body", body != null ? body : "");
+
+            MulticastMessage message = MulticastMessage.builder()
+                    .putAllData(data)
+                    .addAllTokens(tokens)
+                    .setAndroidConfig(AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .build())
+                    .build();
+
+            BatchResponse response = FirebaseMessaging.getInstance().sendEachForMulticast(message);
+            log.info("Successfully sent data-only multicast (delivery). Success: {}, Failure: {}",
+                    response.getSuccessCount(), response.getFailureCount());
+            return response;
+        } catch (Exception e) {
+            log.error("Failed to send data-only Firebase multicast message", e);
+            return null;
+        }
+    }
 }
 

@@ -100,8 +100,6 @@ public class PushNotificationService {
 
         if (targets.isEmpty()) return;
 
-        List<String> tokens = targets.stream().map(PushDeviceToken::getDeviceToken).toList();
-
         String friendlyCategory = capitalize(category.replace("_", " "));
         String title = String.format("New %s Order", friendlyCategory);
         String baseBody = String.format("Order #%s - Total: %s", order.getOrderNo(), order.getGrandTotal());
@@ -131,8 +129,36 @@ public class PushNotificationService {
         data.put("restaurantId", order.getOrgId() != null ? order.getOrgId().toString() : "");
         data.put("itemsSummary", itemsSummary != null ? itemsSummary : "");
 
-        BatchResponse response = firebaseAdminService.sendMulticast(title, body, data, tokens, channelId);
-        cleanInvalidTokens(tokens, response);
+        // For DELIVERY orders: split tokens by platform so Android gets data-only messages
+        // (triggering CafeQrMessagingService with Accept/Decline buttons) while Web gets
+        // the standard notification+data message.
+        if ("DELIVERY".equalsIgnoreCase(category)) {
+            List<String> androidTokens = targets.stream()
+                    .filter(d -> "android".equalsIgnoreCase(d.getPlatform()))
+                    .map(PushDeviceToken::getDeviceToken)
+                    .toList();
+            List<String> webTokens = targets.stream()
+                    .filter(d -> !"android".equalsIgnoreCase(d.getPlatform()))
+                    .map(PushDeviceToken::getDeviceToken)
+                    .toList();
+
+            // Android: data-only → CafeQrMessagingService builds notification with Accept/Decline
+            if (!androidTokens.isEmpty()) {
+                BatchResponse androidResponse = firebaseAdminService.sendDataOnlyMulticast(title, body, new HashMap<>(data), androidTokens);
+                cleanInvalidTokens(androidTokens, androidResponse);
+            }
+
+            // Web: standard notification+data → browser shows notification with service worker buttons
+            if (!webTokens.isEmpty()) {
+                BatchResponse webResponse = firebaseAdminService.sendMulticast(title, body, data, webTokens, channelId);
+                cleanInvalidTokens(webTokens, webResponse);
+            }
+        } else {
+            // Kitchen, Takeaway, Settle: unchanged behavior with notification+data
+            List<String> tokens = targets.stream().map(PushDeviceToken::getDeviceToken).toList();
+            BatchResponse response = firebaseAdminService.sendMulticast(title, body, data, tokens, channelId);
+            cleanInvalidTokens(tokens, response);
+        }
     }
 
     @Async
