@@ -176,8 +176,13 @@ public class DeliveryController {
                     item.put("description", p.getDescription());
                     item.put("price",       p.getPrice());
                     item.put("imageUrl",    p.getImageUrl());
+                    item.put("image_url",   p.getImageUrl());
                     item.put("category",    p.getCategory() != null ? p.getCategory().getName() : "Others");
-                    item.put("isVeg",       !p.isPackagedGood());
+                    boolean isVeg = "VEG".equalsIgnoreCase(p.getProductType())
+                            || "Vegetarian".equalsIgnoreCase(p.getProductType())
+                            || (!p.isPackagedGood() && p.getProductType() == null);
+                    item.put("isVeg",       isVeg);
+                    item.put("is_veg",      isVeg);
                     item.put("isAvailable", p.isAvailable());
                     item.put("productType", p.getProductType());
                     item.put("taxRate",     p.getTaxRate());
@@ -224,6 +229,7 @@ public class DeliveryController {
             String customerPhone  = (String) payload.getOrDefault("customerPhone", "");
             String deliveryAddress= (String) payload.getOrDefault("deliveryAddress", "");
             String note           = (String) payload.getOrDefault("note", "");
+            String remarks        = (String) payload.getOrDefault("remarks", "");
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> items = (List<Map<String, Object>>) payload.get("items");
@@ -284,6 +290,7 @@ public class DeliveryController {
                     .orderSource("DELIVERY_WEB")
                     .fulfillmentType(fulfillment)
                     .description(description)
+                    .remarks(remarks)
                     .orderDate(Instant.now())
                     .isactive("Y")
                     .build();
@@ -651,6 +658,7 @@ public class DeliveryController {
         map.put("grandTotal",      order.getGrandTotal());
         map.put("orderDate",       order.getOrderDate());
         map.put("description",     order.getDescription());
+        map.put("remarks",         order.getRemarks());
         map.put("latitude",        order.getLatitude());
         map.put("longitude",       order.getLongitude());
 
