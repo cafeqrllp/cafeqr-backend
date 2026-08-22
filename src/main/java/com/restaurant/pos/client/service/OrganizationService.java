@@ -51,10 +51,16 @@ public class OrganizationService {
         organization.setClientId(clientId);
         organization.setIsactive("Y");
 
-        // Set default orgCode if not provided
+        // Set default orgCode and slug if not provided
+        String rawSlug = ClientService.sanitizeSlug(organization.getName());
+        if (organization.getSlug() == null || organization.getSlug().isBlank()) {
+            organization.setSlug(rawSlug);
+        } else {
+            organization.setSlug(ClientService.sanitizeSlug(organization.getSlug()));
+        }
+
         if (organization.getOrgCode() == null || organization.getOrgCode().isBlank()) {
-            String slug = organization.getName().toLowerCase().replaceAll("[^a-z0-9]", "-");
-            String code = slug + "-" + UUID.randomUUID().toString().substring(0, 4);
+            String code = rawSlug + "-" + UUID.randomUUID().toString().substring(0, 4);
             organization.setOrgCode(code);
             log.info("Generated default orgCode: {}", code);
         }
@@ -62,6 +68,10 @@ public class OrganizationService {
         Client client = clientRepository.findById(java.util.Objects.requireNonNull(clientId))
                 .orElseThrow(() -> new ResourceNotFoundException("Client not found for ID: " + clientId));
         organization.setClient(client);
+
+        if (organization.getPosType() == null || organization.getPosType().isBlank()) {
+            organization.setPosType(client.getPosType());
+        }
 
         Organization saved = repository.save(organization);
         seedDefaultPaymentTypes(saved);
@@ -73,11 +83,23 @@ public class OrganizationService {
         Organization organization = getOrganizationById(id);
         organization.setName(details.getName());
         organization.setOrgCode(details.getOrgCode());
+        
+        if (details.getSlug() != null && !details.getSlug().isBlank()) {
+            String sanitizedBranchSlug = ClientService.sanitizeSlug(details.getSlug());
+            if (repository.existsByClientIdAndSlugIgnoreCaseAndIdNot(organization.getClientId(), sanitizedBranchSlug, id)) {
+                throw new com.restaurant.pos.common.exception.BusinessException("The branch slug '" + sanitizedBranchSlug + "' is already in use by another branch in your organization. Please choose a different branch slug.");
+            }
+            organization.setSlug(sanitizedBranchSlug);
+        } else if (organization.getSlug() == null || organization.getSlug().isBlank()) {
+            organization.setSlug(ClientService.sanitizeSlug(details.getName()));
+        }
+
         organization.setAddress(details.getAddress());
         organization.setPhone(details.getPhone());
         organization.setEmail(details.getEmail());
         organization.setGstin(details.getGstin());
         organization.setLogoUrl(details.getLogoUrl());
+        organization.setBannerUrl(details.getBannerUrl());
         organization.setGoogleMapsUrl(details.getGoogleMapsUrl());
         organization.setPinCode(details.getPinCode());
         organization.setLatitude(details.getLatitude());
@@ -85,6 +107,7 @@ public class OrganizationService {
         organization.setDeliveryRadiusKm(details.getDeliveryRadiusKm());
         organization.setBranchCode(details.getBranchCode());
         organization.setTimezone(details.getTimezone());
+        organization.setPosType(details.getPosType());
         
         if (details.getIsactive() != null) {
             organization.setIsactive(details.getIsactive());

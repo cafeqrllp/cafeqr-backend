@@ -65,6 +65,7 @@ public class PurchaseOrderVendorBillListener {
             BigDecimal grandTotal = purchaseOrder.getGrandTotal() != null ? purchaseOrder.getGrandTotal() : BigDecimal.ZERO;
 
             vendorBill.setVendorId(purchaseOrder.getVendorId());
+            vendorBill.setCreditCustomerId(null);
             vendorBill.setInvoiceDate(LocalDateTime.now());
             vendorBill.setTotalAmount(grandTotal);
             vendorBill.setAmountDue(isPaid && !isCredit ? BigDecimal.ZERO : grandTotal);
@@ -122,6 +123,7 @@ public class PurchaseOrderVendorBillListener {
                 }
 
                 payment.setInvoiceId(savedBill.getId());
+                payment.setCreditCustomerId(purchaseOrder.getVendorId());
                 payment.setPaymentDate(LocalDateTime.now());
                 payment.setPaymentMethod(purchaseOrder.getPaymentMethod() != null ? purchaseOrder.getPaymentMethod().toUpperCase() : "CASH");
                 payment.setAmountPaid(grandTotal);

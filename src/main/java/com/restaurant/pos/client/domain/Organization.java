@@ -28,6 +28,10 @@ public class Organization extends AuditableEntity {
     private Client client;
 
     private String name;
+    
+    @Column(length = 100)
+    private String slug;
+
     private String orgCode;
     
     @Builder.Default
@@ -40,6 +44,9 @@ public class Organization extends AuditableEntity {
     private String gstin;
     private String timezone;
     
+    @Column(name = "pos_type", length = 50)
+    private String posType;
+    
     @Builder.Default
     @Column(name = "isactive", length = 1)
     @com.fasterxml.jackson.annotation.JsonProperty("isactive")
@@ -47,6 +54,10 @@ public class Organization extends AuditableEntity {
 
     @Column(columnDefinition = "TEXT")
     private String logoUrl;
+    
+    @Column(name = "banner_url", columnDefinition = "TEXT")
+    private String bannerUrl;
+
     private String googleMapsUrl;
     private String pinCode;
     private Double latitude;

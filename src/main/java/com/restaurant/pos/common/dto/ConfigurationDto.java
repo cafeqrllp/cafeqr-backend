@@ -16,6 +16,8 @@ import java.util.List;
 public class ConfigurationDto {
     // Power Modules
     private boolean onlinePaymentEnabled;
+    private String razorpayKeyId;
+    private String razorpayKeySecret;
     private boolean menuImagesEnabled;
     private boolean creditEnabled;
     @Builder.Default

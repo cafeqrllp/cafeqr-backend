@@ -78,6 +78,14 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins:" +
             "http://localhost:3000," +
             "http://localhost:3001," +
+            "http://localhost:5173," +
+            "http://localhost:5174," +
+            "http://192.168.29.152:3000," +
+            "http://192.168.29.152:3001," +
+            "https://test-cafe-qr-landing.vercel.app," +
+            "https://cafe-qr-landing.vercel.app," +
+            "https://test-cafeqr-landing.vercel.app," +
+            "https://cafeqr-landing.vercel.app," +
             "https://cafe-test-qr-frontend.vercel.app," +
             "https://cafe-qr-frontend.vercel.app," +
             "https://test-cafe-qr-delivery-app.vercel.app," +
@@ -87,7 +95,10 @@ public class SecurityConfig {
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
             "https://*.pages.dev," +
-            "https://pos.cafeqr.in" +
+            "https://*.vercel.app," +
+            "https://pos.cafeqr.in," +
+            "https://cafeqr.in," +
+            "https://*.cafeqr.in" +
             "}")
     private String[] allowedOrigins;
 
@@ -95,12 +106,29 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        for (String origin : allowedOrigins) {
-            if (origin != null && !origin.isBlank()) {
-                configuration.addAllowedOriginPattern(origin.trim());
+        if (allowedOrigins != null) {
+            for (String origin : allowedOrigins) {
+                if (origin != null && !origin.isBlank()) {
+                    configuration.addAllowedOriginPattern(origin.trim());
+                }
             }
         }
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+
+        // Unconditionally allow all Vercel deployments, Cloudflare pages, CafeQR domains, and Razorpay callbacks
+        // to prevent environment variable overrides from causing CORS 403 preflight errors
+        configuration.addAllowedOriginPattern("https://*.vercel.app");
+        configuration.addAllowedOriginPattern("https://*.pages.dev");
+        configuration.addAllowedOriginPattern("https://*.cafeqr.in");
+        configuration.addAllowedOriginPattern("https://cafeqr.in");
+        configuration.addAllowedOriginPattern("https://pos.cafeqr.in");
+        configuration.addAllowedOriginPattern("https://*.razorpay.com");
+        configuration.addAllowedOriginPattern("https://razorpay.com");
+        configuration.addAllowedOriginPattern("capacitor://localhost");
+        configuration.addAllowedOriginPattern("https://localhost");
+        configuration.addAllowedOriginPattern("http://localhost:*");
+        configuration.addAllowedOriginPattern("http://127.0.0.1:*");
+
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setExposedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);

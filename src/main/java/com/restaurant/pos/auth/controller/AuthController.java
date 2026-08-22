@@ -6,6 +6,7 @@ import com.restaurant.pos.auth.dto.RegisterRequest;
 import com.restaurant.pos.auth.dto.SendOtpRequest;
 import com.restaurant.pos.auth.service.AuthService;
 import com.restaurant.pos.auth.service.EmailService;
+import com.restaurant.pos.auth.service.JwtService;
 import com.restaurant.pos.auth.service.OtpService;
 import com.restaurant.pos.auth.util.AuthCookieUtil;
 import com.restaurant.pos.common.dto.ApiResponse;
@@ -26,6 +27,7 @@ public class AuthController {
     private final EmailService emailService;
     private final OtpService otpService;
     private final AuthCookieUtil cookieUtil;
+    private final JwtService jwtService;
 
     @PostMapping("/send-otp")
     public ResponseEntity<ApiResponse<String>> sendOtp(
@@ -83,6 +85,47 @@ public class AuthController {
             cookieUtil.clearAuthCookies(response);
             return ResponseEntity.status(401).body(ApiResponse.error(e.getMessage()));
         }
+    }
+
+    @PostMapping("/accept-terms")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> acceptTerms(
+            @RequestBody(required = false) com.restaurant.pos.auth.dto.AcceptTermsRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        java.util.UUID userId = com.restaurant.pos.common.util.SecurityUtils.getCurrentUserId();
+        if (userId == null) {
+            userId = com.restaurant.pos.common.tenant.UserContext.getContext().getUserId();
+        }
+        if (userId == null) {
+            String userIdHeader = servletRequest.getHeader("X-User-ID");
+            if (userIdHeader != null && !userIdHeader.isBlank()) {
+                try {
+                    userId = java.util.UUID.fromString(userIdHeader.trim());
+                } catch (Exception ignored) {}
+            }
+        }
+        if (userId == null) {
+            String authHeader = servletRequest.getHeader("Authorization");
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                try {
+                    String jwt = authHeader.substring(7);
+                    String extractedUserId = jwtService.extractClaim(jwt, claims -> {
+                        Object uid = claims.get("userId");
+                        return uid != null ? uid.toString() : null;
+                    });
+                    if (extractedUserId != null) {
+                        userId = java.util.UUID.fromString(extractedUserId);
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        if (userId == null) {
+            return ResponseEntity.status(401).body(ApiResponse.error("User authentication required"));
+        }
+        String ipAddress = servletRequest.getRemoteAddr();
+        String userAgent = servletRequest.getHeader("User-Agent");
+        String version = (request != null && request.getTermsVersion() != null) ? request.getTermsVersion() : "v1.0";
+        return ResponseEntity.ok(ApiResponse.success(service.acceptTerms(userId, version, ipAddress, userAgent)));
     }
 
     @PostMapping("/logout")

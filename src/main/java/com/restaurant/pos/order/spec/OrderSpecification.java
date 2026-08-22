@@ -68,7 +68,8 @@ public class OrderSpecification {
                 String pattern = "%" + safe.toLowerCase() + "%";
                 predicates.add(cb.or(
                     cb.like(cb.lower(root.get("orderNo")), pattern),
-                    cb.like(cb.lower(root.get("description")), pattern)
+                    cb.like(cb.lower(root.get("description")), pattern),
+                    cb.like(cb.lower(root.get("remarks")), pattern)
                 ));
             }
 

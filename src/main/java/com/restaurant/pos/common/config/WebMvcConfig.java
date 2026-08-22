@@ -19,8 +19,14 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Value("${app.cors.allowed-origins:" +
             "http://localhost:3000," +
             "http://localhost:3001," +
+            "http://localhost:5173," +
+            "http://localhost:5174," +
             "http://192.168.29.152:3000," +
             "http://192.168.29.152:3001," +
+            "https://test-cafe-qr-landing.vercel.app," +
+            "https://cafe-qr-landing.vercel.app," +
+            "https://test-cafeqr-landing.vercel.app," +
+            "https://cafeqr-landing.vercel.app," +
             "https://cafe-test-qr-frontend.vercel.app," +
             "https://cafe-qr-frontend.vercel.app," +
             "https://test-cafe-qr-delivery-app.vercel.app," +
@@ -29,7 +35,11 @@ public class WebMvcConfig implements WebMvcConfigurer {
             "https://cafe-qr-delivery-website.vercel.app," +
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
-            "https://*.pages.dev" +
+            "https://*.pages.dev," +
+            "https://*.vercel.app," +
+            "https://pos.cafeqr.in," +
+            "https://cafeqr.in," +
+            "https://*.cafeqr.in" +
             "}")
     private String[] allowedOrigins;
 

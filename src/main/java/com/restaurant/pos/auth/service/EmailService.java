@@ -91,6 +91,39 @@ public class EmailService {
         sendPlainTextEmail(toEmail, "Your CafeQR verification code", body, "OTP email");
     }
 
+    public void sendWelcomeCredentialsEmail(String toEmail, String name, String planName, String password) {
+        String body = String.format("""
+                Dear %s,
+
+                Thank you for your purchase of %s!
+                Your CafeQR POS account has been successfully created and activated with a 1-Year Core License.
+
+                YOUR LOGIN CREDENTIALS:
+                ---------------------------------------
+                Portal URL: https://pos.cafeqr.in/login
+                Email ID:   %s
+                Password:   %s
+                ---------------------------------------
+
+                Next steps:
+                1. Login to your POS portal using the credentials above.
+                2. We recommend changing your password from Profile Settings.
+                3. Our onboarding team will connect with you to guide you through initial setup and printer delivery tracking.
+
+                Need help? Reach out to us at pnriyas50@gmail.com or via WhatsApp support.
+
+                Welcome aboard,
+                Team CafeQR
+                """,
+                name != null && !name.isBlank() ? name : "Partner",
+                planName != null ? planName : "CafeQR POS",
+                toEmail,
+                password
+        );
+
+        sendPlainTextEmail(toEmail, "🎉 Welcome to CafeQR POS! Your Account Credentials", body, "Welcome Credentials Email");
+    }
+
     private void sendPlainTextEmail(String toEmail, String subject, String body, String logLabel) {
         if (shouldUseGmailApi()) {
             sendPlainTextEmailViaGmailApi(toEmail, subject, body, logLabel);

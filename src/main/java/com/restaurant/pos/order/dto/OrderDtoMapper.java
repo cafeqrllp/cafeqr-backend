@@ -20,6 +20,7 @@ public class OrderDtoMapper {
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private final com.restaurant.pos.order.repository.PaymentRepository paymentRepository;
     private final com.restaurant.pos.order.repository.PaymentSplitRepository paymentSplitRepository;
+    private final com.restaurant.pos.client.repository.TerminalRepository terminalRepository;
 
     private java.time.Instant toInstant(java.time.LocalDateTime ldt) {
         if (ldt == null)
@@ -176,6 +177,18 @@ public class OrderDtoMapper {
             }
         }
 
+        String terminalCode = null;
+        String terminalName = null;
+        if (order.getTerminalId() != null) {
+            try {
+                com.restaurant.pos.client.domain.Terminal t = terminalRepository.findById(order.getTerminalId()).orElse(null);
+                if (t != null) {
+                    terminalCode = t.getTerminalCode();
+                    terminalName = t.getName();
+                }
+            } catch (Exception ignored) {}
+        }
+
         return OrderResponseDto.builder()
                 .id(order.getId())
                 .orderNo(order.getOrderNo())
@@ -183,6 +196,11 @@ public class OrderDtoMapper {
                 .orderStatus(order.getOrderStatus())
                 .paymentStatus(order.getPaymentStatus())
                 .orderSource(order.getOrderSource())
+                .orgId(order.getOrgId())
+                .terminalId(order.getTerminalId())
+                .terminalCode(terminalCode)
+                .terminalName(terminalName)
+                .syncOrigin(order.getSyncOrigin())
                 .tableId(order.getTableId())
                 .tableNumber(order.getTableNumber())
                 .warehouseId(order.getWarehouseId())
@@ -195,6 +213,7 @@ public class OrderDtoMapper {
                 .grandTotal(order.getGrandTotal())
                 .fulfillmentType(order.getFulfillmentType())
                 .description(order.getDescription())
+                .remarks(order.getRemarks() != null ? order.getRemarks() : order.getDescription())
                 .reference(order.getReference())
                 .customers(order.getCustomers())
                 .isCredit(order.getIsCredit())
@@ -365,6 +384,7 @@ public class OrderDtoMapper {
         order.setIsCredit(Boolean.TRUE.equals(request.getIsCredit()));
         order.setCreditCustomerId(request.getCreditCustomerId());
         order.setDescription(request.getDescription());
+        order.setRemarks(request.getRemarks() != null ? request.getRemarks() : request.getDescription());
         order.setReference(request.getReference());
         order.setPaymentMethod(request.getPaymentMethod());
         if (request.getOrderDate() != null) {
@@ -441,6 +461,8 @@ public class OrderDtoMapper {
             existing.setPaymentStatus(request.getPaymentStatus());
         if (request.getDescription() != null)
             existing.setDescription(request.getDescription());
+        if (request.getRemarks() != null)
+            existing.setRemarks(request.getRemarks());
         if (request.getReference() != null)
             existing.setReference(request.getReference());
         if (request.getPaymentMethod() != null)
@@ -508,6 +530,7 @@ public class OrderDtoMapper {
         order.setOrderStatus(request.getOrderStatus());
         order.setPaymentStatus(request.getPaymentStatus());
         order.setDescription(request.getDescription());
+        order.setRemarks(request.getRemarks());
         order.setReference(request.getReference());
         order.setPaymentMethod(request.getPaymentMethod());
         order.setFulfillmentType(request.getFulfillmentType());

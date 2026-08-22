@@ -51,6 +51,7 @@ public class OrderSummaryDto {
     private String paymentNo;
     private String paymentMethod;
     private String description;
+    private String remarks;
     @Builder.Default
     private List<OrderLineSummaryDto> lines = new ArrayList<>();
     private UUID warehouseId;

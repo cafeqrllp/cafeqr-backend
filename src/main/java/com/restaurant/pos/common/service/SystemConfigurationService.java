@@ -251,6 +251,8 @@ public class SystemConfigurationService {
                 .clientId(source.getClientId())
                 .orgId(source.getOrgId())
                 .onlinePaymentEnabled(source.isOnlinePaymentEnabled())
+                .razorpayKeyId(source.getRazorpayKeyId())
+                .razorpayKeySecret(source.getRazorpayKeySecret())
                 .menuImagesEnabled(source.isMenuImagesEnabled())
                 .creditEnabled(source.isCreditEnabled())
                 .creditAllocationMode(normalizeCreditAllocationMode(source.getCreditAllocationMode()))
@@ -380,6 +382,8 @@ public class SystemConfigurationService {
 
         return ConfigurationDto.builder()
                 .onlinePaymentEnabled(entity.isOnlinePaymentEnabled())
+                .razorpayKeyId(entity.getRazorpayKeyId())
+                .razorpayKeySecret(entity.getRazorpayKeySecret())
                 .menuImagesEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.MENU_IMAGES, entity.isMenuImagesEnabled()))
                 .creditEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CREDIT_LEDGER, entity.isCreditEnabled()))
                 .creditAllocationMode(normalizeCreditAllocationMode(entity.getCreditAllocationMode()))
@@ -391,7 +395,7 @@ public class SystemConfigurationService {
                 .customersEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CRM, entity.isCustomersEnabled()))
                 .loyaltyEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CRM, entity.isLoyaltyEnabled()))
                 .sendToKitchenEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.KOT, entity.isSendToKitchenEnabled()))
-                .onlineDeliveryEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.ONLINE_DELIVERY, entity.isOnlineDeliveryEnabled()))
+                .onlineDeliveryEnabled(entity.isOnlineDeliveryEnabled())
                 .allowMultipleCustomersPerOrder(entity.isAllowMultipleCustomersPerOrder())
                 .customerAgeEnabled(entity.isCustomerAgeEnabled())
                 .posProductListingEnabled(entity.isPosProductListingEnabled())
@@ -439,6 +443,10 @@ public class SystemConfigurationService {
 
     private void updateEntityFromDto(SystemConfiguration entity, ConfigurationDto dto) {
         entity.setOnlinePaymentEnabled(dto.isOnlinePaymentEnabled());
+        if (dto.getRazorpayKeyId() != null) entity.setRazorpayKeyId(dto.getRazorpayKeyId().trim());
+        if (dto.getRazorpayKeySecret() != null && !dto.getRazorpayKeySecret().isBlank()) {
+            entity.setRazorpayKeySecret(dto.getRazorpayKeySecret().trim());
+        }
         entity.setMenuImagesEnabled(dto.isMenuImagesEnabled());
         entity.setCreditEnabled(dto.isCreditEnabled());
         entity.setCreditAllocationMode(normalizeCreditAllocationMode(dto.getCreditAllocationMode()));
@@ -550,9 +558,6 @@ public class SystemConfigurationService {
         }
         if (dto.isMenuImagesEnabled() && !isModuleActive(clientId, orgId, ModuleName.MENU_IMAGES)) {
             throw new BusinessException("Subscription required: Menu Images module is not active. Please visit the billing center.");
-        }
-        if (dto.isOnlineDeliveryEnabled() && !isModuleActive(clientId, orgId, ModuleName.ONLINE_DELIVERY)) {
-            throw new BusinessException("Subscription required: Online Delivery module is not active. Please visit the billing center.");
         }
     }
 

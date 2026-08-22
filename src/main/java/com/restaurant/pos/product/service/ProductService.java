@@ -25,9 +25,7 @@ import com.restaurant.pos.product.dto.VariantGroupDto;
 import com.restaurant.pos.product.dto.VariantOptionDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.hibernate.Hibernate;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -396,42 +394,6 @@ public class ProductService {
         return mapToDetailDto(product);
     }
 
-    private void initializeProductDetails(Product product) {
-        if (product.getCategory() != null)
-            product.getCategory().getName();
-        if (product.getUom() != null)
-            product.getUom().getName();
-
-        if (product.getVariantMappings() != null) {
-            product.getVariantMappings().forEach(mapping -> {
-                if (mapping.getVariantGroup() != null) {
-                    mapping.getVariantGroup().getName();
-                    mapping.getVariantGroup().getOptions().size();
-                }
-            });
-        }
-
-        if (product.getVariantPricings() != null) {
-            product.getVariantPricings().forEach(pricing -> {
-                if (pricing.getVariantOption() != null) {
-                    pricing.getVariantOption().getName();
-                }
-            });
-        }
-
-        if (product.getUpsells() != null) {
-            product.getUpsells().forEach(upsell -> {
-                if (upsell.getUpsellProduct() != null) {
-                    upsell.getUpsellProduct().getName();
-                }
-            });
-        }
-    }
-
-    private ProductListDto mapToDto(Product product) {
-        return mapToDto(product, true);
-    }
-
     private ProductListDto mapToDto(Product product, boolean includeImages) {
         try {
             return ProductListDto.builder()
@@ -753,11 +715,11 @@ public class ProductService {
 
         // Optimization: Pre-fetch everything for validation
         java.util.Set<UUID> validCategoryIds = categoryRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId)
-                .stream().map(Category::getId).collect(Collectors.toSet());
+                .stream().map(c -> c.getId()).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         java.util.Set<UUID> validUomIds = uomRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId)
-                .stream().map(Uom::getId).collect(Collectors.toSet());
+                .stream().map(u -> u.getId()).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         Map<String, Category> categoryNameMap = categoryRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId)
-                .stream().collect(Collectors.toMap(Category::getName, c -> c, (a, b) -> a));
+                .stream().filter(c -> c.getName() != null).collect(Collectors.toMap(c -> c.getName(), c -> c, (a, b) -> a));
 
         for (Product product : products) {
             // Batch Duplicate Check

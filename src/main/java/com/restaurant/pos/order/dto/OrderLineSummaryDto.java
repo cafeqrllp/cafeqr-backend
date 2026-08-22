@@ -40,4 +40,5 @@ public class OrderLineSummaryDto {
     private BigDecimal manualDiscountAmount;
     private BigDecimal manualDiscountPercent;
     private BigDecimal allocatedOrderDiscount;
+    private String description;
 }

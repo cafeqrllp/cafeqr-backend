@@ -68,6 +68,15 @@ public class User extends BaseEntity implements UserDetails {
     @Column(name = "is_enabled", nullable = false)
     private Boolean isEnabled = true;
 
+    @Column(name = "terms_accepted_version")
+    private String termsAcceptedVersion;
+
+    @Column(name = "terms_accepted_at")
+    private java.time.LocalDateTime termsAcceptedAt;
+
+    @Column(name = "terms_accepted_ip")
+    private String termsAcceptedIp;
+
     @Override
     @JsonIgnore
     public Collection<? extends GrantedAuthority> getAuthorities() {

@@ -6,9 +6,12 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+/**
+ * DTO representing a Business Partner (Customer or Vendor) in the Credit module.
+ */
 @Data
 @Builder
-public class CreditCustomerDto {
+public class CreditBPartnerDto {
     private UUID id;
     private UUID linkedCustomerId;
     private String name;
@@ -22,4 +25,5 @@ public class CreditCustomerDto {
     private BigDecimal paymentsReceived;
     private Long openInvoiceCount;
     private String notes;
+    private String partnerType;
 }
