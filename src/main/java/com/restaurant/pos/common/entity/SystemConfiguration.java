@@ -32,6 +32,10 @@ public class SystemConfiguration {
 
     // Power Modules (Feature Toggles)
     private boolean onlinePaymentEnabled;
+    @Column(name = "razorpay_key_id", length = 100)
+    private String razorpayKeyId;
+    @Column(name = "razorpay_key_secret", length = 100)
+    private String razorpayKeySecret;
     private boolean menuImagesEnabled;
     private boolean creditEnabled;
     @Column(name = "credit_allocation_mode", length = 30)

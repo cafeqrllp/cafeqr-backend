@@ -35,6 +35,9 @@ public class UpdateOrderRequest {
     @Schema(description = "Operational description or notes")
     private String description;
 
+    @Schema(description = "Order remarks or kitchen notes")
+    private String remarks;
+
     @Schema(description = "Reference ID/No")
     private String reference;
 

@@ -1,5 +1,7 @@
 package com.restaurant.pos.delivery.controller;
 
+import com.restaurant.pos.client.domain.Client;
+import com.restaurant.pos.client.domain.Organization;
 import com.restaurant.pos.client.repository.ClientRepository;
 import com.restaurant.pos.client.repository.OrganizationRepository;
 import com.restaurant.pos.common.dto.ApiResponse;
@@ -17,6 +19,8 @@ import com.restaurant.pos.product.repository.ProductRepository;
 import com.restaurant.pos.print.service.PrintJobService;
 import com.restaurant.pos.print.domain.PrintJobKind;
 import com.restaurant.pos.push.service.PushNotificationService;
+import com.restaurant.pos.payment.service.RazorpayService;
+import com.restaurant.pos.payment.dto.RazorpayOrderResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -41,6 +45,7 @@ import java.util.stream.Collectors;
  * Endpoints:
  *   GET  /delivery/restaurant/{clientId}/settings        — brand + restaurant info
  *   GET  /delivery/restaurant/{clientId}/menu            — active menu items
+ *   POST /delivery/payments/create-order                 — create Razorpay order
  *   POST /delivery/orders                                — place a delivery/takeaway order
  *   GET  /delivery/orders/{orderId}                      — track a single order
  *   GET  /delivery/orders?clientId=&email=               — list orders for a customer email
@@ -61,29 +66,183 @@ public class DeliveryController {
     private final SystemConfigurationService systemConfigurationService;
     private final PrintJobService        printJobService;
     private final PushNotificationService pushNotificationService;
+    private final RazorpayService        razorpayService;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 0. GET /delivery/resolve
+    // Public handle/slug & domain resolver for clean, brandable URLs.
+    // E.g. GET /delivery/resolve?handle=arnos-marketing&branch=main-outlet
+    // ─────────────────────────────────────────────────────────────────────────
+    @Transactional(readOnly = true)
+    @GetMapping("/resolve")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> resolveSlug(
+            @RequestParam(required = true) String handle,
+            @RequestParam(required = false) String branch) {
+
+        String trimmedHandle = handle != null ? handle.trim() : "";
+        String trimmedBranch = branch != null ? branch.trim() : null;
+
+        Client client = null;
+        Organization targetOrg = null;
+
+        // 1. Try UUID parse for handle
+        UUID possibleUuid = null;
+        try {
+            possibleUuid = UUID.fromString(trimmedHandle);
+        } catch (Exception ignored) { }
+
+        if (possibleUuid != null) {
+            // Check if it's a Client UUID
+            client = clientRepository.findById(possibleUuid).orElse(null);
+            if (client == null) {
+                // Check if it's an Organization UUID
+                var orgOpt = organizationRepository.findById(possibleUuid);
+                if (orgOpt.isPresent()) {
+                    targetOrg = orgOpt.get();
+                    client = clientRepository.findById(targetOrg.getClientId()).orElse(null);
+                }
+            }
+        }
+
+        // 2. If not UUID, look up client by slug
+        if (client == null) {
+            client = clientRepository.findBySlugIgnoreCase(trimmedHandle).orElse(null);
+        }
+
+        // 3. If still null, check if handle directly matches a uniquely named Organization slug
+        if (client == null) {
+            List<Organization> orgList = organizationRepository.findAllBySlugIgnoreCase(trimmedHandle);
+            if (orgList.size() == 1) {
+                targetOrg = orgList.get(0);
+                client = clientRepository.findById(targetOrg.getClientId()).orElse(null);
+            } else if (orgList.size() > 1) {
+                log.warn("[CafeQR Resolver] Ambiguous single-segment handle '{}' matches {} organizations across different clients. Scoped handle required.", trimmedHandle, orgList.size());
+            }
+        }
+
+        if (client == null) {
+            throw new ResourceNotFoundException("Store not found for handle: " + trimmedHandle);
+        }
+
+        // 4. Resolve Branch if targetOrg not already selected
+        if (targetOrg == null && trimmedBranch != null && !trimmedBranch.isBlank()) {
+            // Try branch by UUID
+            try {
+                UUID branchUuid = UUID.fromString(trimmedBranch);
+                targetOrg = organizationRepository.findByIdAndClientId(branchUuid, client.getId()).orElse(null);
+            } catch (Exception ignored) { }
+
+            // Try branch by slug
+            if (targetOrg == null) {
+                targetOrg = organizationRepository.findByClientIdAndSlugIgnoreCase(client.getId(), trimmedBranch).orElse(null);
+            }
+
+            // Try branch by branchCode
+            if (targetOrg == null) {
+                targetOrg = organizationRepository.findByClientIdAndBranchCodeIgnoreCase(client.getId(), trimmedBranch).orElse(null);
+            }
+        }
+
+        // 5. If branch still null, pick first active branch of client (or primary HQ)
+        if (targetOrg == null) {
+            List<Organization> activeOrgs = organizationRepository.findByClientIdAndIsactive(client.getId(), "Y");
+            if (!activeOrgs.isEmpty()) {
+                targetOrg = activeOrgs.get(0);
+            } else {
+                List<Organization> allOrgs = organizationRepository.findAllByClientId(client.getId());
+                if (!allOrgs.isEmpty()) {
+                    targetOrg = allOrgs.get(0);
+                }
+            }
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("clientId", client.getId());
+        data.put("clientSlug", client.getSlug());
+        data.put("restaurantName", client.getName());
+        data.put("brandColor", nvl(client.getBrandColor(), "#f97316"));
+        data.put("logoUrl", client.getLogoUrl());
+        data.put("bannerUrl", client.getBannerUrl());
+        data.put("posType", client.getPosType() != null ? client.getPosType() : "Restaurant");
+
+        List<Organization> clientOrgs = organizationRepository.findByClientIdAndIsactive(client.getId(), "Y");
+        if (clientOrgs.isEmpty()) {
+            clientOrgs = organizationRepository.findAllByClientId(client.getId());
+        }
+
+        List<Map<String, Object>> branchesPayload = new ArrayList<>();
+        for (Organization o : clientOrgs) {
+            Map<String, Object> bMap = new LinkedHashMap<>();
+            bMap.put("id", o.getId());
+            bMap.put("name", o.getName());
+            bMap.put("slug", o.getSlug());
+            bMap.put("branchCode", o.getBranchCode());
+            bMap.put("posType", o.getPosType());
+            bMap.put("address", o.getAddress());
+            branchesPayload.add(bMap);
+        }
+        data.put("branches", branchesPayload);
+
+        if (targetOrg != null) {
+            data.put("orgId", targetOrg.getId());
+            data.put("branchSlug", targetOrg.getSlug());
+            data.put("branchCode", targetOrg.getBranchCode());
+            data.put("branchName", targetOrg.getName());
+            if (targetOrg.getPosType() != null && !targetOrg.getPosType().isBlank()) {
+                data.put("posType", targetOrg.getPosType());
+            }
+            if (targetOrg.getBannerUrl() != null && !targetOrg.getBannerUrl().isBlank()) {
+                data.put("bannerUrl", targetOrg.getBannerUrl());
+            }
+            if (targetOrg.getLogoUrl() != null && !targetOrg.getLogoUrl().isBlank()) {
+                data.put("logoUrl", targetOrg.getLogoUrl());
+            }
+            data.put("canonicalPath", "/" + client.getSlug() + "/" + targetOrg.getSlug());
+        } else {
+            data.put("canonicalPath", "/" + client.getSlug());
+        }
+
+        return ResponseEntity.ok(ApiResponse.success("Resolved successfully", data));
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // 1. GET /delivery/restaurant/{clientId}/settings
     // Returns brand colour, name, logo, contact info, delivery toggle.
     // ─────────────────────────────────────────────────────────────────────────
+    @Transactional(readOnly = true)
     @GetMapping("/restaurant/{clientId}/settings")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getSettings(
             @PathVariable UUID clientId,
             @RequestParam(required = false) String orgId) {
 
-        var client = clientRepository.findById(clientId)
-                .orElseThrow(() -> new ResourceNotFoundException("Restaurant not found"));
+        UUID orgUuid = parseOrgId(orgId);
 
-        if (!client.isSubscriptionActive()) {
+        if (!isRestaurantSubscriptionActive(clientId, orgUuid)) {
             throw new BusinessException("Restaurant subscription is inactive.");
         }
 
-        UUID orgUuid = parseOrgId(orgId);
+        var clientOpt = clientRepository.findById(clientId);
+        var client = clientOpt.orElse(null);
+        if (client == null) {
+            var orgOpt = organizationRepository.findById(clientId);
+            if (orgOpt.isPresent()) {
+                UUID actualClientId = orgOpt.get().getClientId();
+                client = clientRepository.findById(actualClientId).orElse(null);
+                if (orgUuid == null) {
+                    orgUuid = orgOpt.get().getId();
+                }
+            }
+        }
+
+        if (client == null) {
+            throw new ResourceNotFoundException("Restaurant not found");
+        }
 
         Map<String, Object> settings = new LinkedHashMap<>();
         settings.put("clientId",         clientId);
         settings.put("restaurantName",   nvl(client.getName(), "Our Restaurant"));
         settings.put("logoUrl",          client.getLogoUrl());
+        settings.put("bannerUrl",        client.getBannerUrl());
         settings.put("brandColor",       nvl(client.getBrandColor(), "#f97316"));
         settings.put("address",          client.getAddress());
         settings.put("phone",            client.getPhone());
@@ -108,6 +267,12 @@ public class DeliveryController {
             settings.put("pricesIncludeTax", config.isPricesIncludeTax());
             settings.put("taxSplitEnabled", config.isTaxSplitEnabled());
             settings.put("currencyDecimalPlaces", config.getCurrencyDecimalPlaces());
+
+            boolean onlinePayActive = config.isOnlinePaymentEnabled()
+                    && config.getRazorpayKeyId() != null
+                    && !config.getRazorpayKeyId().isBlank();
+            settings.put("onlinePaymentEnabled", onlinePayActive);
+            settings.put("razorpayKeyId", config.getRazorpayKeyId());
         } catch (Exception e) {
             log.error("Failed to load system configurations for delivery settings", e);
             settings.put("taxEnabled", false);
@@ -116,6 +281,8 @@ public class DeliveryController {
             settings.put("pricesIncludeTax", false);
             settings.put("taxSplitEnabled", true);
             settings.put("currencyDecimalPlaces", 2);
+            settings.put("onlinePaymentEnabled", false);
+            settings.put("razorpayKeyId", null);
         }
 
         // Branch-wise settings override
@@ -127,6 +294,9 @@ public class DeliveryController {
                     }
                     if (org.getLogoUrl() != null && !org.getLogoUrl().isBlank()) {
                         settings.put("logoUrl", org.getLogoUrl());
+                    }
+                    if (org.getBannerUrl() != null && !org.getBannerUrl().isBlank()) {
+                        settings.put("bannerUrl", org.getBannerUrl());
                     }
                     if (org.getAddress() != null && !org.getAddress().isBlank()) {
                         settings.put("address", org.getAddress());
@@ -140,12 +310,19 @@ public class DeliveryController {
                     if (org.getTimezone() != null && !org.getTimezone().isBlank()) {
                         settings.put("timezone", org.getTimezone());
                     }
+                    if (org.getPosType() != null && !org.getPosType().isBlank()) {
+                        settings.put("posType", org.getPosType());
+                    }
                     // Delivery radius and branch coordinates for delivery zone validation
                     settings.put("deliveryRadiusKm", org.getDeliveryRadiusKm());
                     settings.put("branchLatitude", org.getLatitude());
                     settings.put("branchLongitude", org.getLongitude());
                 }
             });
+        }
+
+        if (!settings.containsKey("posType")) {
+            settings.put("posType", client.getPosType() != null ? client.getPosType() : "Restaurant");
         }
 
         return ResponseEntity.ok(ApiResponse.success(settings));
@@ -156,6 +333,7 @@ public class DeliveryController {
     // Returns active, available products scoped to clientId.
     // Optional ?orgId= to narrow to a specific branch.
     // ─────────────────────────────────────────────────────────────────────────
+    @Transactional(readOnly = true)
     @GetMapping("/restaurant/{clientId}/menu")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getMenu(
             @PathVariable UUID clientId,
@@ -187,6 +365,72 @@ public class DeliveryController {
                     item.put("productType", p.getProductType());
                     item.put("taxRate",     p.getTaxRate());
                     item.put("isPackagedGood", p.isPackagedGood());
+
+                    boolean hasVariants = false;
+                    try {
+                        hasVariants = p.getVariantMappings() != null && !p.getVariantMappings().isEmpty();
+                    } catch (Exception e) {
+                        log.warn("[Delivery] Failed checking variantMappings for product {}: {}", p.getId(), e.getMessage());
+                    }
+                    item.put("hasVariants",  hasVariants);
+                    item.put("has_variants", hasVariants);
+
+                    if (hasVariants) {
+                        try {
+                            List<Map<String, Object>> mappings = p.getVariantMappings().stream().map(m -> {
+                                Map<String, Object> mMap = new LinkedHashMap<>();
+                                mMap.put("id", m.getId());
+                                mMap.put("isRequired", m.isRequired());
+                                if (m.getVariantGroup() != null) {
+                                    Map<String, Object> gMap = new LinkedHashMap<>();
+                                    gMap.put("id", m.getVariantGroup().getId());
+                                    gMap.put("name", m.getVariantGroup().getName());
+                                    if (m.getVariantGroup().getOptions() != null) {
+                                        List<Map<String, Object>> opts = m.getVariantGroup().getOptions().stream()
+                                                .filter(o -> o != null && o.isActive())
+                                                .map(o -> {
+                                                    Map<String, Object> oMap = new LinkedHashMap<>();
+                                                    oMap.put("id", o.getId());
+                                                    oMap.put("name", o.getName());
+                                                    oMap.put("additionalPrice", o.getAdditionalPrice());
+                                                    return oMap;
+                                                }).collect(Collectors.toList());
+                                        gMap.put("options", opts);
+                                    }
+                                    mMap.put("variantGroup", gMap);
+                                }
+                                return mMap;
+                            }).collect(Collectors.toList());
+                            item.put("variantMappings", mappings);
+                        } catch (Exception e) {
+                            log.warn("[Delivery] Failed mapping variantMappings for product {}: {}", p.getId(), e.getMessage());
+                        }
+
+                        try {
+                            if (p.getVariantPricings() != null) {
+                                List<Map<String, Object>> pricings = p.getVariantPricings().stream()
+                                        .filter(pr -> pr != null && pr.isAvailable())
+                                        .map(pr -> {
+                                            Map<String, Object> prMap = new LinkedHashMap<>();
+                                            prMap.put("id", pr.getId());
+                                            prMap.put("overridePrice", pr.getOverridePrice());
+                                            prMap.put("isAvailable", pr.isAvailable());
+                                            if (pr.getVariantOption() != null) {
+                                                Map<String, Object> voMap = new LinkedHashMap<>();
+                                                voMap.put("id", pr.getVariantOption().getId());
+                                                voMap.put("name", pr.getVariantOption().getName());
+                                                voMap.put("additionalPrice", pr.getVariantOption().getAdditionalPrice());
+                                                prMap.put("variantOption", voMap);
+                                            }
+                                            return prMap;
+                                        }).collect(Collectors.toList());
+                                item.put("variantPricings", pricings);
+                            }
+                        } catch (Exception e) {
+                            log.warn("[Delivery] Failed mapping variantPricings for product {}: {}", p.getId(), e.getMessage());
+                        }
+                    }
+
                     return item;
                 })
                 .collect(Collectors.toList());
@@ -195,23 +439,70 @@ public class DeliveryController {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3. POST /delivery/orders
-    // Places a new delivery or takeaway order.
-    //
-    // Expected request body:
-    // {
-    //   "clientId":        "uuid",
-    //   "orgId":           "uuid" | null,
-    //   "customerEmail":   "string",
-    //   "customerName":    "string",
-    //   "customerPhone":   "string",
-    //   "fulfillmentType": "DELIVERY" | "TAKEAWAY",
-    //   "deliveryAddress": "string",
-    //   "note":            "string",
-    //   "items": [
-    //     { "productId": "uuid", "quantity": 2 }
-    //   ]
-    // }
+    // 3. POST /delivery/payments/create-order
+    // Creates a Razorpay Order using the restaurant's own credentials.
+    // ─────────────────────────────────────────────────────────────────────────
+    @PostMapping("/payments/create-order")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> createPaymentOrder(
+            @RequestBody Map<String, Object> payload) {
+
+        UUID clientId = UUID.fromString((String) payload.get("clientId"));
+        validateSubscription(clientId);
+
+        UUID orgUuid = parseOrgId((String) payload.get("orgId"));
+        var clientOpt = clientRepository.findById(clientId);
+        if (clientOpt.isEmpty()) {
+            var orgOpt = organizationRepository.findById(clientId);
+            if (orgOpt.isPresent()) {
+                clientId = orgOpt.get().getClientId();
+                if (orgUuid == null) {
+                    orgUuid = orgOpt.get().getId();
+                }
+            }
+        }
+        ConfigurationDto config = systemConfigurationService.getConfigurationForClientAndBranch(clientId, orgUuid);
+
+        if (!config.isOnlinePaymentEnabled() || config.getRazorpayKeyId() == null || config.getRazorpayKeyId().isBlank()
+                || config.getRazorpayKeySecret() == null || config.getRazorpayKeySecret().isBlank()) {
+            throw new BusinessException("Online payment is not configured or enabled for this restaurant.");
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) payload.get("items");
+        if (items == null || items.isEmpty()) {
+            throw new BusinessException("No items provided for payment calculation.");
+        }
+
+        BigDecimal grandTotal = calculateOrderTotal(clientId, orgUuid, items, config);
+
+        Map<String, Object> notes = new LinkedHashMap<>();
+        notes.put("clientId", clientId.toString());
+        if (orgUuid != null) notes.put("orgId", orgUuid.toString());
+        if (payload.get("customerPhone") != null) notes.put("customerPhone", String.valueOf(payload.get("customerPhone")));
+        if (payload.get("customerEmail") != null) notes.put("customerEmail", String.valueOf(payload.get("customerEmail")));
+
+        RazorpayOrderResponse rzpOrder = razorpayService.createOrderWithKeys(
+                config.getRazorpayKeyId(),
+                config.getRazorpayKeySecret(),
+                grandTotal,
+                "INR",
+                "del_" + System.currentTimeMillis(),
+                notes
+        );
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("razorpayOrderId", rzpOrder.getOrderId());
+        response.put("keyId",           rzpOrder.getKeyId());
+        response.put("amount",          rzpOrder.getAmount());
+        response.put("currency",        rzpOrder.getCurrency());
+        response.put("grandTotal",      grandTotal);
+
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 4. POST /delivery/orders
+    // Places a new delivery or takeaway order (supports COD & Online).
     // ─────────────────────────────────────────────────────────────────────────
     @Transactional
     @PostMapping("/orders")
@@ -223,6 +514,19 @@ public class DeliveryController {
             validateSubscription(clientId);
 
             UUID orgUuid          = parseOrgId((String) payload.get("orgId"));
+            var clientOpt = clientRepository.findById(clientId);
+            if (clientOpt.isEmpty()) {
+                var orgOpt = organizationRepository.findById(clientId);
+                if (orgOpt.isPresent()) {
+                    clientId = orgOpt.get().getClientId();
+                    if (orgUuid == null) {
+                        orgUuid = orgOpt.get().getId();
+                    }
+                }
+            }
+            final UUID effectiveClientId = clientId;
+            final UUID effectiveOrgId = orgUuid;
+
             String fulfillment    = String.valueOf(payload.getOrDefault("fulfillmentType", "DELIVERY")).toUpperCase();
             String customerEmail  = (String) payload.getOrDefault("customerEmail", "");
             String customerName   = (String) payload.getOrDefault("customerName",  "");
@@ -231,12 +535,37 @@ public class DeliveryController {
             String note           = (String) payload.getOrDefault("note", "");
             String remarks        = (String) payload.getOrDefault("remarks", "");
 
+            String paymentMethod     = String.valueOf(payload.getOrDefault("paymentMethod", "COD")).toUpperCase();
+            String razorpayPaymentId = (String) payload.get("razorpayPaymentId");
+            String razorpayOrderId   = (String) payload.get("razorpayOrderId");
+            String razorpaySignature = (String) payload.get("razorpaySignature");
+
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> items = (List<Map<String, Object>>) payload.get("items");
 
             if (items == null || items.isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(ApiResponse.success(Map.of("error", "No items in order")));
+            }
+
+            // Load configuration for client & orgId
+            ConfigurationDto config = null;
+            try {
+                config = systemConfigurationService.getConfigurationForClientAndBranch(clientId, orgUuid);
+            } catch (Exception e) {
+                log.warn("[Delivery] Failed to fetch system configuration, using fallback defaults", e);
+            }
+
+            boolean isOnlinePayment = "ONLINE".equals(paymentMethod) || "RAZORPAY".equals(paymentMethod);
+            if (isOnlinePayment) {
+                if (config == null || config.getRazorpayKeySecret() == null || config.getRazorpayKeySecret().isBlank()) {
+                    throw new BusinessException("Payment gateway is not configured for this restaurant.");
+                }
+                boolean valid = razorpayService.verifyPaymentSignatureWithSecret(
+                        razorpayOrderId, razorpayPaymentId, razorpaySignature, config.getRazorpayKeySecret());
+                if (!valid) {
+                    throw new BusinessException("Payment signature verification failed. Order not confirmed.");
+                }
             }
 
             String orderNo = "DEL-" + System.currentTimeMillis();
@@ -271,26 +600,24 @@ public class DeliveryController {
                                 customerLat, customerLng);
                         if (distKm > org.getDeliveryRadiusKm()) {
                             throw new BusinessException(String.format(
-                                    "Your location is %.1f km away. Delivery is only available within %.0f km of the restaurant.",
+                                     "Your location is %.1f km away. Delivery is only available within %.0f km of the restaurant.",
                                     distKm, org.getDeliveryRadiusKm()));
                         }
                     }
                 });
             }
 
-            // FIX 1: clientId and orgId live in BaseEntity and are not reachable via
-            // the Lombok @Builder generated on Order itself. Build without them, then
-            // set via the inherited Lombok setters.
             Order order = Order.builder()
                     .id(UUID.randomUUID())
                     .orderNo(orderNo)
                     .orderType(OrderType.SALE)
                     .orderStatus("PENDING")
-                    .paymentStatus("PENDING")
+                    .paymentStatus(isOnlinePayment ? "PAID" : "PENDING")
                     .orderSource("DELIVERY_WEB")
                     .fulfillmentType(fulfillment)
                     .description(description)
                     .remarks(remarks)
+                    .reference(isOnlinePayment ? ("RAZORPAY:" + razorpayPaymentId) : "COD")
                     .orderDate(Instant.now())
                     .isactive("Y")
                     .build();
@@ -299,9 +626,6 @@ public class DeliveryController {
             order.setOrgId(orgUuid);
             order.setLatitude(latitude);
             order.setLongitude(longitude);
-
-            // Load configuration for client & orgId
-            ConfigurationDto config = null;
             try {
                 config = systemConfigurationService.getConfigurationForClientAndBranch(clientId, orgUuid);
             } catch (Exception e) {
@@ -357,8 +681,8 @@ public class DeliveryController {
                 int qty = ((Number) cartItem.get("quantity")).intValue();
 
                 Optional<Product> productOpt = productRepository.findWithCategoryById(productId)
-                        .filter(p -> clientId.equals(p.getClientId()))
-                        .filter(p -> orgUuid == null || p.getOrgId() == null || orgUuid.equals(p.getOrgId()))
+                        .filter(p -> effectiveClientId.equals(p.getClientId()))
+                        .filter(p -> effectiveOrgId == null || p.getOrgId() == null || effectiveOrgId.equals(p.getOrgId()))
                         .filter(Product::isActive)
                         .filter(Product::isAvailable);
 
@@ -371,6 +695,29 @@ public class DeliveryController {
 
                 Product p = productOpt.get();
                 BigDecimal faceUnit = p.getPrice();
+                String lineProductName = p.getName();
+                if (cartItem.get("variantName") != null && !String.valueOf(cartItem.get("variantName")).isBlank()) {
+                    lineProductName = p.getName() + " (" + String.valueOf(cartItem.get("variantName")).trim() + ")";
+                } else if (cartItem.get("variant_name") != null && !String.valueOf(cartItem.get("variant_name")).isBlank()) {
+                    lineProductName = p.getName() + " (" + String.valueOf(cartItem.get("variant_name")).trim() + ")";
+                }
+                if (cartItem.get("variantPrice") != null) {
+                    try {
+                        faceUnit = new BigDecimal(String.valueOf(cartItem.get("variantPrice")));
+                    } catch (Exception ignored) {}
+                } else if (cartItem.get("price") != null) {
+                    try {
+                        faceUnit = new BigDecimal(String.valueOf(cartItem.get("price")));
+                    } catch (Exception ignored) {}
+                }
+
+                UUID variantUuid = null;
+                if (cartItem.get("variantId") != null) {
+                    try { variantUuid = UUID.fromString(String.valueOf(cartItem.get("variantId"))); } catch (Exception ignored) {}
+                } else if (cartItem.get("variant_id") != null) {
+                    try { variantUuid = UUID.fromString(String.valueOf(cartItem.get("variant_id"))); } catch (Exception ignored) {}
+                }
+
                 BigDecimal quantity = BigDecimal.valueOf(qty);
                 BigDecimal grossLineAmount = faceUnit.multiply(quantity);
 
@@ -436,7 +783,8 @@ public class DeliveryController {
 
                 OrderLine line = OrderLine.builder()
                         .productId(productId)
-                        .productName(p.getName())
+                        .productName(lineProductName)
+                        .variantId(variantUuid)
                         .categoryName(p.getCategory() != null ? p.getCategory().getName() : null)
                         .isPackagedGood(isPackaged)
                         .quantity(quantity)
@@ -615,9 +963,110 @@ public class DeliveryController {
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void validateSubscription(UUID clientId) {
+    private BigDecimal calculateOrderTotal(UUID clientId, UUID orgUuid, List<Map<String, Object>> items, ConfigurationDto config) {
+        boolean gstEnabled = config != null && config.isTaxEnabled();
+        boolean pricesIncludeTax = config != null && config.isPricesIncludeTax();
+
+        BigDecimal baseRate = BigDecimal.ZERO;
+        List<Map<String, Object>> taxRatesList = new ArrayList<>();
+        String defaultTaxId = config != null ? config.getTaxDefaultId() : null;
+
+        if (config != null && config.getTaxRates() != null) {
+            for (Object rateObj : config.getTaxRates()) {
+                if (rateObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rateMap = (Map<String, Object>) rateObj;
+                    taxRatesList.add(rateMap);
+                }
+            }
+        }
+
+        if (gstEnabled && !taxRatesList.isEmpty()) {
+            Map<String, Object> defaultRateMap = null;
+            if (defaultTaxId != null) {
+                defaultRateMap = taxRatesList.stream()
+                        .filter(r -> defaultTaxId.equals(String.valueOf(r.get("id"))))
+                        .findFirst().orElse(null);
+            }
+            if (defaultRateMap == null) {
+                defaultRateMap = taxRatesList.get(0);
+            }
+            if (defaultRateMap != null && defaultRateMap.get("value") != null) {
+                try {
+                    baseRate = new BigDecimal(String.valueOf(defaultRateMap.get("value")));
+                } catch (Exception ignored) {}
+            }
+        }
+
+        BigDecimal grandTotal = BigDecimal.ZERO;
+
+        for (Map<String, Object> cartItem : items) {
+            UUID productId = UUID.fromString((String) cartItem.get("productId"));
+            int qty = ((Number) cartItem.get("quantity")).intValue();
+
+            Product p = productRepository.findWithCategoryById(productId)
+                    .filter(prod -> clientId.equals(prod.getClientId()))
+                    .filter(prod -> orgUuid == null || prod.getOrgId() == null || orgUuid.equals(prod.getOrgId()))
+                    .filter(Product::isActive)
+                    .filter(Product::isAvailable)
+                    .orElseThrow(() -> new BusinessException("Invalid or unavailable item: " + productId));
+
+            BigDecimal faceUnit = p.getPrice();
+            if (cartItem.get("variantPrice") != null) {
+                try {
+                    faceUnit = new BigDecimal(String.valueOf(cartItem.get("variantPrice")));
+                } catch (Exception ignored) {}
+            } else if (cartItem.get("price") != null) {
+                try {
+                    faceUnit = new BigDecimal(String.valueOf(cartItem.get("price")));
+                } catch (Exception ignored) {}
+            }
+            BigDecimal quantity = BigDecimal.valueOf(qty);
+
+            boolean isPackaged = p.isPackagedGood();
+            BigDecimal rate = BigDecimal.ZERO;
+            if (gstEnabled) {
+                rate = isPackaged ? (p.getTaxRate() != null ? p.getTaxRate() : baseRate) : baseRate;
+            }
+
+            boolean isInclusive = gstEnabled && (isPackaged || pricesIncludeTax);
+
+            BigDecimal lineTotal;
+            if (isInclusive && rate.compareTo(BigDecimal.ZERO) > 0) {
+                lineTotal = faceUnit.multiply(quantity);
+            } else {
+                BigDecimal taxable = faceUnit.multiply(quantity);
+                BigDecimal tax = taxable.multiply(rate).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+                lineTotal = taxable.add(tax);
+            }
+
+            grandTotal = grandTotal.add(lineTotal);
+        }
+
+        return grandTotal.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private boolean isRestaurantSubscriptionActive(UUID clientId, UUID orgId) {
+        if (orgId != null) {
+            var org = organizationRepository.findById(orgId).orElse(null);
+            if (org != null && org.isSubscriptionActive()) {
+                return true;
+            }
+        }
         var client = clientRepository.findById(clientId).orElse(null);
-        if (client == null || !client.isSubscriptionActive()) {
+        if (client != null && client.isSubscriptionActive()) {
+            return true;
+        }
+        var orgByClient = organizationRepository.findById(clientId).orElse(null);
+        if (orgByClient != null && orgByClient.isSubscriptionActive()) {
+            return true;
+        }
+        return organizationRepository.findAllByClientId(clientId).stream()
+                .anyMatch(com.restaurant.pos.client.domain.Organization::isSubscriptionActive);
+    }
+
+    private void validateSubscription(UUID clientId) {
+        if (!isRestaurantSubscriptionActive(clientId, null)) {
             throw new BusinessException("Restaurant subscription is inactive or not found.");
         }
     }
@@ -664,15 +1113,34 @@ public class DeliveryController {
 
         Double shopLat = null;
         Double shopLng = null;
+        String posType = null;
+        String branchName = null;
+
         if (order.getOrgId() != null) {
             var orgOpt = organizationRepository.findById(order.getOrgId());
             if (orgOpt.isPresent()) {
-                shopLat = orgOpt.get().getLatitude();
-                shopLng = orgOpt.get().getLongitude();
+                var org = orgOpt.get();
+                shopLat = org.getLatitude();
+                shopLng = org.getLongitude();
+                posType = org.getPosType();
+                branchName = org.getName();
             }
         }
+        if (posType == null && order.getClientId() != null) {
+            var clientOpt = clientRepository.findById(order.getClientId());
+            if (clientOpt.isPresent()) {
+                var client = clientOpt.get();
+                posType = client.getPosType();
+                if (branchName == null) {
+                    branchName = client.getName();
+                }
+            }
+        }
+
         map.put("shopLatitude",    shopLat);
         map.put("shopLongitude",   shopLng);
+        map.put("posType",         posType != null ? posType : "Restaurant");
+        map.put("branchName",      branchName);
 
         if (order.getLines() != null) {
             List<Map<String, Object>> lines = order.getLines().stream().map(l -> {

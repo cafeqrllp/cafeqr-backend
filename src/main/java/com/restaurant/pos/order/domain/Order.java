@@ -232,6 +232,9 @@ public class Order extends BaseEntity {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(columnDefinition = "TEXT")
+    private String remarks;
+
     @Column(length = 100)
     private String reference;
 

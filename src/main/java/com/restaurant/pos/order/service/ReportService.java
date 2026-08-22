@@ -26,7 +26,7 @@ import com.restaurant.pos.product.domain.Product;
 import com.restaurant.pos.product.repository.ProductRepository;
 import com.restaurant.pos.expense.domain.Expense;
 import com.restaurant.pos.expense.repository.ExpenseRepository;
-import com.restaurant.pos.credit.service.CreditService;
+import com.restaurant.pos.credit.query.CreditQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -58,7 +58,7 @@ public class ReportService {
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private final ProductRepository productRepository;
     private final ExpenseRepository expenseRepository;
-    private final CreditService creditService;
+    private final CreditQueryService creditService;
 
 
     // ─── Sales Summary ──────────────────────────────────────────────────────
@@ -1057,7 +1057,10 @@ public class ReportService {
     private void voidSaleFinancialChain(Order order, String reason) {
         order.setOrderStatus("CANCELLED");
         order.setPaymentStatus("VOID");
-        order.setDescription("Voided via invoice: " + (reason != null ? reason : "No reason provided"));
+        String voidDesc = "Voided via invoice: " + (reason != null ? reason : "No reason provided");
+        order.setDescription(order.getDescription() != null && !order.getDescription().isBlank()
+                ? order.getDescription() + "\n" + voidDesc
+                : voidDesc);
         orderRepository.save(order);
 
         invoiceRepository.findByOrderId(order.getId()).forEach(linkedInvoice -> {

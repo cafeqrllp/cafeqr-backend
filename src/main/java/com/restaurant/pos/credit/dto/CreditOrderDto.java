@@ -19,6 +19,7 @@ public class CreditOrderDto {
     private BigDecimal amount;
     private BigDecimal tax;
     private BigDecimal total;
+    private BigDecimal amountPaid;
     private BigDecimal amountDue;
     private LocalDateTime date;
     private String status;

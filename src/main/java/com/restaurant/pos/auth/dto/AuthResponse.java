@@ -31,4 +31,7 @@ public class AuthResponse {
     private Boolean canDeleteOrderItem;
     private Boolean canDecrementOrderItem;
     private String timezone;
+    private String termsAcceptedVersion;
+    private java.time.LocalDateTime termsAcceptedAt;
 }
+

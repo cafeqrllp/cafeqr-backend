@@ -218,12 +218,16 @@ public class OrderService {
             }
         }
         
+        boolean isCreditOrder = order.getCreditCustomerId() != null 
+                || "CREDIT".equalsIgnoreCase(order.getReference()) 
+                || "CREDIT".equalsIgnoreCase(order.getPaymentMethod());
+
         CalculationRequest request = CalculationRequest.builder()
                 .lines(lineRequests)
                 .orderDiscountType(order.getOrderDiscountType())
                 .orderDiscountValue(order.getOrderDiscountValue())
-                .requestedRoundOff(order.getRoundOffAmount())
-                .roundOffMode(order.getRoundOffMode())
+                .requestedRoundOff(isCreditOrder ? BigDecimal.ZERO : order.getRoundOffAmount())
+                .roundOffMode(isCreditOrder ? "DISABLED" : order.getRoundOffMode())
                 .orgId(order.getOrgId())
                 .build();
                 
@@ -1344,6 +1348,7 @@ public class OrderService {
                         .manualDiscountAmount(line.getManualDiscountAmount())
                         .manualDiscountPercent(line.getManualDiscountPercent())
                         .allocatedOrderDiscount(line.getAllocatedOrderDiscount())
+                        .description(line.getDescription())
                         .build())
                 .toList();
     }
@@ -2246,10 +2251,10 @@ public class OrderService {
             invoiceRepository.saveAndFlush(inv);
         }
 
-        List<PaymentSplit> oldSplits = new java.util.ArrayList<>();
+        List<Payment> oldPayments = new java.util.ArrayList<>();
         String originalPaymentNo = null;
         for (Payment payment : paymentRepository.findByOrderId(id)) {
-            oldSplits.addAll(paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(payment.getId()));
+            oldPayments.add(payment);
             if (originalPaymentNo == null) {
                 originalPaymentNo = payment.getReferenceNo();
             }
@@ -2461,35 +2466,35 @@ public class OrderService {
             if ("PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
                 String salePaymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
                 List<OrderSettleRequest.PaymentSplitRequest> paymentSplits = new java.util.ArrayList<>();
-                if ("MIXED".equalsIgnoreCase(normalizePaymentMethod(salePaymentMethod)) && !oldSplits.isEmpty()) {
-                    BigDecimal oldSplitsTotal = oldSplits.stream()
-                            .map(PaymentSplit::getAmount)
+                if (oldPayments.size() > 1) {
+                    BigDecimal oldPaymentsTotal = oldPayments.stream()
+                            .map(Payment::getAmountPaid)
                             .filter(Objects::nonNull)
                             .reduce(BigDecimal.ZERO, BigDecimal::add);
                     BigDecimal newTotal = saved.getGrandTotal();
-                    if (oldSplitsTotal.compareTo(BigDecimal.ZERO) > 0 && newTotal != null) {
-                        BigDecimal ratio = newTotal.divide(oldSplitsTotal, 10, RoundingMode.HALF_UP);
+                    if (oldPaymentsTotal.compareTo(BigDecimal.ZERO) > 0 && newTotal != null) {
+                        BigDecimal ratio = newTotal.divide(oldPaymentsTotal, 10, RoundingMode.HALF_UP);
                         BigDecimal runningSum = BigDecimal.ZERO;
-                        for (int i = 0; i < oldSplits.size(); i++) {
-                            PaymentSplit oldSplit = oldSplits.get(i);
+                        for (int i = 0; i < oldPayments.size(); i++) {
+                            Payment oldPay = oldPayments.get(i);
                             BigDecimal newSplitAmt;
-                            if (i == oldSplits.size() - 1) {
+                            if (i == oldPayments.size() - 1) {
                                 newSplitAmt = newTotal.subtract(runningSum);
                             } else {
-                                newSplitAmt = oldSplit.getAmount().multiply(ratio).setScale(2, RoundingMode.HALF_UP);
+                                newSplitAmt = oldPay.getAmountPaid().multiply(ratio).setScale(2, RoundingMode.HALF_UP);
                                 runningSum = runningSum.add(newSplitAmt);
                             }
                             OrderSettleRequest.PaymentSplitRequest req = new OrderSettleRequest.PaymentSplitRequest();
-                            req.setPaymentMethod(oldSplit.getPaymentMethod());
+                            req.setPaymentMethod(oldPay.getPaymentMethod());
                             req.setAmount(newSplitAmt);
-                            req.setReferenceNo(oldSplit.getReferenceNo());
+                            req.setReferenceNo(null);
                             paymentSplits.add(req);
                         }
                     }
                 }
                 
                 if (!paymentSplits.isEmpty()) {
-                    generatePayment(saved, salePaymentMethod, originalPaymentNo, saved.getGrandTotal(), null, null, null, paymentSplits);
+                    generatePayment(saved, "MIXED", originalPaymentNo, saved.getGrandTotal(), null, null, null, paymentSplits);
                 } else {
                     generatePayment(saved, salePaymentMethod, originalPaymentNo);
                 }
@@ -2881,12 +2886,9 @@ public class OrderService {
             order.setDiscountSource(com.restaurant.pos.order.domain.DiscountSource.MANUAL);
         }
 
-        if (safeRequest.getRoundOffAmount() != null) {
-            order.setRoundOffAmount(safeRequest.getRoundOffAmount());
-        }
-        if (safeRequest.getRoundOffMode() != null && !safeRequest.getRoundOffMode().isBlank()) {
-            order.setRoundOffMode(safeRequest.getRoundOffMode());
-        }
+        // Credit orders must never have round-off applied
+        order.setRoundOffAmount(BigDecimal.ZERO);
+        order.setRoundOffMode("DISABLED");
 
         recalculateOrderTotals(order);
 
@@ -3192,69 +3194,29 @@ public class OrderService {
                 ? DocumentType.INBOUND_PAYMENT
                 : DocumentType.OUTBOUND_PAYMENT;
 
-        String payNo = resolveDocumentNumber(order, paymentDocType, requestedPaymentNo);
-
         PaymentType paymentType = (paymentDocType == DocumentType.INBOUND_PAYMENT)
                 ? PaymentType.INBOUND
                 : PaymentType.OUTBOUND;
-        String storedPaymentMethod = normalizePaymentMethod(paymentMethod);
+
+        List<Payment> savedPayments = new ArrayList<>();
+
         if (paymentSplits != null && !paymentSplits.isEmpty()) {
-            storedPaymentMethod = "MIXED";
-        }
-
-        Payment payment = Payment.builder()
-                .paymentType(paymentType)
-                .terminalId(order.getTerminalId())
-                .sourceDeviceId(order.getSourceDeviceId())
-                .sourceTerminalId(order.getSourceTerminalId())
-                .sourceOperationId(order.getSourceOperationId())
-                .sourceOfflineId(order.getSourceOfflineId())
-                .sourceLocalRef(order.getSourceLocalRef())
-                .offlineCreatedAt(order.getOfflineCreatedAt())
-                .syncOrigin(order.getSyncOrigin())
-                .orderId(order.getId())
-                .invoiceId(invoice != null ? invoice.getId() : null)
-                .customerId(order.getCustomerId())
-                .creditCustomerId(Boolean.TRUE.equals(order.getIsCredit()) ? order.getCreditCustomerId() : null)
-                .paymentMethod(storedPaymentMethod)
-                .paymentDate(sourceBusinessDateTime(order))
-                .amountPaid(moneyValue(amountPaid))
-                .referenceNo(payNo)
-                .description(description)
-                // GST round-off: round_off_amount lives on Payment ONLY
-                // Invariant: amount_paid = invoice_total + round_off_amount
-                .invoiceTotal(
-                        (invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
-                            .subtract(
-                                roundOffAmount != null ? roundOffAmount.setScale(2, RoundingMode.HALF_UP) : 
-                                (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO)
-                            )
-                )
-                .roundOffAmount(
-                        roundOffAmount != null ? roundOffAmount.setScale(2, RoundingMode.HALF_UP) : 
-                        (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO))
-                .build();
-
-        payment.setClientId(clientId);
-        payment.setOrgId(orgId);
-
-        Payment savedPayment = paymentRepository.save(payment);
-        savePaymentSplits(savedPayment, storedPaymentMethod, amountPaid, cashAmount, onlineAmount, paymentSplits);
-
-        if (invoice != null) {
-            PaymentAllocation allocation = PaymentAllocation.builder()
-                    .paymentId(savedPayment.getId())
-                    .invoiceId(invoice.getId())
-                    .orderId(order.getId())
-                    .creditCustomerId(order.getCreditCustomerId())
-                    .allocatedAmount(moneyValue(amountPaid))
-                    .allocationDate(savedPayment.getPaymentDate())
-                    .status("POSTED")
-                    .notes("Checkout payment allocation")
-                    .build();
-            allocation.setClientId(savedPayment.getClientId());
-            allocation.setOrgId(savedPayment.getOrgId());
-            paymentAllocationRepository.save(allocation);
+            BigDecimal totalSplit = BigDecimal.ZERO;
+            for (OrderSettleRequest.PaymentSplitRequest split : paymentSplits) {
+                BigDecimal splitAmount = moneyValue(split.getAmount());
+                totalSplit = totalSplit.add(splitAmount);
+                savedPayments.add(createSinglePayment(order, invoice, split.getPaymentMethod(), requestedPaymentNo,
+                        splitAmount, description, split.getReferenceNo(), roundOffAmount, paymentType));
+            }
+            if (moneyValue(totalSplit).compareTo(moneyValue(amountPaid)) != 0) {
+                throw new BusinessException("Payment split total must equal amount paid");
+            }
+        } else {
+            String method = (cashAmount != null && cashAmount.compareTo(BigDecimal.ZERO) > 0) ? "CASH"
+                    : ((onlineAmount != null && onlineAmount.compareTo(BigDecimal.ZERO) > 0) ? "ONLINE"
+                            : normalizePaymentMethod(paymentMethod));
+            savedPayments.add(createSinglePayment(order, invoice, method, requestedPaymentNo, amountPaid, description,
+                    null, roundOffAmount, paymentType));
         }
 
         // Update Invoice status if it exists
@@ -3271,77 +3233,61 @@ public class OrderService {
             }
             invoiceRepository.save(invoice);
         }
-        accountingPostingService.postPayment(order, savedPayment);
+        for (Payment p : savedPayments) {
+            accountingPostingService.postPayment(order, p);
+        }
     }
 
-    private void savePaymentSplits(Payment payment, String paymentMethod, BigDecimal amountPaid, BigDecimal cashAmount,
-            BigDecimal onlineAmount,
-            List<OrderSettleRequest.PaymentSplitRequest> requestedSplits) {
-        BigDecimal totalPaid = moneyValue(amountPaid);
-        if (totalPaid.compareTo(BigDecimal.ZERO) <= 0) {
-            return;
-        }
-        String normalizedMethod = normalizePaymentMethod(paymentMethod);
-        List<PaymentSplit> splits = new ArrayList<>();
-        if (requestedSplits != null && !requestedSplits.isEmpty()) {
-            BigDecimal splitTotal = BigDecimal.ZERO;
-            for (OrderSettleRequest.PaymentSplitRequest requestedSplit : requestedSplits) {
-                if (requestedSplit == null) {
-                    throw new BusinessException("Payment split row is invalid");
-                }
-                String splitMethod = normalizePaymentSplitMethod(requestedSplit.getPaymentMethod());
-                BigDecimal splitAmount = moneyValue(requestedSplit.getAmount());
-                if (splitAmount.compareTo(BigDecimal.ZERO) <= 0) {
-                    throw new BusinessException("Payment split amount must be greater than zero");
-                }
-                splitTotal = splitTotal.add(splitAmount);
-                splits.add(buildPaymentSplit(payment, splitMethod, splitAmount, requestedSplit.getReferenceNo()));
-            }
-            ensureSplitTotalMatches(totalPaid, splitTotal);
-        } else if ("MIXED".equalsIgnoreCase(normalizedMethod)) {
-            BigDecimal cash = moneyValue(cashAmount);
-            BigDecimal online = moneyValue(onlineAmount);
-            BigDecimal splitTotal = BigDecimal.ZERO;
-            if (cash.compareTo(BigDecimal.ZERO) > 0) {
-                splits.add(buildPaymentSplit(payment, "CASH", cash));
-                splitTotal = splitTotal.add(cash);
-            }
-            if (online.compareTo(BigDecimal.ZERO) > 0) {
-                splits.add(buildPaymentSplit(payment, "ONLINE", online));
-                splitTotal = splitTotal.add(online);
-            }
-            if (splits.isEmpty()) {
-                throw new BusinessException("Mixed payment requires split amounts");
-            }
-            ensureSplitTotalMatches(totalPaid, splitTotal);
-        }
-        if (splits.isEmpty()) {
-            splits.add(buildPaymentSplit(payment, normalizePaymentSplitMethod(normalizedMethod), totalPaid));
-        }
-        paymentSplitRepository.saveAll(splits);
-    }
-
-    private PaymentSplit buildPaymentSplit(Payment payment, String method, BigDecimal amount) {
-        return buildPaymentSplit(payment, method, amount, payment.getReferenceNo());
-    }
-
-    private PaymentSplit buildPaymentSplit(Payment payment, String method, BigDecimal amount, String referenceNo) {
-        PaymentSplit split = PaymentSplit.builder()
-                .paymentId(payment.getId())
-                .paymentMethod(method)
-                .amount(moneyValue(amount))
-                .referenceNo(
-                        referenceNo == null || referenceNo.isBlank() ? payment.getReferenceNo() : referenceNo.trim())
+    private Payment createSinglePayment(Order order, Invoice invoice, String method, String reqNo, BigDecimal amount,
+            String desc, String refNo, BigDecimal roundOff, PaymentType type) {
+        String payNo = (refNo != null && !refNo.isBlank()) ? refNo : resolveDocumentNumber(order, 
+                (type == PaymentType.INBOUND ? DocumentType.INBOUND_PAYMENT : DocumentType.OUTBOUND_PAYMENT), reqNo);
+        
+        Payment payment = Payment.builder()
+                .paymentType(type)
+                .terminalId(order.getTerminalId())
+                .sourceDeviceId(order.getSourceDeviceId())
+                .sourceTerminalId(order.getSourceTerminalId())
+                .sourceOperationId(order.getSourceOperationId())
+                .sourceOfflineId(order.getSourceOfflineId())
+                .sourceLocalRef(order.getSourceLocalRef())
+                .offlineCreatedAt(order.getOfflineCreatedAt())
+                .syncOrigin(order.getSyncOrigin())
+                .orderId(order.getId())
+                .invoiceId(invoice != null ? invoice.getId() : null)
+                .customerId(order.getCustomerId())
+                .creditCustomerId(Boolean.TRUE.equals(order.getIsCredit()) ? order.getCreditCustomerId() : null)
+                .paymentMethod(normalizePaymentMethod(method))
+                .paymentDate(sourceBusinessDateTime(order))
+                .amountPaid(moneyValue(amount))
+                .referenceNo(payNo)
+                .description(desc)
+                .invoiceTotal(invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
+                .roundOffAmount(roundOff != null ? roundOff.setScale(2, RoundingMode.HALF_UP)
+                        : (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP)
+                                : BigDecimal.ZERO))
                 .build();
-        split.setClientId(payment.getClientId());
-        split.setOrgId(payment.getOrgId());
-        return split;
-    }
 
-    private void ensureSplitTotalMatches(BigDecimal totalPaid, BigDecimal splitTotal) {
-        if (moneyValue(splitTotal).compareTo(totalPaid) != 0) {
-            throw new BusinessException("Payment split total must equal amount paid");
+        payment.setClientId(order.getClientId());
+        payment.setOrgId(order.getOrgId());
+        Payment saved = paymentRepository.save(payment);
+
+        if (invoice != null) {
+            PaymentAllocation allocation = PaymentAllocation.builder()
+                    .paymentId(saved.getId())
+                    .invoiceId(invoice.getId())
+                    .orderId(order.getId())
+                    .creditCustomerId(order.getCreditCustomerId())
+                    .allocatedAmount(moneyValue(amount))
+                    .allocationDate(saved.getPaymentDate())
+                    .status("POSTED")
+                    .notes("Checkout payment allocation")
+                    .build();
+            allocation.setClientId(saved.getClientId());
+            allocation.setOrgId(saved.getOrgId());
+            paymentAllocationRepository.save(allocation);
         }
+        return saved;
     }
 
     private void handleTableStatus(Order order) {
@@ -3563,24 +3509,10 @@ public class OrderService {
     }
 
     private String buildSettlementDescription(OrderSettleRequest request, String paymentMethod) {
-        List<String> parts = new java.util.ArrayList<>();
-        if ("MIXED".equalsIgnoreCase(paymentMethod)) {
-            if (hasExplicitPaymentSplits(request)) {
-                List<String> splitParts = request.getPaymentSplits().stream()
-                        .filter(Objects::nonNull)
-                        .map(split -> normalizePaymentSplitMethod(split.getPaymentMethod()) + ": "
-                                + moneyValue(split.getAmount()))
-                        .collect(Collectors.toList());
-                parts.add(String.join(", ", splitParts));
-            } else {
-                parts.add("Cash: " + moneyValue(request.getCashAmount()));
-                parts.add("Online: " + moneyValue(request.getOnlineAmount()));
-            }
+        if (request != null && request.getDescription() != null && !request.getDescription().isBlank()) {
+            return request.getDescription().trim();
         }
-        if (request.getDescription() != null && !request.getDescription().isBlank()) {
-            parts.add(request.getDescription().trim());
-        }
-        return String.join("; ", parts);
+        return "";
     }
 
     private String appendDescription(String existing, String addition) {

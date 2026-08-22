@@ -45,6 +45,7 @@ public class AuthService {
     private final OtpService otpService;
     private final MenuRepository menuRepository;
     private final TerminalRepository terminalRepository;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     @Transactional
     public AuthResponse register(RegisterRequest request, String ipAddress, String userAgent) {
@@ -113,7 +114,7 @@ public class AuthService {
         return buildAuthResponse(user, client, ipAddress, userAgent);
     }
 
-    private void seedTenantRoles(UUID clientId, String createdBy) {
+    public void seedTenantRoles(UUID clientId, String createdBy) {
         log.info("Seeding default roles for tenant: {}", clientId);
         Set<Permission> allPermissions = new HashSet<>(permissionRepository.findAll());
         List<Menu> allMenus = menuRepository.findAll();
@@ -243,7 +244,49 @@ public class AuthService {
                 .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
                 .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
                 .timezone(user.getOrganization() != null && user.getOrganization().getTimezone() != null ? user.getOrganization().getTimezone() : client.getTimezone())
+                .termsAcceptedVersion(user.getTermsAcceptedVersion())
+                .termsAcceptedAt(user.getTermsAcceptedAt())
                 .build();
+    }
+
+    @Transactional
+    public java.util.Map<String, Object> acceptTerms(java.util.UUID userId, String termsVersion, String ipAddress, String userAgent) {
+        if (userId == null) {
+            throw new BusinessException("User ID is required");
+        }
+        User user = repository.findById(userId)
+                .orElseThrow(() -> new BusinessException("User not found"));
+
+        String version = (termsVersion != null && !termsVersion.isBlank()) ? termsVersion.trim() : "v1.0";
+        LocalDateTime now = LocalDateTime.now();
+
+        user.setTermsAcceptedVersion(version);
+        user.setTermsAcceptedAt(now);
+        user.setTermsAcceptedIp(ipAddress);
+        repository.save(user);
+
+        // Record audit trail
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO terms_acceptance_audit (user_id, client_id, terms_version, ip_address, user_agent, accepted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    user.getId(),
+                    user.getClientId(),
+                    version,
+                    ipAddress,
+                    userAgent,
+                    now
+            );
+        } catch (Exception e) {
+            log.warn("Could not insert into terms_acceptance_audit: {}", e.getMessage());
+        }
+
+        log.info("User {} ({}) accepted terms version {}", user.getEmail(), user.getId(), version);
+
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("status", "SUCCESS");
+        result.put("termsAcceptedVersion", version);
+        result.put("termsAcceptedAt", now);
+        return result;
     }
 
     @Transactional

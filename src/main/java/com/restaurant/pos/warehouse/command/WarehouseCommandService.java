@@ -42,11 +42,12 @@ public class WarehouseCommandService {
                 .address(command.getAddress())
                 .managerName(command.getManagerName())
                 .managerPhone(command.getManagerPhone())
-                .isDefault(command.isDefault())
+                .isDefault(false)
                 .isactive(command.getIsactive() != null ? command.getIsactive() : "Y")
                 .build();
 
-        return saveWithDefaultLogic(warehouse, clientId, orgId);
+        boolean requestedDefault = command.isDefault();
+        return saveWithDefaultLogic(warehouse, requestedDefault, clientId, orgId);
     }
 
     /**
@@ -62,19 +63,25 @@ public class WarehouseCommandService {
 
         UUID orgId = branchContext.requireWriteOrgId(command.getOrgId() != null ? command.getOrgId() : warehouse.getOrgId());
 
+        boolean currentlyDefault = warehouse.isDefault();
+        boolean requestedDefault = command.getIsDefault() != null ? command.isDefault() : warehouse.isDefault();
+
+        if (currentlyDefault && !requestedDefault) {
+            throw new com.restaurant.pos.common.exception.BusinessException(
+                "Cannot remove default status from the current default warehouse. To set a new default, edit another warehouse and mark it as default."
+            );
+        }
+
         warehouse.setName(command.getName() != null ? command.getName() : warehouse.getName());
         warehouse.setCode(command.getCode() != null ? command.getCode() : warehouse.getCode());
         warehouse.setAddress(command.getAddress() != null ? command.getAddress() : warehouse.getAddress());
         warehouse.setManagerName(command.getManagerName() != null ? command.getManagerName() : warehouse.getManagerName());
         warehouse.setManagerPhone(command.getManagerPhone() != null ? command.getManagerPhone() : warehouse.getManagerPhone());
-        if (command.getIsDefault() != null) {
-            warehouse.setDefault(command.isDefault());
-        }
         if (command.getIsactive() != null) {
             warehouse.setIsactive(command.getIsactive());
         }
 
-        return saveWithDefaultLogic(warehouse, clientId, orgId);
+        return saveWithDefaultLogic(warehouse, requestedDefault, clientId, orgId);
     }
 
     /**
@@ -113,7 +120,10 @@ public class WarehouseCommandService {
      * Rule: if only one warehouse exists for the org, or the caller requests default,
      * promote it and strip the flag from all others.
      */
-    private Warehouse saveWithDefaultLogic(Warehouse warehouse, UUID clientId, UUID orgId) {
+    private Warehouse saveWithDefaultLogic(Warehouse warehouse, boolean requestedDefault, UUID clientId, UUID orgId) {
+        // Keep target warehouse non-default during DB lookup so Hibernate auto-flush doesn't fail unique index prematurely
+        warehouse.setDefault(false);
+
         List<Warehouse> existingForOrg = warehouseRepository
                 .findByClientIdAndOrgIdOrderByCreatedAtDesc(clientId, orgId);
 
@@ -121,9 +131,25 @@ public class WarehouseCommandService {
                 (existingForOrg.size() == 1 &&
                  (warehouse.getId() == null || existingForOrg.get(0).getId().equals(warehouse.getId())));
 
-        if (isOnlyWarehouse || warehouse.isDefault()) {
+        boolean targetIsDefault = isOnlyWarehouse || requestedDefault;
+
+        if (targetIsDefault) {
+            // STEP 1: Unset default flag on all managed entities in memory
+            for (Warehouse w : existingForOrg) {
+                if (warehouse.getId() == null || !w.getId().equals(warehouse.getId())) {
+                    if (w.isDefault()) {
+                        w.setDefault(false);
+                        warehouseRepository.save(w);
+                    }
+                }
+            }
+
+            // Execute SQL bulk update & flush immediately so NO warehouse is default in PostgreSQL
+            warehouseRepository.unsetOtherDefaultsForOrg(clientId, orgId, warehouse.getId() != null ? warehouse.getId() : UUID.randomUUID());
+            warehouseRepository.flush();
+
+            // STEP 2: Mark target warehouse as default and persist
             warehouse.setDefault(true);
-            warehouseRepository.unsetOtherDefaultsForOrg(clientId, orgId, warehouse.getId());
         } else {
             boolean hasOtherDefault = existingForOrg.stream()
                     .anyMatch(w -> w.isDefault() && !w.getId().equals(warehouse.getId()));

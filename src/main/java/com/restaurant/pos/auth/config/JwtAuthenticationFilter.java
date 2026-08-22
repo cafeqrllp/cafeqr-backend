@@ -63,9 +63,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         System.out.println("===> [DEBUG LOG-V3] JWT Filter: Method=" + method + ", Path=" + path + ", Auth=" + (authHeader != null ? "Present" : "null") + ", Cookies=[" + cookiesLog + "]");
 
-        // Skip filter for certain paths
-        if (path.contains("/api/v1/auth") || path.contains("/api/v1/debug")) {
-            System.out.println("===> [DEBUG] JWT Filter: Skipping path: " + path);
+        // Skip filter for public auth endpoints that don't use tokens, but process tokens for authenticated auth endpoints like accept-terms
+        if (authHeader == null && (path.equals("/api/v1/auth/login") || path.equals("/api/v1/auth/signup") || path.equals("/api/v1/auth/refresh") || path.contains("/api/v1/debug") || path.contains("/api/v1/public"))) {
             filterChain.doFilter(request, response);
             return;
         }

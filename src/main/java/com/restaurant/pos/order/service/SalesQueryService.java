@@ -123,8 +123,7 @@ public class SalesQueryService {
     private String buildWhereClause(SalesQueryCriteria criteria, MapSqlParameterSource params) {
         StringBuilder where = new StringBuilder("WHERE o.client_id = :clientId AND o.order_type = 'SALE' ");
         params.addValue("clientId", criteria.clientId());
-        boolean hasSearchText = criteria.search() != null && !criteria.search().isBlank();
-        if (criteria.orgId() != null && !hasSearchText) {
+        if (criteria.orgId() != null) {
             params.addValue("orgId", criteria.orgId());
             where.append("AND o.org_id = :orgId ");
         } else {
@@ -137,6 +136,7 @@ public class SalesQueryService {
         }
 
         // Status filter mapping
+        boolean hasSearchText = criteria.search() != null && !criteria.search().isBlank();
         String status = criteria.status();
         if (status != null && !status.isBlank() && !(hasSearchText && "COMPLETED_CANCELLED".equalsIgnoreCase(status))) {
             if ("VOID".equalsIgnoreCase(status)) {
@@ -183,6 +183,7 @@ public class SalesQueryService {
             where.append("  OR LOWER(COALESCE(o.customer_name, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.customer_phone, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.description, '')) LIKE :searchPattern ESCAPE '\\' ");
+            where.append("  OR LOWER(COALESCE(o.remarks, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.reference, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND (LOWER(TRIM(i.invoice_no)) = :searchExact OR LOWER(TRIM(i.invoice_no)) LIKE :searchPattern ESCAPE '\\' OR CAST(i.daily_bill_no AS VARCHAR) = :searchExact OR CAST(i.daily_bill_no AS VARCHAR) LIKE :searchPattern ESCAPE '\\')) ");
             where.append("  OR EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND (LOWER(TRIM(p.reference_no)) = :searchExact OR LOWER(TRIM(p.reference_no)) LIKE :searchPattern ESCAPE '\\')) ");
@@ -220,43 +221,24 @@ public class SalesQueryService {
                 "  SELECT o.id, o.total_amount, o.total_tax_amount, o.total_discount_amount, o.grand_total " +
                 "  FROM orders o " +
                 "  " + whereClause + " " +
-                "), " +
-                "line_totals AS ( " +
-                "  SELECT " +
-                "    ol.order_id, " +
-                "    SUM(ol.quantity) AS items_sold, " +
-                "    SUM( " +
-                "      GREATEST( " +
-                "        0, " +
-                "        CASE " +
-                "          WHEN ol.tax_type = 'INCLUSIVE' THEN ol.gross_line_amount / (1 + ol.tax_rate / 100.0) " +
-                "          ELSE ol.gross_line_amount " +
-                "        END - COALESCE(ol.taxable_amount, 0) " +
-                "      ) " +
-                "    ) AS discount " +
-                "  FROM order_lines ol " +
-                "  WHERE ol.order_id IN (SELECT id FROM filtered_orders) AND ol.isactive = 'Y' " +
-                "  GROUP BY ol.order_id " +
-                "), " +
-                "latest_payment AS ( " +
-                "  SELECT DISTINCT ON (p.order_id) " +
-                "    p.order_id, " +
-                "    p.round_off_amount " +
-                "  FROM payments p " +
-                "  WHERE p.order_id IN (SELECT id FROM filtered_orders) " +
-                "  ORDER BY p.order_id, p.created_at DESC " +
                 ") " +
                 "SELECT " +
-                "  COUNT(fo.id) as total_orders, " +
-                "  COALESCE(SUM(fo.total_amount), 0) as total_revenue, " +
-                "  COALESCE(SUM(fo.total_tax_amount), 0) as total_tax, " +
-                "  COALESCE(SUM(COALESCE(lt.discount, fo.total_discount_amount, 0)), 0) as total_discount, " +
-                "  COALESCE(SUM(fo.grand_total), 0) as grand_total, " +
-                "  COALESCE(SUM(lp.round_off_amount), 0) as total_round_off, " +
-                "  COALESCE(SUM(lt.items_sold), 0) as items_sold " +
-                "FROM filtered_orders fo " +
-                "LEFT JOIN line_totals lt ON lt.order_id = fo.id " +
-                "LEFT JOIN latest_payment lp ON lp.order_id = fo.id";
+                "  COUNT(fo.id) AS total_orders, " +
+                "  COALESCE(SUM(fo.total_amount), 0) AS total_revenue, " +
+                "  COALESCE(SUM(fo.total_tax_amount), 0) AS total_tax, " +
+                "  COALESCE(SUM(fo.total_discount_amount), 0) AS total_discount, " +
+                "  COALESCE(SUM(fo.grand_total), 0) AS grand_total, " +
+                "  COALESCE(( " +
+                "    SELECT SUM(p.round_off_amount) " +
+                "    FROM payments p " +
+                "    WHERE p.order_id IN (SELECT id FROM filtered_orders) " +
+                "  ), 0) AS total_round_off, " +
+                "  COALESCE(( " +
+                "    SELECT SUM(ol.quantity) " +
+                "    FROM order_lines ol " +
+                "    WHERE ol.order_id IN (SELECT id FROM filtered_orders) AND ol.isactive = 'Y' " +
+                "  ), 0) AS items_sold " +
+                "FROM filtered_orders fo";
 
         return jdbcTemplate.queryForObject(summarySql, params, (rs, rowNum) -> {
             long totalOrders = rs.getLong("total_orders");
@@ -294,7 +276,7 @@ public class SalesQueryService {
                 "(SELECT i.invoice_no FROM invoices i WHERE i.order_id = o.id LIMIT 1) AS invoice_no, " +
                 "(SELECT i.daily_bill_no FROM invoices i WHERE i.order_id = o.id LIMIT 1) AS daily_bill_no, " +
                 "(SELECT p.reference_no FROM payments p WHERE p.order_id = o.id ORDER BY p.created_at DESC LIMIT 1) AS payment_no, " +
-                "o.description, o.warehouse_id, o.vendor_id " +
+                "o.description, o.remarks, o.warehouse_id, o.vendor_id " +
                 "FROM orders o " +
                 "LEFT JOIN customers c ON c.id = o.customer_id " +
                 whereClause +
@@ -336,6 +318,7 @@ public class SalesQueryService {
                     .dailyBillNo(rs.getInt("daily_bill_no"))
                     .paymentNo(rs.getString("payment_no"))
                     .description(rs.getString("description"))
+                    .remarks(rs.getString("remarks") != null ? rs.getString("remarks") : rs.getString("description"))
                     .warehouseId(getUUID(rs, "warehouse_id"))
                     .vendorId(getUUID(rs, "vendor_id"))
                     .lines(new ArrayList<>())
@@ -345,7 +328,7 @@ public class SalesQueryService {
         if (!orders.isEmpty()) {
             List<UUID> orderIds = orders.stream().map(order -> order.getId()).toList();
             MapSqlParameterSource linesParams = new MapSqlParameterSource("orderIds", orderIds);
-            String linesSql = "SELECT id, order_id, product_id, variant_id, product_name, category_name, is_packaged_good, quantity, unit_of_measure, uom_precision, unit_price, tax_rate, tax_amount, discount_amount, line_total, gross_line_amount, unit_price_ex_tax, taxable_amount, tax_type " +
+            String linesSql = "SELECT id, order_id, product_id, variant_id, product_name, category_name, is_packaged_good, quantity, unit_of_measure, uom_precision, unit_price, tax_rate, tax_amount, discount_amount, line_total, gross_line_amount, unit_price_ex_tax, taxable_amount, tax_type, description " +
                     "FROM order_lines " +
                     "WHERE order_id IN (:orderIds) AND isactive = 'Y' " +
                     "ORDER BY order_id, created_at, id";
@@ -376,6 +359,7 @@ public class SalesQueryService {
                         .unitPriceExTax((BigDecimal) row.get("unit_price_ex_tax"))
                         .taxableAmount((BigDecimal) row.get("taxable_amount"))
                         .taxType(taxTypeStr != null ? com.restaurant.pos.order.domain.TaxType.valueOf(taxTypeStr) : null)
+                        .description((String) row.get("description"))
                         .build();
 
                 linesByOrderId.computeIfAbsent(orderId, k -> new ArrayList<>()).add(lineDto);

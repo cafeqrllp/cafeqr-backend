@@ -392,10 +392,14 @@ public class PrintJobService {
         populateCustomerDetailsIfNeeded(order, out);
 
         // Add description and instructions fields
+        String remarks = (order.getRemarks() != null && !order.getRemarks().isBlank())
+                ? order.getRemarks()
+                : order.getDescription();
+        out.put("remarks", remarks);
         out.put("description", order.getDescription());
-        out.put("specialInstructions", order.getDescription());
-        out.put("special_instructions", order.getDescription());
-        out.put("instructions", order.getDescription());
+        out.put("specialInstructions", remarks);
+        out.put("special_instructions", remarks);
+        out.put("instructions", remarks);
 
         List<Map<String, Object>> lines = order.getLines() == null
                 ? List.of()

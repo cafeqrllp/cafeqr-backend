@@ -34,7 +34,7 @@ public interface WarehouseRepository extends JpaRepository<Warehouse, UUID> {
     /** Find any default warehouse for a client (when orgId is unknown) */
     Optional<Warehouse> findFirstByClientIdAndIsDefaultTrue(UUID clientId);
 
-    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE Warehouse w SET w.isDefault = false WHERE w.clientId = :clientId AND ((:orgId IS NOT NULL AND w.orgId = :orgId) OR (:orgId IS NULL AND w.orgId IS NULL)) AND (:excludeId IS NULL OR w.id <> :excludeId)")
     void unsetOtherDefaultsForOrg(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("excludeId") UUID excludeId);
 }

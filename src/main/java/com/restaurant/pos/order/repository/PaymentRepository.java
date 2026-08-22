@@ -47,4 +47,48 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID>, JpaSpec
               AND p.referenceNo = :referenceNo
             """)
     boolean existsByClientIdAndOrgIdAndReferenceNo(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("referenceNo") String referenceNo);
+
+    java.util.Optional<Payment> findByClientIdAndSourceOperationId(UUID clientId, String sourceOperationId);
+
+    @Query("""
+            SELECT COALESCE(SUM(p.amountPaid), 0) FROM Payment p
+            WHERE p.clientId = :clientId
+              AND p.creditCustomerId = :customerId
+              AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
+              AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
+            """)
+    java.math.BigDecimal sumPaidByCustomer(@Param("clientId") UUID clientId, @Param("customerId") UUID customerId);
+
+    @Query("""
+            SELECT COALESCE(SUM(p.amountPaid), 0) FROM Payment p
+            WHERE p.clientId = :clientId
+              AND p.paymentType = com.restaurant.pos.order.domain.PaymentType.OUTBOUND
+              AND p.creditCustomerId = :vendorId
+              AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
+              AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
+            """)
+    java.math.BigDecimal sumPaidByVendor(@Param("clientId") UUID clientId, @Param("vendorId") UUID vendorId);
+
+    @Query("""
+            SELECT p.creditCustomerId, COALESCE(SUM(p.amountPaid), 0)
+            FROM Payment p
+            WHERE p.clientId = :clientId
+              AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
+              AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
+              AND p.creditCustomerId IN :customerIds
+            GROUP BY p.creditCustomerId
+            """)
+    List<Object[]> sumPaidByCustomerIds(@Param("clientId") UUID clientId, @Param("customerIds") java.util.Collection<UUID> customerIds);
+
+    @Query("""
+            SELECT p.creditCustomerId, COALESCE(SUM(p.amountPaid), 0)
+            FROM Payment p
+            WHERE p.clientId = :clientId
+              AND p.paymentType = com.restaurant.pos.order.domain.PaymentType.OUTBOUND
+              AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
+              AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
+              AND p.creditCustomerId IN :vendorIds
+            GROUP BY p.creditCustomerId
+            """)
+    List<Object[]> sumPaidByVendorIds(@Param("clientId") UUID clientId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
 }
