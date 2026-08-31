@@ -111,6 +111,12 @@ public class Invoice extends BaseEntity {
     @Column(name = "round_off_amount", precision = 15, scale = 2)
     private BigDecimal roundOffAmount;
 
+    @Column(name = "redeem_points")
+    private Integer redeemPoints;
+
+    @Column(name = "loyalty_amount", precision = 15, scale = 2)
+    private BigDecimal loyaltyAmount;
+
     // ─────────────────────────────────────────────────────────────
     // GST Discount Engine Fields (V1_110 migration)
     // ─────────────────────────────────────────────────────────────

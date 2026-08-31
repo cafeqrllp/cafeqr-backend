@@ -183,7 +183,7 @@ public class SalesQueryService {
             where.append("  OR LOWER(COALESCE(o.customer_name, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.customer_phone, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.description, '')) LIKE :searchPattern ESCAPE '\\' ");
-            where.append("  OR LOWER(COALESCE(o.remarks, '')) LIKE :searchPattern ESCAPE '\\' ");
+            where.append("  OR LOWER(COALESCE(o.description, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.reference, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND (LOWER(TRIM(i.invoice_no)) = :searchExact OR LOWER(TRIM(i.invoice_no)) LIKE :searchPattern ESCAPE '\\' OR CAST(i.daily_bill_no AS VARCHAR) = :searchExact OR CAST(i.daily_bill_no AS VARCHAR) LIKE :searchPattern ESCAPE '\\')) ");
             where.append("  OR EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND (LOWER(TRIM(p.reference_no)) = :searchExact OR LOWER(TRIM(p.reference_no)) LIKE :searchPattern ESCAPE '\\')) ");
@@ -276,7 +276,7 @@ public class SalesQueryService {
                 "(SELECT i.invoice_no FROM invoices i WHERE i.order_id = o.id LIMIT 1) AS invoice_no, " +
                 "(SELECT i.daily_bill_no FROM invoices i WHERE i.order_id = o.id LIMIT 1) AS daily_bill_no, " +
                 "(SELECT p.reference_no FROM payments p WHERE p.order_id = o.id ORDER BY p.created_at DESC LIMIT 1) AS payment_no, " +
-                "o.description, o.remarks, o.warehouse_id, o.vendor_id " +
+                "o.description, o.description AS remarks, o.warehouse_id, o.vendor_id " +
                 "FROM orders o " +
                 "LEFT JOIN customers c ON c.id = o.customer_id " +
                 whereClause +

@@ -40,6 +40,12 @@ public class OrderSettleRequest {
     @Schema(description = "Transient print kinds that this terminal will print locally, e.g. BILL")
     private List<String> skipAutoPrintKinds;
 
+    @Schema(description = "Loyalty points redeemed during settlement", example = "100")
+    private Integer redeemPoints;
+
+    @Schema(description = "Monetary discount value of loyalty points redeemed", example = "10.00")
+    private BigDecimal loyaltyAmount;
+
     @Data
     @Schema(description = "Split payment item details")
     public static class PaymentSplitRequest {

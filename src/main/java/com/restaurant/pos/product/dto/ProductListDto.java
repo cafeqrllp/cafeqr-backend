@@ -35,6 +35,7 @@ public class ProductListDto {
     private UUID uomId;
     private int uomPrecision;
     private String productCode;
+    private String barcode;
     private String productType;
     private BigDecimal taxRate;
     private String taxCode;

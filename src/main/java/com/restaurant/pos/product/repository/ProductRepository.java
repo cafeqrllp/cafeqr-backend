@@ -45,4 +45,8 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     boolean existsByVariantMappings_VariantGroup_IdAndIsActiveTrue(UUID variantGroupId);
 
     boolean existsByVariantPricings_VariantOption_IdAndIsActiveTrue(UUID variantOptionId);
+
+    @EntityGraph(attributePaths = {"category", "uom", "defaultPricelist"})
+    @Query("SELECT p FROM Product p WHERE p.barcode = :barcode AND (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) AND p.isActive = true")
+    Optional<Product> findByBarcodeAndClientIdAndOrgIdOrGlobal(String barcode, UUID clientId, UUID orgId);
 }

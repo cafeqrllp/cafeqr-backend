@@ -42,6 +42,12 @@ public class ProductController {
         return ResponseEntity.ok(ApiResponse.success(productService.getProduct(id)));
     }
 
+    @GetMapping("/barcode/{barcode}")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    public ResponseEntity<ApiResponse<ProductDetailDto>> getProductByBarcode(@PathVariable String barcode) {
+        return ResponseEntity.ok(ApiResponse.success(productService.getProductByBarcode(barcode)));
+    }
+
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     public ResponseEntity<ApiResponse<Product>> createProduct(@RequestBody Product product) {

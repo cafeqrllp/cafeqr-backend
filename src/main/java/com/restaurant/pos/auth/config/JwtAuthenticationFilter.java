@@ -63,8 +63,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         System.out.println("===> [DEBUG LOG-V3] JWT Filter: Method=" + method + ", Path=" + path + ", Auth=" + (authHeader != null ? "Present" : "null") + ", Cookies=[" + cookiesLog + "]");
 
-        // Skip filter for public auth endpoints that don't use tokens, but process tokens for authenticated auth endpoints like accept-terms
-        if (authHeader == null && (path.equals("/api/v1/auth/login") || path.equals("/api/v1/auth/signup") || path.equals("/api/v1/auth/refresh") || path.contains("/api/v1/debug") || path.contains("/api/v1/public"))) {
+        // Skip filter for public auth endpoints that don't use tokens (e.g. login, signup)
+        if (isPublicPath(path) && authHeader == null) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -148,14 +148,30 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } catch (ExpiredJwtException e) {
             System.out.println("===> [DEBUG] JWT Filter: Token expired: " + e.getMessage());
-            sendErrorResponse(request, response, "JWT token has expired", HttpServletResponse.SC_UNAUTHORIZED);
+            if (isPublicPath(path)) {
+                filterChain.doFilter(request, response);
+            } else {
+                sendErrorResponse(request, response, "JWT token has expired", HttpServletResponse.SC_UNAUTHORIZED);
+            }
         } catch (MalformedJwtException e) {
             System.out.println("===> [DEBUG] JWT Filter: Malformed token: " + e.getMessage());
-            sendErrorResponse(request, response, "Invalid JWT token", HttpServletResponse.SC_UNAUTHORIZED);
+            if (isPublicPath(path)) {
+                filterChain.doFilter(request, response);
+            } else {
+                sendErrorResponse(request, response, "Invalid JWT token", HttpServletResponse.SC_UNAUTHORIZED);
+            }
         } catch (SignatureException e) {
             System.out.println("===> [DEBUG] JWT Filter: Invalid signature: " + e.getMessage());
-            sendErrorResponse(request, response, "JWT signature match failed", HttpServletResponse.SC_UNAUTHORIZED);
+            if (isPublicPath(path)) {
+                filterChain.doFilter(request, response);
+            } else {
+                sendErrorResponse(request, response, "JWT signature match failed", HttpServletResponse.SC_UNAUTHORIZED);
+            }
         } catch (Exception e) {
+            if (isPublicPath(path)) {
+                filterChain.doFilter(request, response);
+                return;
+            }
             if (isClientDisconnect(e)) {
                 log.debug("Client disconnected before authentication response completed: {}", e.getMessage());
                 return;
@@ -218,5 +234,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             current = current.getCause();
         }
         return false;
+    }
+
+    private boolean isPublicPath(String path) {
+        if (path == null) return false;
+        if (path.contains("/accept-terms")) return false;
+        return path.startsWith("/api/v1/auth/") ||
+               path.startsWith("/api/v1/debug") ||
+               path.startsWith("/api/v1/public") ||
+               path.startsWith("/api/delivery") ||
+               path.startsWith("/delivery") ||
+               path.startsWith("/actuator") ||
+               path.equals("/v2/api-docs") ||
+               path.startsWith("/v3/api-docs") ||
+               path.startsWith("/swagger");
     }
 }

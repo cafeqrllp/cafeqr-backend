@@ -88,7 +88,14 @@ public class EmailService {
                 """.formatted(otp);
 
         logOtpForDebugging(toEmail, otp);
-        sendPlainTextEmail(toEmail, "Your CafeQR verification code", body, "OTP email");
+        try {
+            sendPlainTextEmail(toEmail, "Your CafeQR verification code", body, "OTP email");
+        } catch (Exception e) {
+            log.warn("SMTP email delivery failed for {}: {}. OTP code logged for verification.", toEmail, e.getMessage());
+            if (!logOtpCode) {
+                throw e;
+            }
+        }
     }
 
     public void sendWelcomeCredentialsEmail(String toEmail, String name, String planName, String password) {
@@ -306,7 +313,7 @@ public class EmailService {
             return;
         }
 
-        log.warn("OTP debug logging is enabled. Disable OTP_LOG_CODE in production.");
+        log.info("[OTP DEBUG] ===> TO: {} | CODE: {}", toEmail, otp);
         System.out.println("\n[OTP DEBUG] ------------------------------------------------");
         System.out.println("[OTP DEBUG] TO: " + toEmail);
         System.out.println("[OTP DEBUG] CODE: " + otp);

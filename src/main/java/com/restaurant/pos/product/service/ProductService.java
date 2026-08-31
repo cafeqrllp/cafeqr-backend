@@ -394,6 +394,18 @@ public class ProductService {
         return mapToDetailDto(product);
     }
 
+    @Transactional(readOnly = true)
+    public ProductDetailDto getProductByBarcode(String barcode) {
+        if (barcode == null || barcode.trim().isEmpty()) {
+            throw new BusinessException("Barcode is required");
+        }
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID orgId = TenantContext.getCurrentOrg();
+        Product product = productRepository.findByBarcodeAndClientIdAndOrgIdOrGlobal(barcode.trim(), clientId, orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product with barcode '" + barcode + "' not found"));
+        return mapToDetailDto(product);
+    }
+
     private ProductListDto mapToDto(Product product, boolean includeImages) {
         try {
             return ProductListDto.builder()
@@ -411,6 +423,7 @@ public class ProductService {
                     .uomName(product.getUom() != null ? product.getUom().getName() : null)
                     .uomPrecision(product.getUom() != null ? product.getUom().getUomPrecision() : 0)
                     .productCode(product.getProductCode())
+                    .barcode(product.getBarcode())
                     .taxRate(product.getTaxRate())
                     .taxCode(product.getTaxCode())
                     .isActive(product.isActive())

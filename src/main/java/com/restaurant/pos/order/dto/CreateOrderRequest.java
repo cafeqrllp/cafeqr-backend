@@ -47,7 +47,6 @@ public class CreateOrderRequest {
     @Schema(description = "Sync origin tag (CLOUD_ONLINE, OFFLINE_QUEUE, MAIN_OFFLINE)")
     private String syncOrigin;
 
-
     @Schema(description = "Target dining table UUID")
     private UUID tableId;
 
@@ -129,6 +128,12 @@ public class CreateOrderRequest {
 
     @Schema(description = "Round-off adjustment applied at settlement", example = "0.00")
     private BigDecimal roundOffAmount;
+
+    @Schema(description = "Loyalty points redeemed during settlement", example = "10")
+    private Integer redeemPoints;
+
+    @Schema(description = "Monetary discount value of loyalty points redeemed", example = "1.00")
+    private BigDecimal loyaltyAmount;
 
     @Schema(description = "Split payment details when paymentMethod is MIXED")
     private List<PaymentSplitRequest> paymentSplits;

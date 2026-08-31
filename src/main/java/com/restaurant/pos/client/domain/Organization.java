@@ -59,10 +59,23 @@ public class Organization extends AuditableEntity {
     private String bannerUrl;
 
     private String googleMapsUrl;
+    @Column(name = "instagram_url", length = 512)
+    private String instagramUrl;
+    @Column(name = "whatsapp_number", length = 100)
+    private String whatsappNumber;
+    @Column(name = "twitter_url", length = 512)
+    private String twitterUrl;
+    @Column(name = "facebook_url", length = 512)
+    private String facebookUrl;
     private String pinCode;
     private Double latitude;
     private Double longitude;
     private Double deliveryRadiusKm;
+
+    @Builder.Default
+    @Column(name = "reviews_enabled")
+    @com.fasterxml.jackson.annotation.JsonProperty("reviewsEnabled")
+    private Boolean reviewsEnabled = true;
 
     private String subscriptionStatus;
     private java.time.LocalDateTime subscriptionExpiryDate;

@@ -72,6 +72,9 @@ public class OrganizationService {
         if (organization.getPosType() == null || organization.getPosType().isBlank()) {
             organization.setPosType(client.getPosType());
         }
+        if (organization.getReviewsEnabled() == null) {
+            organization.setReviewsEnabled(true);
+        }
 
         Organization saved = repository.save(organization);
         seedDefaultPaymentTypes(saved);
@@ -108,6 +111,13 @@ public class OrganizationService {
         organization.setBranchCode(details.getBranchCode());
         organization.setTimezone(details.getTimezone());
         organization.setPosType(details.getPosType());
+        organization.setInstagramUrl(details.getInstagramUrl());
+        organization.setWhatsappNumber(details.getWhatsappNumber());
+        organization.setTwitterUrl(details.getTwitterUrl());
+        organization.setFacebookUrl(details.getFacebookUrl());
+        if (details.getReviewsEnabled() != null) {
+            organization.setReviewsEnabled(details.getReviewsEnabled());
+        }
         
         if (details.getIsactive() != null) {
             organization.setIsactive(details.getIsactive());
