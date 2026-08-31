@@ -25,6 +25,10 @@ import com.restaurant.pos.purchasing.domain.Vendor;
 import com.restaurant.pos.sequence.domain.DocumentType;
 import com.restaurant.pos.sequence.service.DocumentSequenceService;
 
+import com.restaurant.pos.credit.dto.CreateCreditCustomerRequest;
+import com.restaurant.pos.purchasing.domain.Customer;
+import com.restaurant.pos.purchasing.repository.CustomerRepository;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -48,6 +53,7 @@ public class CreditCommandService {
 
     private final CreditGuard creditGuard;
     private final CreditCustomerRepository creditCustomerRepository;
+    private final CustomerRepository customerRepository;
     private final InvoiceRepository invoiceRepository;
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
@@ -79,6 +85,113 @@ public class CreditCommandService {
         CreditCustomer saved = creditCustomerRepository.save(customer);
         auditLogService.logAction("REACTIVATE_CREDIT_CUSTOMER", "CreditCustomer", id.toString());
         return toDtoWithBalance(saved);
+    }
+
+    @Transactional
+    public CreditBPartnerDto createCreditCustomer(CreateCreditCustomerRequest request) {
+        creditGuard.ensureCreditEnabled();
+        UUID clientId = creditGuard.requireClient();
+
+        if (request.getName() == null || request.getName().trim().isBlank()) {
+            throw new BusinessException("Customer name is required");
+        }
+
+        String phone = request.getPhone() != null ? request.getPhone().trim().replaceAll("[\\s()\\-]", "") : null;
+
+        // Find or create linked Customer record
+        Customer customer = null;
+        if (phone != null && !phone.isBlank()) {
+            customer = customerRepository.findByPhoneAndClientId(phone, clientId).orElse(null);
+        }
+
+        if (customer == null) {
+            customer = Customer.builder()
+                    .name(request.getName().trim())
+                    .phone(phone)
+                    .email(request.getEmail())
+                    .creditLimit(request.getCreditLimit() != null ? request.getCreditLimit() : BigDecimal.ZERO)
+                    .openingBalance(request.getOpeningBalance() != null ? request.getOpeningBalance() : BigDecimal.ZERO)
+                    .build();
+            customer.setClientId(clientId);
+            customer.setOrgId(null);
+            customer = customerRepository.save(customer);
+        }
+
+        // Find or create CreditCustomer record
+        var existingCredit = creditCustomerRepository.findByClientIdAndLinkedCustomerIdAndIsactive(clientId,
+                customer.getId(), "Y");
+        if (existingCredit.isPresent()) {
+            return toDtoWithBalance(existingCredit.get());
+        }
+
+        CreditCustomer creditCustomer = CreditCustomer.builder()
+                .linkedCustomerId(customer.getId())
+                .name(customer.getName())
+                .phone(customer.getPhone())
+                .email(customer.getEmail())
+                .status("ACTIVE")
+                .isactive("Y")
+                .creditLimit(request.getCreditLimit() != null ? request.getCreditLimit() : BigDecimal.ZERO)
+                .openingBalance(request.getOpeningBalance() != null ? request.getOpeningBalance() : BigDecimal.ZERO)
+                .notes(request.getNotes())
+                .build();
+        creditCustomer.setClientId(clientId);
+
+        CreditCustomer saved = creditCustomerRepository.save(creditCustomer);
+        auditLogService.logAction("CREATE_CREDIT_CUSTOMER", "CreditCustomer", saved.getId().toString());
+        return toDtoWithBalance(saved);
+    }
+
+    @Transactional
+    public CreditBPartnerDto updateCreditCustomer(UUID id, CreateCreditCustomerRequest request) {
+        creditGuard.ensureCreditEnabled();
+        UUID clientId = creditGuard.requireClient();
+
+        CreditCustomer customer = creditGuard.getCreditCustomerForUpdate(id, clientId);
+        if (request.getName() != null && !request.getName().trim().isBlank()) {
+            customer.setName(request.getName().trim());
+        }
+        if (request.getPhone() != null) {
+            customer.setPhone(request.getPhone().trim().replaceAll("[\\s()\\-]", ""));
+        }
+        if (request.getEmail() != null) {
+            customer.setEmail(request.getEmail());
+        }
+        if (request.getCreditLimit() != null) {
+            customer.setCreditLimit(request.getCreditLimit());
+        }
+        if (request.getOpeningBalance() != null) {
+            customer.setOpeningBalance(request.getOpeningBalance());
+        }
+        if (request.getNotes() != null) {
+            customer.setNotes(request.getNotes());
+        }
+
+        if (customer.getLinkedCustomerId() != null) {
+            customerRepository.findByIdAndClientId(customer.getLinkedCustomerId(), clientId).ifPresent(c -> {
+                c.setName(customer.getName());
+                c.setPhone(customer.getPhone());
+                c.setEmail(customer.getEmail());
+                c.setCreditLimit(customer.getCreditLimit());
+                c.setOpeningBalance(customer.getOpeningBalance());
+                customerRepository.save(c);
+            });
+        }
+
+        CreditCustomer saved = creditCustomerRepository.save(customer);
+        auditLogService.logAction("UPDATE_CREDIT_CUSTOMER", "CreditCustomer", id.toString());
+        return toDtoWithBalance(saved);
+    }
+
+    @Transactional
+    public void deleteCreditCustomer(UUID id) {
+        creditGuard.ensureCreditEnabled();
+        UUID clientId = creditGuard.requireClient();
+        CreditCustomer customer = creditGuard.getCreditCustomerForUpdate(id, clientId);
+        customer.setIsactive("N");
+        customer.setStatus("SUSPENDED");
+        creditCustomerRepository.save(customer);
+        auditLogService.logAction("DELETE_CREDIT_CUSTOMER", "CreditCustomer", id.toString());
     }
 
     // ── Record Payment ───────────────────────────────────────────────────────
@@ -137,7 +250,7 @@ public class CreditCommandService {
                 .creditCustomerId(customer.getId())
                 .orderId(linkedCreditOrder != null ? linkedCreditOrder.getId() : null)
                 .invoiceId(invoiceId)
-                .paymentDate(LocalDateTime.now())
+                .paymentDate(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
                 .roundOffAmount(roundOffAmount)
@@ -194,7 +307,7 @@ public class CreditCommandService {
                 .creditCustomerId(vendor.getId())
                 .orderId(linkedOrder != null ? linkedOrder.getId() : null)
                 .invoiceId(invoiceId)
-                .paymentDate(LocalDateTime.now())
+                .paymentDate(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
                 .referenceNo(referenceNo)

@@ -4,8 +4,9 @@ import com.restaurant.pos.accounting.domain.PaymentAllocation;
 import com.restaurant.pos.accounting.repository.PaymentAllocationRepository;
 import com.restaurant.pos.order.dto.OrderPaymentDto;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.restaurant.pos.loyalty.event.LoyaltyOrderCancelledEvent;
+import com.restaurant.pos.loyalty.event.LoyaltyOrderSettledEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.restaurant.pos.delivery.controller.OrderStatusSseController;
 import com.restaurant.pos.accounting.service.AccountingPostingService;
 import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
@@ -40,6 +41,7 @@ import com.restaurant.pos.order.dto.OrderLineSummaryDto;
 import com.restaurant.pos.order.dto.OrderMoveTableRequest;
 import com.restaurant.pos.order.dto.OrderSettleRequest;
 import com.restaurant.pos.order.dto.OrderSummaryDto;
+import com.restaurant.pos.loyalty.command.LoyaltyCommandService;
 import com.restaurant.pos.invoice.repository.InvoiceRepository;
 import com.restaurant.pos.order.repository.OrderRepository;
 import com.restaurant.pos.order.repository.PaymentRepository;
@@ -108,12 +110,10 @@ public class OrderService {
             "CONFIRMED", Set.of("IN_PROGRESS", "READY", "CANCELLED"),
             "IN_PROGRESS", Set.of("READY", "CONFIRMED", "CANCELLED"),
             "READY", Set.of("CONFIRMED", "IN_PROGRESS", "CANCELLED"),
-            "PENDING", Set.of("CONFIRMED", "CANCELLED")
-    );
+            "PENDING", Set.of("CONFIRMED", "CANCELLED"));
 
     private static final Set<String> FINANCIAL_STATUS_NAMES = Set.of(
-            "BILLED", "COMPLETED", "VOID"
-    );
+            "BILLED", "COMPLETED", "VOID");
 
     private final OrderRepository orderRepository;
     private final InvoiceRepository invoiceRepository;
@@ -137,20 +137,25 @@ public class OrderService {
     private final TimezoneResolver timezoneResolver;
     private final CurrencyRepository currencyRepository;
     private final OrderCalculationService orderCalculationService;
+    private final LoyaltyCommandService loyaltyCommandService;
     private final org.springframework.context.ApplicationContext applicationContext;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     /**
-     * Per-thread user display name cache. Each request thread gets its own map so that
-     * concurrent requests never interfere with each other's cache warm/clear lifecycle.
-     * Populated in bulk by {@link #warmUserNameCache} and cleared in a finally block
+     * Per-thread user display name cache. Each request thread gets its own map so
+     * that
+     * concurrent requests never interfere with each other's cache warm/clear
+     * lifecycle.
+     * Populated in bulk by {@link #warmUserNameCache} and cleared in a finally
+     * block
      * after the batch mapping completes.
      */
-    private final ThreadLocal<Map<String, String>> userNameCache =
-            ThreadLocal.withInitial(java.util.HashMap::new);
+    private final ThreadLocal<Map<String, String>> userNameCache = ThreadLocal.withInitial(java.util.HashMap::new);
 
     private void recalculateOrderTotals(Order order) {
-        if (order == null) return;
-        
+        if (order == null)
+            return;
+
         boolean hasValidLines = false;
         if (order.getLines() != null) {
             hasValidLines = order.getLines().stream()
@@ -174,27 +179,30 @@ public class OrderService {
             BigDecimal disc = BigDecimal.ZERO;
             if (order.getOrderDiscountValue() != null) {
                 if ("PERCENT".equalsIgnoreCase(order.getOrderDiscountType())) {
-                    disc = currentTotal.multiply(order.getOrderDiscountValue().divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP));
+                    disc = currentTotal.multiply(
+                            order.getOrderDiscountValue().divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP));
                 } else {
                     disc = order.getOrderDiscountValue();
                 }
             }
             order.setTotalDiscountAmount(disc.setScale(2, RoundingMode.HALF_UP));
 
-            if (order.getDiscountSource() == com.restaurant.pos.order.domain.DiscountSource.MANUAL) {
+            if (order.getDiscountSource() == com.restaurant.pos.order.domain.DiscountSource.MANUAL || order.getLoyaltyAmount() != null) {
                 BigDecimal roundOff = order.getRoundOffAmount() != null ? order.getRoundOffAmount() : BigDecimal.ZERO;
-                BigDecimal finalPayable = currentTotal.subtract(disc).add(roundOff).max(BigDecimal.ZERO);
+                BigDecimal loyaltyAmt = order.getLoyaltyAmount() != null ? order.getLoyaltyAmount() : BigDecimal.ZERO;
+                BigDecimal finalPayable = currentTotal.subtract(disc).subtract(loyaltyAmt).add(roundOff).max(BigDecimal.ZERO);
                 order.setGrandTotal(finalPayable.setScale(2, RoundingMode.HALF_UP));
             }
             return;
         }
-        
+
         ConfigurationDto config = configurationService.getEffectiveConfigurationForBranch(order.getOrgId());
-        
+
         List<CalculationLineRequest> lineRequests = new ArrayList<>();
         if (order.getLines() != null) {
             for (OrderLine line : order.getLines()) {
-                if (!"Y".equalsIgnoreCase(line.getIsactive())) continue;
+                if (!"Y".equalsIgnoreCase(line.getIsactive()))
+                    continue;
                 CalculationLineRequest req = CalculationLineRequest.builder()
                         .lineId(line.getId())
                         .clientLineId(line.getClientLineId())
@@ -217,9 +225,9 @@ public class OrderService {
                 lineRequests.add(req);
             }
         }
-        
-        boolean isCreditOrder = order.getCreditCustomerId() != null 
-                || "CREDIT".equalsIgnoreCase(order.getReference()) 
+
+        boolean isCreditOrder = order.getCreditCustomerId() != null
+                || "CREDIT".equalsIgnoreCase(order.getReference())
                 || "CREDIT".equalsIgnoreCase(order.getPaymentMethod());
 
         CalculationRequest request = CalculationRequest.builder()
@@ -230,25 +238,31 @@ public class OrderService {
                 .roundOffMode(isCreditOrder ? "DISABLED" : order.getRoundOffMode())
                 .orgId(order.getOrgId())
                 .build();
-                
+
         CalculationResult result = orderCalculationService.calculate(request, config);
-        
+
         order.setGrossAmount(result.getGrossAmount());
         order.setTotalDiscountAmount(result.getLineDiscountDisplayAmount().add(result.getOrderDiscountDisplayAmount()));
         order.setTotalTaxAmount(result.getTotalTax());
         order.setTotalAmount(result.getTotalBeforeRoundOff());
-        order.setGrandTotal(result.getGrandTotal());
+
+        BigDecimal calcGrandTotal = result.getGrandTotal();
+        if (order.getLoyaltyAmount() != null && order.getLoyaltyAmount().compareTo(BigDecimal.ZERO) > 0) {
+            calcGrandTotal = calcGrandTotal.subtract(order.getLoyaltyAmount()).max(BigDecimal.ZERO);
+        }
+        order.setGrandTotal(calcGrandTotal);
         order.setRoundOffAmount(result.getRoundOffAmount());
-        
+
         // Map transient fields for discount breakdown face/base
         order.setLineDiscountFaceAmount(result.getLineDiscountDisplayAmount());
         order.setLineDiscountBaseAmount(result.getTotalLineDiscountBase());
         order.setOrderDiscountFaceAmount(result.getOrderDiscountDisplayAmount());
         order.setOrderDiscountBaseAmount(result.getTotalOrderDiscountBase());
 
-        // Stamp the authoritative calculation version from result so Order and Invoice are always in sync
+        // Stamp the authoritative calculation version from result so Order and Invoice
+        // are always in sync
         order.setDiscountCalculationVersion(result.getEngineVersion());
-        
+
         java.util.Map<UUID, CalculatedLine> byLineId = result.getLines().stream()
                 .filter(cl -> cl.getLineId() != null)
                 .collect(Collectors.toMap(CalculatedLine::getLineId, cl -> cl));
@@ -258,10 +272,12 @@ public class OrderService {
 
         if (order.getLines() != null) {
             for (OrderLine line : order.getLines()) {
-                if (!"Y".equalsIgnoreCase(line.getIsactive())) continue;
+                if (!"Y".equalsIgnoreCase(line.getIsactive()))
+                    continue;
 
                 CalculatedLine cl = null;
-                // Prefer stable clientLineId, fall back to persisted lineId — never positional index
+                // Prefer stable clientLineId, fall back to persisted lineId — never positional
+                // index
                 if (line.getClientLineId() != null) {
                     cl = byClientLineId.get(line.getClientLineId());
                 }
@@ -270,9 +286,9 @@ public class OrderService {
                 }
                 if (cl == null) {
                     throw new IllegalStateException(
-                        "Financial integrity error: calculation result missing for active order line" +
-                        " [lineId=" + line.getId() + ", clientLineId=" + line.getClientLineId() + "]." +
-                        " This indicates a line identity mismatch. Aborting save.");
+                            "Financial integrity error: calculation result missing for active order line" +
+                                    " [lineId=" + line.getId() + ", clientLineId=" + line.getClientLineId() + "]." +
+                                    " This indicates a line identity mismatch. Aborting save.");
                 }
 
                 line.setGrossLineAmount(cl.getGrossFaceAmount());
@@ -344,15 +360,14 @@ public class OrderService {
             if (clientId != null) {
                 if (orgId != null) {
                     currencyRepository.findByClientIdAndOrgIdAndIsDefaultTrue(clientId, orgId)
-                        .stream().findFirst()
-                        .ifPresentOrElse(
-                            c -> order.setCurrencyId(c.getId()),
-                            () -> currencyRepository.findByClientIdAndIsDefaultTrue(clientId)
-                                .stream().findFirst().ifPresent(c -> order.setCurrencyId(c.getId()))
-                        );
+                            .stream().findFirst()
+                            .ifPresentOrElse(
+                                    c -> order.setCurrencyId(c.getId()),
+                                    () -> currencyRepository.findByClientIdAndIsDefaultTrue(clientId)
+                                            .stream().findFirst().ifPresent(c -> order.setCurrencyId(c.getId())));
                 } else {
                     currencyRepository.findByClientIdAndIsDefaultTrue(clientId)
-                        .stream().findFirst().ifPresent(c -> order.setCurrencyId(c.getId()));
+                            .stream().findFirst().ifPresent(c -> order.setCurrencyId(c.getId()));
                 }
             }
         }
@@ -371,7 +386,9 @@ public class OrderService {
     private String resolveDocumentNumber(Order order, DocumentType documentType, String requestedNumber) {
         if (requestedNumber != null && !requestedNumber.isBlank()) {
             boolean isTemporaryOfflineNumber = requestedNumber.startsWith("OFFLINE-");
-            if (!isTemporaryOfflineNumber && (isMainOfflineSync(order) || (order != null && (order.getOriginalOrderId() != null || (order.getRevisionNumber() != null && order.getRevisionNumber() > 0))))) {
+            if (!isTemporaryOfflineNumber
+                    && (isMainOfflineSync(order) || (order != null && (order.getOriginalOrderId() != null
+                            || (order.getRevisionNumber() != null && order.getRevisionNumber() > 0))))) {
                 if (isMainOfflineSync(order)) {
                     offlineSequenceLeaseService.consumeLeasedNumber(
                             documentType,
@@ -389,7 +406,7 @@ public class OrderService {
     }
 
     private boolean isMainOfflineSync(Order order) {
-        return order != null && ("MAIN_OFFLINE".equalsIgnoreCase(order.getSyncOrigin()) 
+        return order != null && ("MAIN_OFFLINE".equalsIgnoreCase(order.getSyncOrigin())
                 || "OFFLINE_QUEUE".equalsIgnoreCase(order.getSyncOrigin()));
     }
 
@@ -452,11 +469,14 @@ public class OrderService {
     private void enqueueCloudPrintJobs(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines) {
         try {
             if (order == null || order.getOrderType() != OrderType.SALE || isMainOfflineSync(order)) {
-                log.info("enqueueCloudPrintJobs skipped: order is null or not a sale, or offline sync. Order: {}", order != null ? order.getId() : "null");
+                log.info("enqueueCloudPrintJobs skipped: order is null or not a sale, or offline sync. Order: {}",
+                        order != null ? order.getId() : "null");
                 return;
             }
             String status = order.getOrderStatus();
-            log.info("enqueueCloudPrintJobs check: orderId={}, status={}, addedLines={}, removedLines={}", order.getId(), status, (addedLines != null ? addedLines.size() : 0), (removedLines != null ? removedLines.size() : 0));
+            log.info("enqueueCloudPrintJobs check: orderId={}, status={}, addedLines={}, removedLines={}",
+                    order.getId(), status, (addedLines != null ? addedLines.size() : 0),
+                    (removedLines != null ? removedLines.size() : 0));
             if ("KITCHEN".equalsIgnoreCase(status)
                     || "CONFIRMED".equalsIgnoreCase(status)
                     || "IN_PROGRESS".equalsIgnoreCase(status)
@@ -471,7 +491,8 @@ public class OrderService {
                         log.info("Calling enqueueKotEditJob for order {}", order.getId());
                         printJobService.enqueueKotEditJob(order, addedLines, removedLines, "edit");
                     } else {
-                        log.info("addedLines and removedLines are both empty for order {}, no KOT edit generated", order.getId());
+                        log.info("addedLines and removedLines are both empty for order {}, no KOT edit generated",
+                                order.getId());
                     }
                 } else {
                     log.info("Calling enqueueForOrder (New KOT) for order {}", order.getId());
@@ -598,16 +619,21 @@ public class OrderService {
         }
 
         // When an offline-completed dine-in order is synced from the queue, the table
-        // may already be OCCUPIED (the KOT that was placed before going offline was synced
-        // first and set the table status). The settlement is a self-contained final order
-        // created offline — it must not be rejected just because the table is now occupied.
-        // Skip the table-available guard for any terminal offline order so it syncs cleanly.
+        // may already be OCCUPIED (the KOT that was placed before going offline was
+        // synced
+        // first and set the table status). The settlement is a self-contained final
+        // order
+        // created offline — it must not be rejected just because the table is now
+        // occupied.
+        // Skip the table-available guard for any terminal offline order so it syncs
+        // cleanly.
         String status = order.getOrderStatus() == null ? "" : order.getOrderStatus().toUpperCase();
         String syncOrigin = order.getSyncOrigin() == null ? "" : order.getSyncOrigin().toUpperCase();
         boolean isOfflineOrigin = syncOrigin.contains("OFFLINE");
         boolean isFinalStatus = "COMPLETED".equals(status) || "BILLED".equals(status) || "PAID".equals(status);
         if (isOfflineOrigin && isFinalStatus) {
-            log.debug("[Order Create] Skipping table-available check for offline final order (syncOrigin={}, orderStatus={})",
+            log.debug(
+                    "[Order Create] Skipping table-available check for offline final order (syncOrigin={}, orderStatus={})",
                     order.getSyncOrigin(), order.getOrderStatus());
             return;
         }
@@ -713,7 +739,8 @@ public class OrderService {
                     }
                 }
             }
-            if (needsHydration) break;
+            if (needsHydration)
+                break;
         }
 
         if (!needsHydration) {
@@ -736,15 +763,18 @@ public class OrderService {
                 .collect(Collectors.toMap(Product::getId, product -> product));
 
         for (Order order : orders) {
-            if (order.getLines() == null) continue;
+            if (order.getLines() == null)
+                continue;
             for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
                 Product product = productsById.get(line.getProductId());
-                if (product == null) continue;
+                if (product == null)
+                    continue;
 
                 if (order.getOrderType() == OrderType.PURCHASE) {
                     if (product.getRecipeLines() != null && !product.getRecipeLines().isEmpty()) {
                         throw new BusinessException(
-                                "Product '" + product.getName() + "' has ingredients and cannot be purchased directly.");
+                                "Product '" + product.getName()
+                                        + "' has ingredients and cannot be purchased directly.");
                     }
                 }
 
@@ -1296,13 +1326,15 @@ public class OrderService {
     }
 
     private String resolveCombinedOrderPaymentMethod(Order hydrated) {
-        if (hydrated == null || hydrated.getId() == null) return null;
+        if (hydrated == null || hydrated.getId() == null)
+            return null;
         try {
             List<Payment> payments = paymentRepository.findByOrderId(hydrated.getId());
             if (payments != null && !payments.isEmpty()) {
                 Set<String> methods = new LinkedHashSet<>();
                 for (Payment p : payments) {
-                    if (p != null && "Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
+                    if (p != null && "Y".equalsIgnoreCase(p.getIsactive())
+                            && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
                         if (p.getPaymentMethod() != null && !p.getPaymentMethod().isBlank()) {
                             methods.add(p.getPaymentMethod().trim());
                         }
@@ -1312,7 +1344,8 @@ public class OrderService {
                     return String.join(", ", methods);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return firstNonBlank(hydrated.getPaymentMethod(), hydrated.getReference());
     }
 
@@ -1451,7 +1484,8 @@ public class OrderService {
             predicates.add(cb.equal(root.get("orderType"), OrderType.SALE));
 
             if (status != null && !status.isBlank() && !"ALL".equalsIgnoreCase(status)) {
-                if ("CONFIRMED_COMPLETED".equalsIgnoreCase(status) || "COMPLETED_AND_RECEIVED".equalsIgnoreCase(status)) {
+                if ("CONFIRMED_COMPLETED".equalsIgnoreCase(status)
+                        || "COMPLETED_AND_RECEIVED".equalsIgnoreCase(status)) {
                     predicates.add(cb.or(
                             cb.equal(root.get("orderStatus"), "CONFIRMED"),
                             cb.equal(root.get("orderStatus"), "COMPLETED")));
@@ -1613,14 +1647,16 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public org.springframework.data.domain.Page<Order> getOrdersByType(OrderType orderType, org.springframework.data.domain.Pageable pageable) {
+    public org.springframework.data.domain.Page<Order> getOrdersByType(OrderType orderType,
+            org.springframework.data.domain.Pageable pageable) {
         UUID tenantId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
         org.springframework.data.domain.Page<Order> page;
         if (orgId == null) {
             page = orderRepository.findByClientIdAndOrderTypeOrderByCreatedAtDesc(tenantId, orderType, pageable);
         } else {
-            page = orderRepository.findByClientIdAndOrgIdAndOrderTypeOrderByCreatedAtDesc(tenantId, orgId, orderType, pageable);
+            page = orderRepository.findByClientIdAndOrgIdAndOrderTypeOrderByCreatedAtDesc(tenantId, orgId, orderType,
+                    pageable);
         }
         return page.map(this::hydrateOrder);
     }
@@ -1707,7 +1743,6 @@ public class OrderService {
             userNameCache.get().clear();
         }
     }
-
 
     @Transactional(readOnly = true)
     public List<OrderSummaryDto> getSyncBootstrapOrders() {
@@ -1823,7 +1858,6 @@ public class OrderService {
                 order.setOrderStatus("DRAFT");
             }
 
-
             diagnosticPhase = "validate_table_available";
             validateTableAvailableForNewOrder(order);
 
@@ -1857,6 +1891,8 @@ public class OrderService {
             saved.setRoundOffAmount(order.getRoundOffAmount());
             saved.setAmountPaid(order.getAmountPaid());
             saved.setPaymentSplits(order.getPaymentSplits());
+            saved.setRedeemPoints(order.getRedeemPoints());
+            saved.setLoyaltyAmount(order.getLoyaltyAmount());
 
             diagnosticPhase = "generate_invoice";
             if (shouldGenerateInvoice(saved)) {
@@ -1916,6 +1952,25 @@ public class OrderService {
                 } else if (isCompletedCreditSale(saved)) {
                     accountingPostingService.postSaleCogs(saved);
                 }
+
+                // Process loyalty redemption on order creation if specified
+                if (order.getRedeemPoints() != null && order.getRedeemPoints() > 0) {
+                    UUID custId = saved.getCustomerId();
+                    if (custId == null && saved.getCustomers() != null && !saved.getCustomers().isEmpty()) {
+                        custId = saved.getCustomers().get(0).getId();
+                    }
+                    if (custId != null) {
+                        try {
+                            loyaltyCommandService.redeemPoints(custId, saved.getId(), order.getRedeemPoints());
+                            log.info(
+                                    "Successfully redeemed loyalty points on order create | orderId={} | points={} | customerId={}",
+                                    saved.getId(), order.getRedeemPoints(), custId);
+                        } catch (Exception ex) {
+                            log.error("Failed to redeem loyalty points on order create | orderId={} | customerId={}",
+                                    saved.getId(), custId, ex);
+                        }
+                    }
+                }
             }
 
             diagnosticPhase = "handle_table_status";
@@ -1928,6 +1983,7 @@ public class OrderService {
             diagnosticPhase = "enqueue_cloud_print_jobs";
             enqueueCloudPrintJobs(hydrated);
             logCreditOrderCreateSuccess(logCreditDiagnostics, hydrated);
+            publishLoyaltyEventIfApplicable(hydrated);
 
             try {
                 if (hydrated.getOrderType() == OrderType.SALE) {
@@ -1962,25 +2018,28 @@ public class OrderService {
 
             Optional<Order> existing = orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
                     clientId, resolvedOrgId, order.getSourceLocalRef(), "VOID");
-            
+
             if (existing.isPresent()) {
                 Order existingOrder = existing.get();
                 if (existingOrder.getRequestFingerprint() != null &&
                         !existingOrder.getRequestFingerprint().equals(order.getRequestFingerprint())) {
-                    log.warn("Idempotency conflict (pre-check) | key={} | existingFingerprint={} | incomingFingerprint={}",
-                            order.getSourceLocalRef(), existingOrder.getRequestFingerprint(), order.getRequestFingerprint());
+                    log.warn(
+                            "Idempotency conflict (pre-check) | key={} | existingFingerprint={} | incomingFingerprint={}",
+                            order.getSourceLocalRef(), existingOrder.getRequestFingerprint(),
+                            order.getRequestFingerprint());
                     throw new com.restaurant.pos.common.exception.DuplicateResourceException(
                             "Idempotency conflict: a different request with the same key has already been processed.");
                 }
                 log.info("Idempotent create hit (pre-check) | sourceLocalRef={}", order.getSourceLocalRef());
                 return new com.restaurant.pos.order.dto.IdempotentCreateResult(hydrateOrder(existingOrder), false);
             }
-            
+
             try {
                 Order saved = self().createOrder(order);
                 return new com.restaurant.pos.order.dto.IdempotentCreateResult(saved, true);
             } catch (org.springframework.dao.DataIntegrityViolationException e) {
-                log.info("Data integrity violation on create, recovering... | sourceLocalRef={}", order.getSourceLocalRef());
+                log.info("Data integrity violation on create, recovering... | sourceLocalRef={}",
+                        order.getSourceLocalRef());
                 Optional<Order> winner = orderRepository.findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(
                         clientId, resolvedOrgId, order.getSourceLocalRef(), "VOID");
                 if (winner.isPresent()) {
@@ -1996,7 +2055,7 @@ public class OrderService {
                 throw e;
             }
         }
-        
+
         Order saved = self().createOrder(order);
         return new com.restaurant.pos.order.dto.IdempotentCreateResult(saved, true);
     }
@@ -2047,7 +2106,7 @@ public class OrderService {
     }
 
     private boolean isDiscountOnlyUpdate(Order oldOrder, Order updates) {
-        if ("PAID".equalsIgnoreCase(oldOrder.getPaymentStatus()) 
+        if ("PAID".equalsIgnoreCase(oldOrder.getPaymentStatus())
                 || "COMPLETED".equalsIgnoreCase(oldOrder.getOrderStatus())
                 || "VOID".equalsIgnoreCase(oldOrder.getOrderStatus())) {
             return false;
@@ -2055,10 +2114,11 @@ public class OrderService {
         if (updates.getLines() == null || updates.getLines().isEmpty()) {
             return true;
         }
-        
-        List<OrderLine> oldActiveLines = oldOrder.getLines() == null ? new java.util.ArrayList<>() : oldOrder.getLines().stream()
-                .filter(ol -> "Y".equalsIgnoreCase(ol.getIsactive()))
-                .toList();
+
+        List<OrderLine> oldActiveLines = oldOrder.getLines() == null ? new java.util.ArrayList<>()
+                : oldOrder.getLines().stream()
+                        .filter(ol -> "Y".equalsIgnoreCase(ol.getIsactive()))
+                        .toList();
         List<OrderLine> newActiveLines = updates.getLines().stream()
                 .filter(ol -> "Y".equalsIgnoreCase(ol.getIsactive()))
                 .toList();
@@ -2069,19 +2129,19 @@ public class OrderService {
 
         for (OrderLine upLine : newActiveLines) {
             OrderLine match = oldActiveLines.stream()
-                .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
-                    || (Objects.equals(ol.getProductId(), upLine.getProductId())
-                        && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
-                .findFirst()
-                .orElse(null);
+                    .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
+                            || (Objects.equals(ol.getProductId(), upLine.getProductId())
+                                    && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
+                    .findFirst()
+                    .orElse(null);
             if (match == null) {
                 return false;
             }
-            if (upLine.getQuantity() != null && match.getQuantity() != null 
+            if (upLine.getQuantity() != null && match.getQuantity() != null
                     && upLine.getQuantity().compareTo(match.getQuantity()) != 0) {
                 return false;
             }
-            if (upLine.getUnitPrice() != null && match.getUnitPrice() != null 
+            if (upLine.getUnitPrice() != null && match.getUnitPrice() != null
                     && upLine.getUnitPrice().compareTo(match.getUnitPrice()) != 0) {
                 return false;
             }
@@ -2098,34 +2158,52 @@ public class OrderService {
         Order oldOrder = getOrder(id);
 
         if (isDiscountOnlyUpdate(oldOrder, updates)) {
-            if (updates.getOrderStatus() != null) oldOrder.setOrderStatus(updates.getOrderStatus());
-            if (updates.getPaymentStatus() != null) oldOrder.setPaymentStatus(updates.getPaymentStatus());
-            if (updates.getIsCredit() != null) oldOrder.setIsCredit(updates.getIsCredit());
-            if (updates.getCreditCustomerId() != null) oldOrder.setCreditCustomerId(updates.getCreditCustomerId());
-            if (updates.getCustomerId() != null) oldOrder.setCustomerId(updates.getCustomerId());
-            if (updates.getCustomerName() != null) oldOrder.setCustomerName(updates.getCustomerName());
-            if (updates.getCustomerPhone() != null) oldOrder.setCustomerPhone(updates.getCustomerPhone());
-            if (updates.getCustomerIds() != null) oldOrder.setCustomerIds(updates.getCustomerIds());
-            if (updates.getPaymentMethod() != null) oldOrder.setPaymentMethod(updates.getPaymentMethod());
-            if (updates.getReference() != null) oldOrder.setReference(updates.getReference());
-            if (updates.getDescription() != null) oldOrder.setDescription(updates.getDescription());
-            if (updates.getOrderDiscountType() != null) oldOrder.setOrderDiscountType(updates.getOrderDiscountType());
-            if (updates.getOrderDiscountValue() != null) oldOrder.setOrderDiscountValue(updates.getOrderDiscountValue());
-            if (updates.getDiscountSource() != null) oldOrder.setDiscountSource(updates.getDiscountSource());
-            if (updates.getDiscountCalculationVersion() != null) oldOrder.setDiscountCalculationVersion(updates.getDiscountCalculationVersion());
-            if (updates.getRoundOffAmount() != null) oldOrder.setRoundOffAmount(updates.getRoundOffAmount());
-            if (updates.getRoundOffMode() != null) oldOrder.setRoundOffMode(updates.getRoundOffMode());
+            if (updates.getOrderStatus() != null)
+                oldOrder.setOrderStatus(updates.getOrderStatus());
+            if (updates.getPaymentStatus() != null)
+                oldOrder.setPaymentStatus(updates.getPaymentStatus());
+            if (updates.getIsCredit() != null)
+                oldOrder.setIsCredit(updates.getIsCredit());
+            if (updates.getCreditCustomerId() != null)
+                oldOrder.setCreditCustomerId(updates.getCreditCustomerId());
+            if (updates.getCustomerId() != null)
+                oldOrder.setCustomerId(updates.getCustomerId());
+            if (updates.getCustomerName() != null)
+                oldOrder.setCustomerName(updates.getCustomerName());
+            if (updates.getCustomerPhone() != null)
+                oldOrder.setCustomerPhone(updates.getCustomerPhone());
+            if (updates.getCustomerIds() != null)
+                oldOrder.setCustomerIds(updates.getCustomerIds());
+            if (updates.getPaymentMethod() != null)
+                oldOrder.setPaymentMethod(updates.getPaymentMethod());
+            if (updates.getReference() != null)
+                oldOrder.setReference(updates.getReference());
+            if (updates.getDescription() != null)
+                oldOrder.setDescription(updates.getDescription());
+            if (updates.getOrderDiscountType() != null)
+                oldOrder.setOrderDiscountType(updates.getOrderDiscountType());
+            if (updates.getOrderDiscountValue() != null)
+                oldOrder.setOrderDiscountValue(updates.getOrderDiscountValue());
+            if (updates.getDiscountSource() != null)
+                oldOrder.setDiscountSource(updates.getDiscountSource());
+            if (updates.getDiscountCalculationVersion() != null)
+                oldOrder.setDiscountCalculationVersion(updates.getDiscountCalculationVersion());
+            if (updates.getRoundOffAmount() != null)
+                oldOrder.setRoundOffAmount(updates.getRoundOffAmount());
+            if (updates.getRoundOffMode() != null)
+                oldOrder.setRoundOffMode(updates.getRoundOffMode());
 
             if (updates.getLines() != null) {
                 for (OrderLine upLine : updates.getLines()) {
                     OrderLine match = oldOrder.getLines().stream()
-                        .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
-                            || (Objects.equals(ol.getProductId(), upLine.getProductId())
-                                && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
-                        .findFirst()
-                        .orElse(null);
+                            .filter(ol -> (upLine.getId() != null && Objects.equals(ol.getId(), upLine.getId()))
+                                    || (Objects.equals(ol.getProductId(), upLine.getProductId())
+                                            && Objects.equals(ol.getVariantId(), upLine.getVariantId())))
+                            .findFirst()
+                            .orElse(null);
                     if (match != null) {
-                        if (upLine.getDiscountAmount() != null) match.setDiscountAmount(upLine.getDiscountAmount());
+                        if (upLine.getDiscountAmount() != null)
+                            match.setDiscountAmount(upLine.getDiscountAmount());
                         // Maintain mutual exclusivity between amount and percent — mirrors
                         // the same logic in recalculateOrderTotals so that switching from
                         // an AMOUNT discount to a PERCENT discount (or vice versa) never
@@ -2133,22 +2211,33 @@ public class OrderService {
                         // resolveLineDiscountType/resolveLineDiscountValue.
                         if (upLine.getManualDiscountPercent() != null) {
                             match.setManualDiscountPercent(upLine.getManualDiscountPercent());
-                            match.setManualDiscountAmount(null);  // clear stale amount
+                            match.setManualDiscountAmount(null); // clear stale amount
                         } else if (upLine.getManualDiscountAmount() != null) {
                             match.setManualDiscountAmount(upLine.getManualDiscountAmount());
-                            match.setManualDiscountPercent(null);  // clear stale percent
+                            match.setManualDiscountPercent(null); // clear stale percent
                         }
-                        if (upLine.getAllocatedOrderDiscount() != null) match.setAllocatedOrderDiscount(upLine.getAllocatedOrderDiscount());
-                        if (upLine.getTaxAmount() != null) match.setTaxAmount(upLine.getTaxAmount());
-                        if (upLine.getLineTotal() != null) match.setLineTotal(upLine.getLineTotal());
-                        if (upLine.getGrossLineAmount() != null) match.setGrossLineAmount(upLine.getGrossLineAmount());
-                        if (upLine.getUnitPriceExTax() != null) match.setUnitPriceExTax(upLine.getUnitPriceExTax());
-                        if (match.getUnitPriceExTax() == null) match.setUnitPriceExTax(upLine.getUnitPriceExTax());
-                        if (upLine.getTaxableAmount() != null) match.setTaxableAmount(upLine.getTaxableAmount());
-                        if (upLine.getTaxType() != null) match.setTaxType(upLine.getTaxType());
-                        if (upLine.getTaxSnapshotRate() != null) match.setTaxSnapshotRate(upLine.getTaxSnapshotRate());
-                        if (upLine.getTaxCode() != null) match.setTaxCode(upLine.getTaxCode());
-                        if (upLine.getTaxName() != null) match.setTaxName(upLine.getTaxName());
+                        if (upLine.getAllocatedOrderDiscount() != null)
+                            match.setAllocatedOrderDiscount(upLine.getAllocatedOrderDiscount());
+                        if (upLine.getTaxAmount() != null)
+                            match.setTaxAmount(upLine.getTaxAmount());
+                        if (upLine.getLineTotal() != null)
+                            match.setLineTotal(upLine.getLineTotal());
+                        if (upLine.getGrossLineAmount() != null)
+                            match.setGrossLineAmount(upLine.getGrossLineAmount());
+                        if (upLine.getUnitPriceExTax() != null)
+                            match.setUnitPriceExTax(upLine.getUnitPriceExTax());
+                        if (match.getUnitPriceExTax() == null)
+                            match.setUnitPriceExTax(upLine.getUnitPriceExTax());
+                        if (upLine.getTaxableAmount() != null)
+                            match.setTaxableAmount(upLine.getTaxableAmount());
+                        if (upLine.getTaxType() != null)
+                            match.setTaxType(upLine.getTaxType());
+                        if (upLine.getTaxSnapshotRate() != null)
+                            match.setTaxSnapshotRate(upLine.getTaxSnapshotRate());
+                        if (upLine.getTaxCode() != null)
+                            match.setTaxCode(upLine.getTaxCode());
+                        if (upLine.getTaxName() != null)
+                            match.setTaxName(upLine.getTaxName());
                     }
                 }
             }
@@ -2175,10 +2264,10 @@ public class OrderService {
                     if (existingInv.getLines() != null) {
                         for (InvoiceLine invLine : existingInv.getLines()) {
                             OrderLine ol = saved.getLines().stream()
-                                .filter(l -> Objects.equals(l.getProductId(), invLine.getProductId())
-                                    && Objects.equals(l.getVariantId(), invLine.getVariantId()))
-                                .findFirst()
-                                .orElse(null);
+                                    .filter(l -> Objects.equals(l.getProductId(), invLine.getProductId())
+                                            && Objects.equals(l.getVariantId(), invLine.getVariantId()))
+                                    .findFirst()
+                                    .orElse(null);
                             if (ol != null) {
                                 invLine.setDiscountAmount(ol.getDiscountAmount());
                                 invLine.setManualDiscountAmount(ol.getManualDiscountAmount());
@@ -2208,7 +2297,8 @@ public class OrderService {
                             existingPay.setInvoiceTotal(saved.getGrandTotal());
                             existingPay.setRoundOffAmount(saved.getRoundOffAmount());
                             paymentRepository.save(existingPay);
-                            accountingPostingService.reversePayment(existingPay, "Payment amount corrected after discount/roundoff update");
+                            accountingPostingService.reversePayment(existingPay,
+                                    "Payment amount corrected after discount/roundoff update");
                             accountingPostingService.postPayment(saved, existingPay);
                         }
                     }
@@ -2228,7 +2318,8 @@ public class OrderService {
                 originalOrderNo + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
         if (oldOrder.getSourceOperationId() != null) {
             oldOrder.setSourceOperationId(
-                    oldOrder.getSourceOperationId() + "_VOID_" + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
+                    oldOrder.getSourceOperationId() + "_VOID_"
+                            + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
         }
         oldOrder.setOrderStatus("VOID");
         oldOrder.setIsactive("N");
@@ -2342,9 +2433,11 @@ public class OrderService {
         newOrder.setGrossAmount(
                 updates.getGrossAmount() != null ? updates.getGrossAmount() : oldOrder.getGrossAmount());
         newOrder.setOrderDiscountType(
-                updates.getOrderDiscountType() != null ? updates.getOrderDiscountType() : oldOrder.getOrderDiscountType());
+                updates.getOrderDiscountType() != null ? updates.getOrderDiscountType()
+                        : oldOrder.getOrderDiscountType());
         newOrder.setOrderDiscountValue(
-                updates.getOrderDiscountValue() != null ? updates.getOrderDiscountValue() : oldOrder.getOrderDiscountValue());
+                updates.getOrderDiscountValue() != null ? updates.getOrderDiscountValue()
+                        : oldOrder.getOrderDiscountValue());
         newOrder.setDiscountSource(
                 updates.getDiscountSource() != null ? updates.getDiscountSource() : oldOrder.getDiscountSource());
         newOrder.setDiscountCalculationVersion(
@@ -2391,7 +2484,8 @@ public class OrderService {
                 copy.setManualDiscountAmount(oldLine.getManualDiscountAmount());
                 copy.setManualDiscountPercent(oldLine.getManualDiscountPercent());
                 copy.setAllocatedOrderDiscount(oldLine.getAllocatedOrderDiscount());
-                // Preserve transient client-generated line identity for stable recalculation mapping
+                // Preserve transient client-generated line identity for stable recalculation
+                // mapping
                 copy.setClientLineId(oldLine.getClientLineId());
                 // ──────────────────────────────────────────────────────────────────────
                 newOrder.addLine(copy);
@@ -2492,9 +2586,10 @@ public class OrderService {
                         }
                     }
                 }
-                
+
                 if (!paymentSplits.isEmpty()) {
-                    generatePayment(saved, "MIXED", originalPaymentNo, saved.getGrandTotal(), null, null, null, paymentSplits);
+                    generatePayment(saved, "MIXED", originalPaymentNo, saved.getGrandTotal(), null, null, null,
+                            paymentSplits);
                 } else {
                     generatePayment(saved, salePaymentMethod, originalPaymentNo);
                 }
@@ -2521,6 +2616,7 @@ public class OrderService {
         Order hydrated = hydrateOrder(saved);
         hydrated.setSkipAutoPrintKinds(newOrder.getSkipAutoPrintKinds());
         enqueueCloudPrintJobs(hydrated, addedLines, removedLines);
+        publishLoyaltyEventIfApplicable(hydrated);
         return hydrated;
     }
 
@@ -2537,12 +2633,14 @@ public class OrderService {
         }
 
         if (FINANCIAL_STATUS_NAMES.contains(toUpper)) {
-            throw new BusinessException("Status transition to '" + toUpper + "' must go through dedicated command endpoints (/bill, /settle, /cancel, /complete-credit).");
+            throw new BusinessException("Status transition to '" + toUpper
+                    + "' must go through dedicated command endpoints (/bill, /settle, /cancel, /complete-credit).");
         }
 
         Set<String> allowed = ALLOWED_OPERATIONAL_TRANSITIONS.get(fromUpper);
         if (allowed == null || !allowed.contains(toUpper)) {
-            throw new BusinessException("Invalid order status transition from '" + fromUpper + "' to '" + toUpper + "'.");
+            throw new BusinessException(
+                    "Invalid order status transition from '" + fromUpper + "' to '" + toUpper + "'.");
         }
     }
 
@@ -2622,6 +2720,7 @@ public class OrderService {
         publishOrderStatusUpdate(result);
         return hydrated;
     }
+
     private void registerCustomerForAcceptedDeliveryOrder(Order order) {
         String description = order.getDescription();
         if (description == null || description.isBlank()) {
@@ -2744,17 +2843,20 @@ public class OrderService {
     public Order settleOrder(UUID id, OrderSettleRequest request) {
         Order order = getOrder(id);
         ensureOrderCanChange(order, "settle");
+        ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(order.getClientId(),
+                order.getOrgId());
 
         OrderSettleRequest safeRequest = request == null ? new OrderSettleRequest() : request;
         String paymentMethod = normalizePaymentMethod(safeRequest.getPaymentMethod());
         if (hasExplicitPaymentSplits(safeRequest)) {
             paymentMethod = "MIXED";
         }
-        
+
         if (safeRequest.getDiscountAmount() != null) {
             order.setOrderDiscountValue(BigDecimal.ZERO);
             recalculateOrderTotals(order);
-            BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount() : BigDecimal.ZERO;
+            BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount()
+                    : BigDecimal.ZERO;
 
             BigDecimal requestedTotalDiscount = moneyValue(safeRequest.getDiscountAmount());
             BigDecimal orderDiscountValue = requestedTotalDiscount.subtract(lineDiscountSum).max(BigDecimal.ZERO);
@@ -2762,6 +2864,13 @@ public class OrderService {
             order.setOrderDiscountType("AMOUNT");
             order.setOrderDiscountValue(orderDiscountValue);
             order.setDiscountSource(com.restaurant.pos.order.domain.DiscountSource.MANUAL);
+        }
+
+        if (safeRequest.getLoyaltyAmount() != null) {
+            order.setLoyaltyAmount(safeRequest.getLoyaltyAmount());
+        }
+        if (safeRequest.getRedeemPoints() != null) {
+            order.setRedeemPoints(safeRequest.getRedeemPoints());
         }
 
         if (safeRequest.getRoundOffAmount() != null) {
@@ -2772,6 +2881,29 @@ public class OrderService {
         }
 
         recalculateOrderTotals(order);
+
+        // Process loyalty redemption if points are specified in settlement
+        if (safeRequest.getRedeemPoints() != null && safeRequest.getRedeemPoints() > 0) {
+            UUID custId = order.getCustomerId();
+            if (custId == null && order.getCustomers() != null && !order.getCustomers().isEmpty()) {
+                custId = order.getCustomers().get(0).getId();
+            }
+            if (custId == null && order.getCreditCustomerId() != null) {
+                CreditCustomer cc = creditCustomerRepository.findById(order.getCreditCustomerId()).orElse(null);
+                if (cc != null)
+                    custId = cc.getLinkedCustomerId();
+            }
+            if (custId != null) {
+                try {
+                    loyaltyCommandService.redeemPoints(custId, order.getId(), safeRequest.getRedeemPoints());
+                    log.info("Successfully redeemed loyalty points on settle | orderId={} | points={} | customerId={}",
+                            order.getId(), safeRequest.getRedeemPoints(), custId);
+                } catch (Exception ex) {
+                    log.error("Failed to redeem loyalty points during order settlement | orderId={} | customerId={}",
+                            order.getId(), custId, ex);
+                }
+            }
+        }
 
         order.setReference(paymentMethod);
         order.setOrderStatus("COMPLETED");
@@ -2802,7 +2934,7 @@ public class OrderService {
                 linkedInvoice = existingInv;
             }
         }
-        
+
         Invoice generatedInv = generateInvoice(saved);
         if (linkedInvoice == null) {
             linkedInvoice = generatedInv;
@@ -2855,6 +2987,8 @@ public class OrderService {
             log.error("Failed to send push notification for settled order {}", hydrated.getId(), ex);
         }
 
+        publishLoyaltyEventIfApplicable(hydrated);
+
         publishOrderStatusUpdate(saved);
         return hydrated;
     }
@@ -2876,7 +3010,8 @@ public class OrderService {
         if (safeRequest.getDiscountAmount() != null) {
             order.setOrderDiscountValue(BigDecimal.ZERO);
             recalculateOrderTotals(order);
-            BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount() : BigDecimal.ZERO;
+            BigDecimal lineDiscountSum = order.getTotalDiscountAmount() != null ? order.getTotalDiscountAmount()
+                    : BigDecimal.ZERO;
 
             BigDecimal requestedTotalDiscount = moneyValue(safeRequest.getDiscountAmount());
             BigDecimal orderDiscountValue = requestedTotalDiscount.subtract(lineDiscountSum).max(BigDecimal.ZERO);
@@ -2966,6 +3101,8 @@ public class OrderService {
     public Order cancelOrder(UUID id, OrderCancelRequest request) {
         Order order = getOrder(id);
         ensureOrderCanChange(order, "cancel");
+        ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(order.getClientId(),
+                order.getOrgId());
 
         String reason = request != null ? request.getReason() : null;
         order.setOrderStatus("CANCELLED");
@@ -2981,6 +3118,10 @@ public class OrderService {
             voidLinkedInvoices(saved, "Order cancelled");
             voidLinkedPayments(saved, "Order cancelled");
             accountingPostingService.reverseSaleCogs(saved, "Order cancelled");
+            // ── Publish loyalty reversal event (only if loyalty is enabled) ───
+            if (config != null && config.isLoyaltyEnabled()) {
+                eventPublisher.publishEvent(new LoyaltyOrderCancelledEvent(this, saved));
+            }
         } else {
             voidUnpaidLinkedInvoices(saved, "Order cancelled");
         }
@@ -2994,6 +3135,7 @@ public class OrderService {
     public Invoice generateInvoice(Order order) {
         return generateInvoice(order, null, null);
     }
+
     @Transactional
     public Invoice generateInvoice(Order order, UUID originalInvoiceId) {
         return generateInvoice(order, originalInvoiceId, null);
@@ -3050,6 +3192,8 @@ public class OrderService {
                 .totalAmount(order.getGrandTotal())
                 .amountDue(order.getGrandTotal())
                 .roundOffAmount(order.getRoundOffAmount())
+                .redeemPoints(order.getRedeemPoints())
+                .loyaltyAmount(order.getLoyaltyAmount())
                 .status("UNPAID")
                 .isPaid(false)
                 .isCredit(Boolean.TRUE.equals(order.getIsCredit()))
@@ -3069,7 +3213,8 @@ public class OrderService {
         if (order.getLines() != null) {
             for (OrderLine ol : order.getLines()) {
                 // Skip soft-deleted / inactive lines — they must not appear on the invoice
-                if (!"Y".equalsIgnoreCase(ol.getIsactive())) continue;
+                if (!"Y".equalsIgnoreCase(ol.getIsactive()))
+                    continue;
                 InvoiceLine il = InvoiceLine.builder()
                         .orderLineId(ol.getId())
                         .productId(ol.getProductId())
@@ -3104,11 +3249,11 @@ public class OrderService {
         }
 
         Invoice savedInvoice = invoiceRepository.save(invoice);
-        
+
         // Update transient fields on the order so downstream print jobs have them
         order.setInvoiceNo(savedInvoice.getInvoiceNo());
         order.setDailyBillNo(savedInvoice.getDailyBillNo());
-        
+
         accountingPostingService.postInvoice(order, savedInvoice);
         return savedInvoice;
     }
@@ -3240,9 +3385,11 @@ public class OrderService {
 
     private Payment createSinglePayment(Order order, Invoice invoice, String method, String reqNo, BigDecimal amount,
             String desc, String refNo, BigDecimal roundOff, PaymentType type) {
-        String payNo = (refNo != null && !refNo.isBlank()) ? refNo : resolveDocumentNumber(order, 
-                (type == PaymentType.INBOUND ? DocumentType.INBOUND_PAYMENT : DocumentType.OUTBOUND_PAYMENT), reqNo);
-        
+        String payNo = (refNo != null && !refNo.isBlank()) ? refNo
+                : resolveDocumentNumber(order,
+                        (type == PaymentType.INBOUND ? DocumentType.INBOUND_PAYMENT : DocumentType.OUTBOUND_PAYMENT),
+                        reqNo);
+
         Payment payment = Payment.builder()
                 .paymentType(type)
                 .terminalId(order.getTerminalId())
@@ -3262,9 +3409,11 @@ public class OrderService {
                 .amountPaid(moneyValue(amount))
                 .referenceNo(payNo)
                 .description(desc)
-                .invoiceTotal(invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
+                .invoiceTotal(
+                        invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
                 .roundOffAmount(roundOff != null ? roundOff.setScale(2, RoundingMode.HALF_UP)
-                        : (order.getRoundOffAmount() != null ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP)
+                        : (order.getRoundOffAmount() != null
+                                ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP)
                                 : BigDecimal.ZERO))
                 .build();
 
@@ -3556,20 +3705,27 @@ public class OrderService {
     /**
      * Deducts ingredient (or product) stock when a SALE order is completed/settled.
      *
-     * <p>Logic:
+     * <p>
+     * Logic:
      * <ol>
-     *   <li>Resolve the warehouse: use {@code order.warehouseId} when set; otherwise fall back to
-     *       the org's default warehouse. If neither is available, log a warning and skip.
-     *   <li>For each order line that references a product, look up the product's recipe lines.
-     *       <ul>
-     *         <li>If recipe lines exist: deduct each ingredient by
-     *             {@code quantity_sold × ingredient_qty_per_unit} using transaction type {@code SALE_DEDUCTION}.
-     *         <li>If no recipe: deduct the product itself directly (for raw/tracked items).
-     *       </ul>
+     * <li>Resolve the warehouse: use {@code order.warehouseId} when set; otherwise
+     * fall back to
+     * the org's default warehouse. If neither is available, log a warning and skip.
+     * <li>For each order line that references a product, look up the product's
+     * recipe lines.
+     * <ul>
+     * <li>If recipe lines exist: deduct each ingredient by
+     * {@code quantity_sold × ingredient_qty_per_unit} using transaction type
+     * {@code SALE_DEDUCTION}.
+     * <li>If no recipe: deduct the product itself directly (for raw/tracked items).
+     * </ul>
      * </ol>
      *
-     * <p>All stock updates go through {@link com.restaurant.pos.inventory.service.InventoryService#updateStock},
-     * which writes both a {@code StockLedger} entry and updates {@code StockSnapshot}.
+     * <p>
+     * All stock updates go through
+     * {@link com.restaurant.pos.inventory.service.InventoryService#updateStock},
+     * which writes both a {@code StockLedger} entry and updates
+     * {@code StockSnapshot}.
      */
     private void deductStockForSale(Order order) {
         if (order.getLines() == null || order.getLines().isEmpty()) {
@@ -3579,13 +3735,15 @@ public class OrderService {
         UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
         UUID orgId = order.getOrgId();
 
-        // Resolve warehouse: use order's explicit warehouseId, else fall back to org default
+        // Resolve warehouse: use order's explicit warehouseId, else fall back to org
+        // default
         UUID warehouseId = order.getWarehouseId();
         if (warehouseId == null) {
-            java.util.Optional<com.restaurant.pos.warehouse.domain.Warehouse> defaultWh =
-                    inventoryService.findDefaultWarehouse(clientId, orgId);
+            java.util.Optional<com.restaurant.pos.warehouse.domain.Warehouse> defaultWh = inventoryService
+                    .findDefaultWarehouse(clientId, orgId);
             if (defaultWh.isEmpty()) {
-                log.info("deductStockForSale: skipping order {} — no warehouseId set and no default warehouse configured for org {}",
+                log.info(
+                        "deductStockForSale: skipping order {} — no warehouseId set and no default warehouse configured for org {}",
                         order.getId(), orgId);
                 return;
             }
@@ -3640,7 +3798,8 @@ public class OrderService {
                     }
                 }
             } else {
-                // No recipe — deduct product stock directly (for tracked raw/ingredient products)
+                // No recipe — deduct product stock directly (for tracked raw/ingredient
+                // products)
                 BigDecimal deduction = qtySold.negate();
                 try {
                     inventoryService.updateStock(
@@ -3665,7 +3824,7 @@ public class OrderService {
     private void publishOrderStatusUpdate(Order order) {
         if (order == null)
             return;
-        
+
         Runnable publishTask = () -> {
             try {
                 String baseOrderNo = order.getOrderNo();
@@ -3676,24 +3835,22 @@ public class OrderService {
                 List<Order> revisions = orderRepository.findAllRevisionsByOrderNo(order.getClientId(), baseOrderNo,
                         voidPrefix);
                 for (Order rev : revisions) {
-                    OrderStatusSseController.publishStatusUpdate(rev.getId(), order.getOrderStatus());
                 }
             } catch (Exception e) {
                 log.error("Failed to publish order status update to all revisions", e);
-                OrderStatusSseController.publishStatusUpdate(order.getId(), order.getOrderStatus());
             }
         };
 
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()
-                && org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                && org.springframework.transaction.support.TransactionSynchronizationManager
+                        .isActualTransactionActive()) {
             org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
-                new org.springframework.transaction.support.TransactionSynchronization() {
-                    @Override
-                    public void afterCommit() {
-                        publishTask.run();
-                    }
-                }
-            );
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            publishTask.run();
+                        }
+                    });
         } else {
             publishTask.run();
         }
@@ -3710,9 +3867,9 @@ public class OrderService {
                         BigDecimal half = total.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
                         BigDecimal remaining = total.subtract(half);
                         return List.of(
-                            PaymentSplit.builder().paymentId(p.getId()).paymentMethod("CASH").amount(half).build(),
-                            PaymentSplit.builder().paymentId(p.getId()).paymentMethod("ONLINE").amount(remaining).build()
-                        );
+                                PaymentSplit.builder().paymentId(p.getId()).paymentMethod("CASH").amount(half).build(),
+                                PaymentSplit.builder().paymentId(p.getId()).paymentMethod("ONLINE").amount(remaining)
+                                        .build());
                     }
                     return splits;
                 })
@@ -3731,7 +3888,8 @@ public class OrderService {
         // 1. Direct payments linked via payment.orderId
         List<Payment> directPayments = paymentRepository.findByOrderId(orderId);
         for (Payment p : directPayments) {
-            if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus()) && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
+            if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())
+                    && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
                 BigDecimal effectiveRoundOff = p.getRoundOffAmount() != null ? p.getRoundOffAmount()
                         : (order != null ? order.getRoundOffAmount() : BigDecimal.ZERO);
                 String pType = p.getPaymentType() != null ? p.getPaymentType().name() : "INBOUND";
@@ -3761,11 +3919,13 @@ public class OrderService {
             boolean alreadyAdded = list.stream().anyMatch(dto -> dto.getPaymentId().equals(alloc.getPaymentId()));
             if (!alreadyAdded) {
                 paymentRepository.findById(alloc.getPaymentId()).ifPresent(p -> {
-                    if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus()) && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
+                    if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())
+                            && !"VOIDED".equalsIgnoreCase(p.getDocStatus())) {
                         BigDecimal effectiveRoundOff = p.getRoundOffAmount() != null ? p.getRoundOffAmount()
                                 : (order != null ? order.getRoundOffAmount() : BigDecimal.ZERO);
                         String pType = p.getPaymentType() != null ? p.getPaymentType().name() : "INBOUND";
-                        String pTypeLabel = "INBOUND".equalsIgnoreCase(pType) ? "Customer Payment" : "Vendor Settlement";
+                        String pTypeLabel = "INBOUND".equalsIgnoreCase(pType) ? "Customer Payment"
+                                : "Vendor Settlement";
                         list.add(OrderPaymentDto.builder()
                                 .paymentId(p.getId())
                                 .referenceNo(p.getReferenceNo())
@@ -3788,9 +3948,12 @@ public class OrderService {
         }
 
         list.sort((a, b) -> {
-            if (a.getPaymentDate() == null && b.getPaymentDate() == null) return 0;
-            if (a.getPaymentDate() == null) return 1;
-            if (b.getPaymentDate() == null) return -1;
+            if (a.getPaymentDate() == null && b.getPaymentDate() == null)
+                return 0;
+            if (a.getPaymentDate() == null)
+                return 1;
+            if (b.getPaymentDate() == null)
+                return -1;
             return b.getPaymentDate().compareTo(a.getPaymentDate());
         });
 
@@ -3819,8 +3982,10 @@ public class OrderService {
     }
 
     /**
-     * Pre-loads user display names for a list of orders in ONE query, caching them in
-     * {@link #userNameCache} so that {@link #resolveUserDisplayName} does not hit the DB
+     * Pre-loads user display names for a list of orders in ONE query, caching them
+     * in
+     * {@link #userNameCache} so that {@link #resolveUserDisplayName} does not hit
+     * the DB
      * per order.
      * <p>
      * Always clear the cache after the batch via {@code userNameCache.clear()}.
@@ -3829,13 +3994,20 @@ public class OrderService {
         Map<String, String> cache = userNameCache.get();
         Set<String> uidStrings = new java.util.HashSet<>();
         for (Order o : orders) {
-            if (o.getCreatedBy() != null && !o.getCreatedBy().isBlank()) uidStrings.add(o.getCreatedBy());
-            if (o.getUpdatedBy() != null && !o.getUpdatedBy().isBlank()) uidStrings.add(o.getUpdatedBy());
+            if (o.getCreatedBy() != null && !o.getCreatedBy().isBlank())
+                uidStrings.add(o.getCreatedBy());
+            if (o.getUpdatedBy() != null && !o.getUpdatedBy().isBlank())
+                uidStrings.add(o.getUpdatedBy());
         }
         List<UUID> uuids = new ArrayList<>();
         for (String uid : uidStrings) {
-            if ("SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid)) continue;
-            try { uuids.add(UUID.fromString(uid)); } catch (Exception ignored) { cache.put(uid, uid); }
+            if ("SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid))
+                continue;
+            try {
+                uuids.add(UUID.fromString(uid));
+            } catch (Exception ignored) {
+                cache.put(uid, uid);
+            }
         }
         if (!uuids.isEmpty()) {
             userRepository.findAllById(uuids).forEach(u -> {
@@ -3844,5 +4016,104 @@ public class OrderService {
                 cache.put(u.getId().toString(), name);
             });
         }
+    }
+
+    /**
+     * Calculates the net eligible amount for loyalty point accrual.
+     * <p>
+     * Eligible = gross subtotal (sum of line totals before tax)
+     * minus item-level discounts
+     * minus order-level discount
+     * <b>excluding</b>: tax, round-off, delivery/service charges,
+     * and any loyalty redemption discount already applied.
+     */
+    private BigDecimal computeLoyaltyEligibleAmount(Order order) {
+        if (order == null)
+            return BigDecimal.ZERO;
+
+        // Credit orders do not earn loyalty points
+        boolean isCredit = Boolean.TRUE.equals(order.getIsCredit())
+                || "CREDIT".equalsIgnoreCase(order.getPaymentMethod())
+                || "CREDIT".equalsIgnoreCase(order.getReference());
+        if (isCredit) {
+            log.info("Loyalty points earning skipped for credit orderId={}", order.getId());
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal gross = BigDecimal.ZERO;
+        if (order.getLines() != null && !order.getLines().isEmpty()) {
+            gross = order.getLines().stream()
+                    .filter(l -> l.getLineTotal() != null)
+                    .map(l -> l.getLineTotal())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        } else if (order.getTotalAmount() != null) {
+            gross = order.getTotalAmount();
+        }
+
+        // Standard order-level discount
+        BigDecimal orderDisc = BigDecimal.ZERO;
+        if (order.getOrderDiscountValue() != null
+                && com.restaurant.pos.order.domain.DiscountSource.LOYALTY != order.getDiscountSource()) {
+            if ("PERCENT".equalsIgnoreCase(order.getOrderDiscountType())) {
+                orderDisc = gross.multiply(order.getOrderDiscountValue()
+                        .divide(BigDecimal.valueOf(100), 8, java.math.RoundingMode.HALF_UP));
+            } else {
+                orderDisc = order.getOrderDiscountValue();
+            }
+        }
+
+        // Loyalty redemption discount amount
+        BigDecimal loyaltyAmt = order.getLoyaltyAmount() != null ? order.getLoyaltyAmount() : BigDecimal.ZERO;
+
+        // Calculate points strictly on net payment amount
+        return gross.subtract(orderDisc).subtract(loyaltyAmt).max(BigDecimal.ZERO);
+    }
+
+    private void publishLoyaltyEventIfApplicable(Order hydrated) {
+        if (hydrated == null)
+            return;
+
+        boolean isSale = hydrated.getOrderType() == null || hydrated.getOrderType() == OrderType.SALE;
+        boolean isCompletedAndPaid = "COMPLETED".equalsIgnoreCase(hydrated.getOrderStatus())
+                && ("PAID".equalsIgnoreCase(hydrated.getPaymentStatus())
+                        || Boolean.TRUE.equals(hydrated.getIsCredit()));
+
+        if (!isSale || !isCompletedAndPaid) {
+            log.info("Loyalty publish skipped: orderId={} | isSale={} | status={} | paymentStatus={}",
+                    hydrated.getId(), isSale, hydrated.getOrderStatus(), hydrated.getPaymentStatus());
+            return;
+        }
+
+        try {
+            ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(hydrated.getClientId(),
+                    hydrated.getOrgId());
+            if (config != null && !config.isLoyaltyEnabled()) {
+                log.info("Loyalty publish skipped (loyalty disabled in settings): orderId={}", hydrated.getId());
+                return;
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to check loyalty configuration for orderId={}", hydrated.getId(), ex);
+        }
+
+        UUID custId = hydrated.getCustomerId();
+        if (custId == null && hydrated.getCustomers() != null && !hydrated.getCustomers().isEmpty()) {
+            custId = hydrated.getCustomers().get(0).getId();
+        }
+        if (custId == null && hydrated.getCreditCustomerId() != null) {
+            CreditCustomer cc = creditCustomerRepository.findById(hydrated.getCreditCustomerId()).orElse(null);
+            if (cc != null)
+                custId = cc.getLinkedCustomerId();
+        }
+
+        if (custId == null) {
+            log.info("Loyalty publish skipped (no customer attached): orderId={}", hydrated.getId());
+            return;
+        }
+
+        BigDecimal eligible = computeLoyaltyEligibleAmount(hydrated);
+        log.info("Publishing LoyaltyOrderSettledEvent | orderId={} | customerId={} | eligible={}",
+                hydrated.getId(), custId, eligible);
+
+        eventPublisher.publishEvent(new LoyaltyOrderSettledEvent(this, hydrated, custId, eligible));
     }
 }

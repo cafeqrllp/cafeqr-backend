@@ -36,29 +36,36 @@ public class OrderDtoMapper {
      * Maps user UUID string → display name, populated in bulk before mapping lists.
      * Must be cleared after each batch via {@link #clearRequestCaches()}.
      */
-    private final ThreadLocal<java.util.Map<String, String>> userNameCache =
-            ThreadLocal.withInitial(java.util.HashMap::new);
+    private final ThreadLocal<java.util.Map<String, String>> userNameCache = ThreadLocal
+            .withInitial(java.util.HashMap::new);
 
     /**
      * Maps orderId → list of active payments, pre-loaded before mapping lists.
      * Avoids a per-order query when the payment method is MIXED.
      */
-    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>>>
-            paymentsByOrderId = ThreadLocal.withInitial(java.util.HashMap::new);
+    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>>> paymentsByOrderId = ThreadLocal
+            .withInitial(java.util.HashMap::new);
 
     /**
      * Maps paymentId → list of splits, pre-loaded before mapping lists.
      */
-    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>>>
-            splitsByPaymentId = ThreadLocal.withInitial(java.util.HashMap::new);
+    private final ThreadLocal<java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>>> splitsByPaymentId = ThreadLocal
+            .withInitial(java.util.HashMap::new);
 
-    /** Pre-populate user names for the given set of raw uid strings in ONE query. */
+    /**
+     * Pre-populate user names for the given set of raw uid strings in ONE query.
+     */
     public void warmUserCache(java.util.Collection<String> uidStrings) {
         java.util.Map<String, String> cache = userNameCache.get();
         java.util.List<java.util.UUID> uuids = new java.util.ArrayList<>();
         for (String uid : uidStrings) {
-            if (uid == null || uid.isBlank() || "SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid)) continue;
-            try { uuids.add(java.util.UUID.fromString(uid)); } catch (Exception ignored) { cache.put(uid, uid); }
+            if (uid == null || uid.isBlank() || "SYSTEM".equalsIgnoreCase(uid) || cache.containsKey(uid))
+                continue;
+            try {
+                uuids.add(java.util.UUID.fromString(uid));
+            } catch (Exception ignored) {
+                cache.put(uid, uid);
+            }
         }
         if (!uuids.isEmpty()) {
             userRepository.findAllById(uuids).forEach(u -> {
@@ -71,15 +78,18 @@ public class OrderDtoMapper {
 
     /** Pre-populate payment + split maps for a set of order IDs in TWO queries. */
     public void warmPaymentCache(java.util.Collection<java.util.UUID> orderIds) {
-        if (orderIds == null || orderIds.isEmpty()) return;
-        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pMap = paymentsByOrderId.get();
-        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sMap = splitsByPaymentId.get();
+        if (orderIds == null || orderIds.isEmpty())
+            return;
+        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pMap = paymentsByOrderId
+                .get();
+        java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sMap = splitsByPaymentId
+                .get();
 
-        java.util.List<com.restaurant.pos.order.domain.Payment> allPayments =
-                paymentRepository.findByOrderIdIn(orderIds);
+        java.util.List<com.restaurant.pos.order.domain.Payment> allPayments = paymentRepository
+                .findByOrderIdIn(orderIds);
         java.util.List<java.util.UUID> paymentIds = new java.util.ArrayList<>();
         for (com.restaurant.pos.order.domain.Payment p : allPayments) {
-            if (p.getOrderId() != null) {   // guard: skip orphaned payments with no order reference
+            if (p.getOrderId() != null) { // guard: skip orphaned payments with no order reference
                 pMap.computeIfAbsent(p.getOrderId(), k -> new java.util.ArrayList<>()).add(p);
             }
             if (p.getId() != null
@@ -91,7 +101,7 @@ public class OrderDtoMapper {
         if (!paymentIds.isEmpty()) {
             paymentSplitRepository.findByPaymentIdInOrderByCreatedAtAsc(paymentIds)
                     .forEach(s -> {
-                        if (s.getPaymentId() != null) {   // guard: skip splits with no payment reference
+                        if (s.getPaymentId() != null) { // guard: skip splits with no payment reference
                             sMap.computeIfAbsent(s.getPaymentId(), k -> new java.util.ArrayList<>()).add(s);
                         }
                     });
@@ -143,19 +153,23 @@ public class OrderDtoMapper {
 
         if ("MIXED".equalsIgnoreCase(order.getPaymentMethod()) || "MIXED".equalsIgnoreCase(referenceNo)) {
             try {
-                // Use pre-loaded cache when available (populated by warmPaymentCache), else fall back to DB
-                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId.get();
+                // Use pre-loaded cache when available (populated by warmPaymentCache), else
+                // fall back to DB
+                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId
+                        .get();
                 java.util.List<com.restaurant.pos.order.domain.Payment> payments = pCache.containsKey(order.getId())
                         ? pCache.get(order.getId())
                         : paymentRepository.findByOrderId(order.getId());
 
-                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sCache = splitsByPaymentId.get();
+                java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.PaymentSplit>> sCache = splitsByPaymentId
+                        .get();
 
                 for (com.restaurant.pos.order.domain.Payment p : payments) {
                     if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
-                        java.util.List<com.restaurant.pos.order.domain.PaymentSplit> splits = sCache.containsKey(p.getId())
-                                ? sCache.get(p.getId())
-                                : paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
+                        java.util.List<com.restaurant.pos.order.domain.PaymentSplit> splits = sCache
+                                .containsKey(p.getId())
+                                        ? sCache.get(p.getId())
+                                        : paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
                         for (com.restaurant.pos.order.domain.PaymentSplit s : splits) {
                             if ("CASH".equalsIgnoreCase(s.getPaymentMethod())) {
                                 cashAmount = (cashAmount == null) ? s.getAmount() : cashAmount.add(s.getAmount());
@@ -181,12 +195,14 @@ public class OrderDtoMapper {
         String terminalName = null;
         if (order.getTerminalId() != null) {
             try {
-                com.restaurant.pos.client.domain.Terminal t = terminalRepository.findById(order.getTerminalId()).orElse(null);
+                com.restaurant.pos.client.domain.Terminal t = terminalRepository.findById(order.getTerminalId())
+                        .orElse(null);
                 if (t != null) {
                     terminalCode = t.getTerminalCode();
                     terminalName = t.getName();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
         return OrderResponseDto.builder()
@@ -216,6 +232,7 @@ public class OrderDtoMapper {
                 .remarks(order.getRemarks() != null ? order.getRemarks() : order.getDescription())
                 .reference(order.getReference())
                 .customers(order.getCustomers())
+                .customerId(order.getCustomerId() != null ? order.getCustomerId() : (order.getCustomers() != null && !order.getCustomers().isEmpty() ? order.getCustomers().get(0).getId() : null))
                 .isCredit(order.getIsCredit())
                 .isReceived(order.getIsReceived())
                 .creditCustomerId(order.getCreditCustomerId())
@@ -227,6 +244,8 @@ public class OrderDtoMapper {
                 .onlineAmount(onlineAmount)
                 .grossAmount(order.getGrossAmount())
                 .roundOffAmount(order.getRoundOffAmount())
+                .redeemPoints(order.getRedeemPoints())
+                .loyaltyAmount(order.getLoyaltyAmount())
                 .orderDiscountType(order.getOrderDiscountType())
                 .orderDiscountValue(order.getOrderDiscountValue())
                 .discountSource(order.getDiscountSource() != null ? order.getDiscountSource().name() : null)
@@ -277,16 +296,19 @@ public class OrderDtoMapper {
     // ─────────────────────────────────────────────────────────────
 
     private String resolveCombinedPaymentMethod(Order order) {
-        if (order == null || order.getId() == null) return null;
+        if (order == null || order.getId() == null)
+            return null;
         try {
-            java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId.get();
+            java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId
+                    .get();
             java.util.List<com.restaurant.pos.order.domain.Payment> payments = pCache.containsKey(order.getId())
                     ? pCache.get(order.getId())
                     : paymentRepository.findByOrderId(order.getId());
             if (payments != null && !payments.isEmpty()) {
                 java.util.Set<String> methods = new java.util.LinkedHashSet<>();
                 for (com.restaurant.pos.order.domain.Payment p : payments) {
-                    if (p != null && "Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
+                    if (p != null && "Y".equalsIgnoreCase(p.getIsactive())
+                            && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
                         if (p.getPaymentMethod() != null && !p.getPaymentMethod().isBlank()) {
                             methods.add(p.getPaymentMethod().trim());
                         }
@@ -296,7 +318,8 @@ public class OrderDtoMapper {
                     return String.join(", ", methods);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         if (Boolean.TRUE.equals(order.getIsCredit()) || "CREDIT".equalsIgnoreCase(order.getPaymentMethod())) {
             return "CREDIT";
         }
@@ -383,6 +406,8 @@ public class OrderDtoMapper {
         order.setCustomerIds(request.getCustomerIds());
         order.setIsCredit(Boolean.TRUE.equals(request.getIsCredit()));
         order.setCreditCustomerId(request.getCreditCustomerId());
+        order.setRedeemPoints(request.getRedeemPoints());
+        order.setLoyaltyAmount(request.getLoyaltyAmount());
         order.setDescription(request.getDescription());
         order.setRemarks(request.getRemarks() != null ? request.getRemarks() : request.getDescription());
         order.setReference(request.getReference());

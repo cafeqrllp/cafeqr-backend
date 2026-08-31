@@ -35,6 +35,9 @@ public class ConfigurationDto {
     private boolean posProductListingEnabled;
     private boolean discountEnabled;
     private boolean purchaseEnabled;
+    private boolean barcodeScannerEnabled;
+    private boolean takeawayAutoPrintKotOnSettle;
+    private boolean takeawayHideKitchenMode;
     @Builder.Default
     private String defaultBillingUiMode = "standard";
 

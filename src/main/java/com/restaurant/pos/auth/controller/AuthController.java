@@ -47,7 +47,7 @@ public class AuthController {
         String ipAddress = servletRequest.getRemoteAddr();
         String userAgent = servletRequest.getHeader("User-Agent");
         AuthResponse response = service.register(request, ipAddress, userAgent);
-        cookieUtil.createAuthCookies(servletResponse, response.getAccessToken(), response.getRefreshToken());
+        cookieUtil.createAuthCookies(servletRequest, servletResponse, response.getAccessToken(), response.getRefreshToken());
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -60,7 +60,7 @@ public class AuthController {
         String ipAddress = servletRequest.getRemoteAddr();
         String userAgent = servletRequest.getHeader("User-Agent");
         AuthResponse response = service.authenticate(request, ipAddress, userAgent);
-        cookieUtil.createAuthCookies(servletResponse, response.getAccessToken(), response.getRefreshToken());
+        cookieUtil.createAuthCookies(servletRequest, servletResponse, response.getAccessToken(), response.getRefreshToken());
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -78,11 +78,11 @@ public class AuthController {
             String ipAddress = request.getRemoteAddr();
             String userAgent = request.getHeader("User-Agent");
             AuthResponse authResponse = service.refreshToken(refreshToken, ipAddress, userAgent);
-            cookieUtil.createAuthCookies(response, authResponse.getAccessToken(), authResponse.getRefreshToken());
+            cookieUtil.createAuthCookies(request, response, authResponse.getAccessToken(), authResponse.getRefreshToken());
             return ResponseEntity.ok(ApiResponse.success(authResponse));
         } catch (Exception e) {
             // Any refresh failure (expired, revoked, invalid) => 401 so frontend redirects to login
-            cookieUtil.clearAuthCookies(response);
+            cookieUtil.clearAuthCookies(request, response);
             return ResponseEntity.status(401).body(ApiResponse.error(e.getMessage()));
         }
     }

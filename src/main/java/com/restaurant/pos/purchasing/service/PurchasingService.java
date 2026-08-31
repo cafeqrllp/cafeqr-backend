@@ -70,8 +70,6 @@ public class PurchasingService {
         existing.setGstNumber(updates.getGstNumber());
         existing.setCustomerCategory(updates.getCustomerCategory());
         existing.setLoyaltyPoints(updates.getLoyaltyPoints());
-        existing.setCreditLimit(updates.getCreditLimit());
-        existing.setOpeningBalance(updates.getOpeningBalance());
         existing.setPricelistId(updates.getPricelistId());
         existing.setIsactive(updates.getIsactive());
         return customerRepository.save(existing);

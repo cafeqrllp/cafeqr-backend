@@ -132,7 +132,9 @@ class OrderServiceTest {
                                 timezoneResolver,
                                 mock(CurrencyRepository.class),
                                 new OrderCalculationService(),
-                                mock(org.springframework.context.ApplicationContext.class));
+                                mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class),
+                                mock(org.springframework.context.ApplicationContext.class),
+                                mock(org.springframework.context.ApplicationEventPublisher.class));
 
                 clientId = UUID.randomUUID();
                 orgId = UUID.randomUUID();

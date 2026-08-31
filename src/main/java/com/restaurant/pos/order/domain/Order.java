@@ -28,17 +28,11 @@ import java.util.UUID;
 @Inheritance(strategy = InheritanceType.SINGLE_TABLE)
 @DiscriminatorColumn(name = "order_type", discriminatorType = DiscriminatorType.STRING)
 @DiscriminatorValue("SALE")
-@com.fasterxml.jackson.annotation.JsonTypeInfo(
-    use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME,
-    include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.EXISTING_PROPERTY,
-    property = "orderType",
-    visible = true,
-    defaultImpl = Order.class
-)
+@com.fasterxml.jackson.annotation.JsonTypeInfo(use = com.fasterxml.jackson.annotation.JsonTypeInfo.Id.NAME, include = com.fasterxml.jackson.annotation.JsonTypeInfo.As.EXISTING_PROPERTY, property = "orderType", visible = true, defaultImpl = Order.class)
 @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
 @com.fasterxml.jackson.annotation.JsonSubTypes({
-    @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = Order.class, name = "SALE"),
-    @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = com.restaurant.pos.purchase.domain.PurchaseOrder.class, name = "PURCHASE")
+        @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = Order.class, name = "SALE"),
+        @com.fasterxml.jackson.annotation.JsonSubTypes.Type(value = com.restaurant.pos.purchase.domain.PurchaseOrder.class, name = "PURCHASE")
 })
 public class Order extends BaseEntity {
 
@@ -123,11 +117,17 @@ public class Order extends BaseEntity {
     @Transient
     private List<CreateOrderRequest.PaymentSplitRequest> paymentSplits;
 
-    /** Transient: explicit amount paid (used when splits differ from grand total due to round-off). */
+    /**
+     * Transient: explicit amount paid (used when splits differ from grand total due
+     * to round-off).
+     */
     @Transient
     private BigDecimal amountPaid;
 
-    /** Formula: round-off loaded from the linked payment. Transient value is kept in memory for creation. */
+    /**
+     * Formula: round-off loaded from the linked payment. Transient value is kept in
+     * memory for creation.
+     */
     @Formula("(SELECT p.round_off_amount FROM payments p WHERE p.order_id = id ORDER BY p.created_at DESC LIMIT 1)")
     private BigDecimal roundOffAmount;
 
@@ -216,11 +216,16 @@ public class Order extends BaseEntity {
     @Column(name = "order_discount_type", length = 10)
     private String orderDiscountType;
 
-    /** The raw discount value entered by the user (e.g. 10 for 10%, or 100.00 for flat ₹100). */
+    /**
+     * The raw discount value entered by the user (e.g. 10 for 10%, or 100.00 for
+     * flat ₹100).
+     */
     @Column(name = "order_discount_value", precision = 15, scale = 2)
     private BigDecimal orderDiscountValue;
 
-    /** Originating source of this discount — MANUAL, QR, COUPON, PROMOTION, LOYALTY. */
+    /**
+     * Originating source of this discount — MANUAL, QR, COUPON, PROMOTION, LOYALTY.
+     */
     @Enumerated(EnumType.STRING)
     @Column(name = "discount_source", length = 30)
     private DiscountSource discountSource;
@@ -277,6 +282,12 @@ public class Order extends BaseEntity {
 
     @Formula("(SELECT p.payment_method FROM payments p WHERE p.order_id = id ORDER BY p.created_at DESC LIMIT 1)")
     private String paymentMethod;
+
+    @Column(name = "redeem_points")
+    private Integer redeemPoints;
+
+    @Column(name = "loyalty_amount")
+    private BigDecimal loyaltyAmount;
 
     @Builder.Default
     @JsonProperty("isActive")

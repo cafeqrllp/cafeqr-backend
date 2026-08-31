@@ -44,6 +44,7 @@ public class SecurityConfig {
                                         "/api/v1/debug/**",
                                         "/api/v1/public/**",
                                         "/api/v1/founder/**",
+                                        "/api/v1/reviews/**",
                                         "/api/delivery/**",
                                         "/delivery/**",
                                         "/v2/api-docs",
@@ -78,6 +79,7 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins:" +
             "http://localhost:3000," +
             "http://localhost:3001," +
+            "http://localhost:3002," +
             "http://localhost:5173," +
             "http://localhost:5174," +
             "http://192.168.29.152:3000," +

@@ -181,7 +181,9 @@ class OrderWorkflowParityTest {
                 timezoneResolver,
                 mock(CurrencyRepository.class),
                 new OrderCalculationService(),
-                applicationContext
+                mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class),
+                applicationContext,
+                mock(org.springframework.context.ApplicationEventPublisher.class)
         );
 
         when(applicationContext.getBean(OrderService.class)).thenReturn(orderService);
