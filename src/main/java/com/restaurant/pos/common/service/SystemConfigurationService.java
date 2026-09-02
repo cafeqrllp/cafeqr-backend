@@ -245,6 +245,8 @@ public class SystemConfigurationService {
                 .barcodeScannerEnabled(false)
                 .takeawayAutoPrintKotOnSettle(false)
                 .takeawayHideKitchenMode(false)
+                .dineInAutoPrintKotOnSettle(false)
+                .dineInHideKitchenMode(false)
                 .defaultBillingUiMode("standard")
                 .offlineSyncEnabled(false)
                 .offlineSyncInterval(60)
@@ -291,6 +293,8 @@ public class SystemConfigurationService {
                 .barcodeScannerEnabled(source.isBarcodeScannerEnabled())
                 .takeawayAutoPrintKotOnSettle(source.isTakeawayAutoPrintKotOnSettle())
                 .takeawayHideKitchenMode(source.isTakeawayHideKitchenMode())
+                .dineInAutoPrintKotOnSettle(source.isDineInAutoPrintKotOnSettle())
+                .dineInHideKitchenMode(source.isDineInHideKitchenMode())
                 .defaultBillingUiMode(source.getDefaultBillingUiMode())
                 .offlineSyncEnabled(source.isOfflineSyncEnabled())
                 .offlineSyncInterval(source.getOfflineSyncInterval())
@@ -425,6 +429,8 @@ public class SystemConfigurationService {
                 .barcodeScannerEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.BARCODE_SCANNER, entity.isBarcodeScannerEnabled()))
                 .takeawayAutoPrintKotOnSettle(entity.isTakeawayAutoPrintKotOnSettle())
                 .takeawayHideKitchenMode(entity.isTakeawayHideKitchenMode())
+                .dineInAutoPrintKotOnSettle(entity.isDineInAutoPrintKotOnSettle())
+                .dineInHideKitchenMode(entity.isDineInHideKitchenMode())
                 .defaultBillingUiMode(entity.getDefaultBillingUiMode())
                 .offlineSyncEnabled(entity.isOfflineSyncEnabled())
                 .offlineSyncInterval(entity.getOfflineSyncInterval())
@@ -491,6 +497,8 @@ public class SystemConfigurationService {
         entity.setBarcodeScannerEnabled(dto.isBarcodeScannerEnabled());
         entity.setTakeawayAutoPrintKotOnSettle(dto.isTakeawayAutoPrintKotOnSettle());
         entity.setTakeawayHideKitchenMode(dto.isTakeawayHideKitchenMode());
+        entity.setDineInAutoPrintKotOnSettle(dto.isDineInAutoPrintKotOnSettle());
+        entity.setDineInHideKitchenMode(dto.isDineInHideKitchenMode());
         if (dto.getDefaultBillingUiMode() != null) entity.setDefaultBillingUiMode(dto.getDefaultBillingUiMode());
         entity.setOfflineSyncEnabled(dto.isOfflineSyncEnabled());
         entity.setOfflineSyncInterval(dto.getOfflineSyncInterval());

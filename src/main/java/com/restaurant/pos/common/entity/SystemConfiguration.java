@@ -57,6 +57,8 @@ public class SystemConfiguration {
     private boolean barcodeScannerEnabled;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
+    private boolean dineInAutoPrintKotOnSettle;
+    private boolean dineInHideKitchenMode;
     @Column(name = "default_billing_ui_mode", length = 20)
     @Builder.Default
     private String defaultBillingUiMode = "standard";
