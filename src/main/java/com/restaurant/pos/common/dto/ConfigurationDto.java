@@ -38,6 +38,8 @@ public class ConfigurationDto {
     private boolean barcodeScannerEnabled;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
+    private boolean dineInAutoPrintKotOnSettle;
+    private boolean dineInHideKitchenMode;
     @Builder.Default
     private String defaultBillingUiMode = "standard";
 
