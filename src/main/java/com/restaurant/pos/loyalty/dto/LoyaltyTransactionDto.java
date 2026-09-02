@@ -19,6 +19,8 @@ public class LoyaltyTransactionDto {
     private UUID customerId;
     private UUID orderId;
     private String orderNumber;
+    private UUID programId;
+    private String programName;
     private LoyaltyTransactionType transactionType;
     private int points;
     private int balanceAfter;

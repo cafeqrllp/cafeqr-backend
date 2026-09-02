@@ -18,9 +18,21 @@ public interface LoyaltyProgramRepository extends JpaRepository<LoyaltyProgram, 
 
     List<LoyaltyProgram> findByClientIdAndOrgIdIsNullOrderByPriorityDescNameAsc(UUID clientId);
 
+    /**
+     * Returns all programs visible to a branch: both branch-specific AND client-wide programs.
+     */
+    @Query("SELECT p FROM LoyaltyProgram p WHERE p.clientId = :clientId AND (p.orgId = :orgId OR p.orgId IS NULL) ORDER BY p.priority DESC, p.name ASC")
+    List<LoyaltyProgram> findAllVisibleForOrg(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
     Optional<LoyaltyProgram> findByClientIdAndIsDefaultTrueAndOrgIdIsNull(UUID clientId);
 
     Optional<LoyaltyProgram> findByClientIdAndOrgIdAndIsDefaultTrue(UUID clientId, UUID orgId);
+
+    /** Active + Default for a specific branch. */
+    Optional<LoyaltyProgram> findByClientIdAndOrgIdAndIsDefaultTrueAndIsActiveTrue(UUID clientId, UUID orgId);
+
+    /** Active + Default at client-wide level (org_id IS NULL). */
+    Optional<LoyaltyProgram> findByClientIdAndOrgIdIsNullAndIsDefaultTrueAndIsActiveTrue(UUID clientId);
 
     /**
      * Clears the default flag for all programmes in the given (client, org) scope,

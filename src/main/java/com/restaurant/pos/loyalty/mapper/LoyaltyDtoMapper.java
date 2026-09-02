@@ -15,8 +15,13 @@ public class LoyaltyDtoMapper {
 
     private final CustomerRepository customerRepository;
     private final OrderRepository orderRepository;
+    private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
 
     public LoyaltyProgramDto toProgramDto(LoyaltyProgram p) {
+        return toProgramDto(p, null);
+    }
+
+    public LoyaltyProgramDto toProgramDto(LoyaltyProgram p, String branchName) {
         if (p == null) return null;
 
         LoyaltyProgramDto.EarnRuleDto earnDto = p.getEarnRules() == null || p.getEarnRules().isEmpty() ? null
@@ -29,10 +34,20 @@ public class LoyaltyDtoMapper {
                         .minPoints(r.getMinPoints()).maxPointsPerOrder(r.getMaxPointsPerOrder())
                         .allowPartial(r.isAllowPartial()).build()).orElse(null);
 
+        String resolvedBranchName = branchName;
+        if (resolvedBranchName == null && p.getOrgId() != null) {
+            resolvedBranchName = organizationRepository.findById(p.getOrgId())
+                    .map(com.restaurant.pos.client.domain.Organization::getName)
+                    .orElse(null);
+        }
+
         return LoyaltyProgramDto.builder()
                 .id(p.getId())
                 .name(p.getName())
                 .description(p.getDescription())
+                .orgId(p.getOrgId())
+                .branchName(resolvedBranchName)
+                .isClientWide(p.getOrgId() == null)
                 .isActive(p.isActive())
                 .isDefault(p.isDefault())
                 .priority(p.getPriority())
@@ -63,6 +78,10 @@ public class LoyaltyDtoMapper {
     }
 
     public LoyaltyTransactionDto toTransactionDto(LoyaltyTransaction t) {
+        return toTransactionDto(t, null);
+    }
+
+    public LoyaltyTransactionDto toTransactionDto(LoyaltyTransaction t, String programName) {
         if (t == null) return null;
 
         String orderNo = null;
@@ -82,6 +101,8 @@ public class LoyaltyDtoMapper {
                 .customerId(t.getCustomerId())
                 .orderId(t.getOrderId())
                 .orderNumber(orderNo)
+                .programId(t.getProgramId())
+                .programName(programName)
                 .transactionType(t.getTransactionType())
                 .points(t.getPoints())
                 .balanceAfter(t.getBalanceAfter())

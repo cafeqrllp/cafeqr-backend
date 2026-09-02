@@ -46,6 +46,11 @@ public class UpdateLoyaltyProgramCommand {
     @Builder.Default
     private int priority = 10;
 
+    /** When true the programme is saved with org_id = null (client-wide). */
+    @JsonProperty("isClientWide")
+    @Builder.Default
+    private boolean isClientWide = false;
+
     @NotNull
     private BigDecimal spendAmount;
 

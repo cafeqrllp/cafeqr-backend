@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Public auth endpoints consumed by the CafeQR Delivery Website / App.
@@ -39,6 +40,9 @@ import java.util.Map;
 public class CustomerAuthController {
 
     private final OtpService otpService;
+    private final com.restaurant.pos.purchasing.repository.CustomerRepository customerRepository;
+    private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
+    private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
 
     // ── Request body DTO ──────────────────────────────────────────────────────
 
@@ -50,6 +54,11 @@ public class CustomerAuthController {
 
         @NotBlank(message = "OTP is required")
         private String otp;
+
+        private UUID clientId;
+        private UUID orgId;
+        private String name;
+        private String phone;
     }
 
     // ── POST /api/v1/auth/customer/verify-otp ─────────────────────────────────
@@ -66,12 +75,76 @@ public class CustomerAuthController {
                     .body(ApiResponse.error("Invalid or expired OTP. Please request a new one."));
         }
 
-        // Return minimal payload — the Next.js layer builds the session cookie
-        Map<String, Object> payload = Map.of(
-                "verified", true,
-                "email",    request.getEmail()
-        );
+        String normalizedEmail = request.getEmail().trim().toLowerCase();
+        UUID clientId = request.getClientId();
+        UUID orgId = request.getOrgId();
+
+        // Resolve clientId if orgId or client ID were swapped
+        if (clientId != null) {
+            var clientOpt = clientRepository.findById(clientId);
+            if (clientOpt.isEmpty()) {
+                var orgOpt = organizationRepository.findById(clientId);
+                if (orgOpt.isPresent()) {
+                    clientId = orgOpt.get().getClientId();
+                    if (orgId == null) {
+                        orgId = orgOpt.get().getId();
+                    }
+                }
+            }
+        }
+
+        com.restaurant.pos.purchasing.domain.Customer customer = null;
+        if (clientId != null) {
+            var existing = customerRepository.findByEmailAndClientId(normalizedEmail, clientId);
+            if (existing.isPresent()) {
+                customer = existing.get();
+                boolean changed = false;
+                if ((customer.getName() == null || customer.getName().isBlank() || "Guest".equalsIgnoreCase(customer.getName()))
+                        && request.getName() != null && !request.getName().isBlank()) {
+                    customer.setName(request.getName().trim());
+                    changed = true;
+                }
+                if ((customer.getPhone() == null || customer.getPhone().isBlank())
+                        && request.getPhone() != null && !request.getPhone().isBlank()) {
+                    customer.setPhone(normalizePhone(request.getPhone()));
+                    changed = true;
+                }
+                if (changed) {
+                    customer = customerRepository.save(customer);
+                }
+            } else {
+                String initialName = (request.getName() != null && !request.getName().isBlank())
+                        ? request.getName().trim()
+                        : normalizedEmail.split("@")[0];
+                customer = com.restaurant.pos.purchasing.domain.Customer.builder()
+                        .name(initialName)
+                        .email(normalizedEmail)
+                        .phone(normalizePhone(request.getPhone()))
+                        .customerCategory("REGULAR")
+                        .isactive("Y")
+                        .build();
+                customer.setClientId(clientId);
+                customer.setOrgId(null); // Customers are global to the client/tenant
+                customer = customerRepository.save(customer);
+            }
+        }
+
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("verified", true);
+        payload.put("email", normalizedEmail);
+        if (customer != null) {
+            payload.put("customerId", customer.getId());
+            payload.put("name", customer.getName());
+            payload.put("phone", customer.getPhone() != null ? customer.getPhone() : "");
+            payload.put("address", customer.getAddress() != null ? customer.getAddress() : "");
+        }
 
         return ResponseEntity.ok(ApiResponse.success(payload));
+    }
+
+    private String normalizePhone(String phone) {
+        if (phone == null) return null;
+        String normalized = phone.trim().replaceAll("[\\s()\\-]", "");
+        return normalized.isBlank() ? null : normalized;
     }
 }
