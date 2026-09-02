@@ -40,8 +40,20 @@ public class LoyaltyCommandService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
 
+        // Inactive programs cannot be default
+        if (cmd.isDefault() && !cmd.isActive()) {
+            throw new BusinessException("Inactive loyalty programs cannot be marked as default. Only active programs can be set as default.");
+        }
+
+        // Determine scope: client-wide (orgId = null) or branch-specific
+        if (cmd.isClientWide() && !com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin()) {
+            throw new BusinessException("Only Super Admin can create client-wide loyalty programs.");
+        }
+        UUID targetOrgId = cmd.isClientWide() ? null : orgId;
+
+        // Clear existing default in the same scope before setting new one
         if (cmd.isDefault()) {
-            clearDefault(clientId, orgId);
+            clearDefault(clientId, targetOrgId);
         }
 
         LoyaltyProgram program = LoyaltyProgram.builder()
@@ -52,7 +64,7 @@ public class LoyaltyCommandService {
                 .priority(cmd.getPriority())
                 .build();
         program.setClientId(clientId);
-        program.setOrgId(orgId);
+        program.setOrgId(targetOrgId);
         program = programRepository.save(program);
 
         program.getEarnRules().add(LoyaltyEarnRule.builder()
@@ -79,10 +91,29 @@ public class LoyaltyCommandService {
                 .orElseThrow(() -> new BusinessException("Loyalty programme not found: " + cmd.getId()));
 
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID orgId    = TenantContext.getCurrentOrg();
 
+        // If it is a client-wide program or being made client-wide, only Super Admin can edit
+        boolean isExistingClientWide = program.getOrgId() == null;
+        if ((isExistingClientWide || cmd.isClientWide()) && !com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin()) {
+            throw new BusinessException("Only Super Admin can modify client-wide loyalty programs.");
+        }
+
+        // If inactive/deactivating, automatically strip default
+        if (!cmd.isActive()) {
+            cmd.setDefault(false);
+        }
+
+        // Inactive programs cannot be default
+        if (cmd.isDefault() && !cmd.isActive()) {
+            throw new BusinessException("Inactive loyalty programs cannot be marked as default. Only active programs can be set as default.");
+        }
+
+        // Determine scope: client-wide (orgId = null) or branch-specific
+        UUID targetOrgId = cmd.isClientWide() ? null : (program.getOrgId() != null ? program.getOrgId() : TenantContext.getCurrentOrg());
+
+        // Clear existing default in the same scope before setting new one
         if (cmd.isDefault() && !program.isDefault()) {
-            clearDefault(clientId, orgId);
+            clearDefault(clientId, targetOrgId);
         }
 
         program.setName(cmd.getName());
@@ -90,6 +121,7 @@ public class LoyaltyCommandService {
         program.setActive(cmd.isActive());
         program.setDefault(cmd.isDefault());
         program.setPriority(cmd.getPriority());
+        program.setOrgId(targetOrgId);
 
         program.getEarnRules().clear();
         program.getEarnRules().add(LoyaltyEarnRule.builder()
@@ -149,6 +181,7 @@ public class LoyaltyCommandService {
         }
 
         CustomerLoyalty account = getOrCreateAccount(customerId, clientId, orgId, program.getId());
+        account.setProgramId(program.getId());
         account.creditPoints(points);
         accountRepository.save(account);
 
@@ -193,13 +226,10 @@ public class LoyaltyCommandService {
                 : accountRepository.findByCustomerIdAndClientIdWithLock(customerId, clientId)
                         .orElseThrow(() -> new BusinessException("No loyalty account found for customer."));
 
-        LoyaltyProgram program = account.getProgramId() != null
-                ? programRepository.findById(account.getProgramId())
-                        .orElseThrow(() -> new BusinessException("Programme not found."))
-                : null;
+        LoyaltyProgram program = resolveProgram(customerId, clientId, orgId).orElse(null);
 
         if (program == null || program.getRedemptionRules().isEmpty()) {
-            throw new BusinessException("No redemption rule configured for this programme.");
+            throw new BusinessException("No active default loyalty programme is configured.");
         }
 
         LoyaltyRedemptionRule rule = program.getRedemptionRules().get(0);
@@ -219,6 +249,7 @@ public class LoyaltyCommandService {
                 .multiply(BigDecimal.valueOf(slabs))
                 .setScale(2, RoundingMode.HALF_UP);
 
+        account.setProgramId(program.getId());
         account.debitPoints(pointsToUse);
         accountRepository.save(account);
 
@@ -227,7 +258,7 @@ public class LoyaltyCommandService {
                 .customerId(customerId)
                 .clientId(clientId)
                 .orgId(orgId)
-                .programId(account.getProgramId())
+                .programId(program.getId())
                 .orderId(orderId)
                 .transactionType(LoyaltyTransactionType.REDEEM)
                 .points(-pointsToUse)
@@ -302,26 +333,17 @@ public class LoyaltyCommandService {
     }
 
     private Optional<LoyaltyProgram> resolveProgram(UUID customerId, UUID clientId, UUID orgId) {
-        // 1. Branch-level active program
+        // 1. Branch-level active + default program
         if (orgId != null) {
-            List<LoyaltyProgram> branchActive = programRepository.findByClientIdAndOrgIdAndIsActiveTrueOrderByPriorityDesc(clientId, orgId);
-            if (!branchActive.isEmpty()) return branchActive.stream().findFirst();
-        }
-
-        // 2. Client-level active program
-        List<LoyaltyProgram> clientActive = programRepository.findByClientIdAndOrgIdIsNullAndIsActiveTrueOrderByPriorityDesc(clientId);
-        if (!clientActive.isEmpty()) return clientActive.stream().findFirst();
-
-        // 3. Branch-level default program
-        if (orgId != null) {
-            Optional<LoyaltyProgram> branchDefault = programRepository.findByClientIdAndOrgIdAndIsDefaultTrue(clientId, orgId);
+            Optional<LoyaltyProgram> branchDefault = programRepository.findByClientIdAndOrgIdAndIsDefaultTrueAndIsActiveTrue(clientId, orgId);
             if (branchDefault.isPresent()) return branchDefault;
         }
 
-        // 4. Client-level default program
-        Optional<LoyaltyProgram> clientDefault = programRepository.findByClientIdAndIsDefaultTrueAndOrgIdIsNull(clientId);
+        // 2. Client-wide active + default program (org_id IS NULL)
+        Optional<LoyaltyProgram> clientDefault = programRepository.findByClientIdAndOrgIdIsNullAndIsDefaultTrueAndIsActiveTrue(clientId);
         if (clientDefault.isPresent()) return clientDefault;
 
+        // 3. No active default program found — do NOT fall back to non-default programs
         return Optional.empty();
     }
 

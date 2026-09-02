@@ -16,7 +16,6 @@ import com.restaurant.pos.order.domain.Payment;
 import com.restaurant.pos.order.repository.OrderRepository;
 import com.restaurant.pos.order.repository.PaymentRepository;
 import com.restaurant.pos.purchasing.domain.Vendor;
-import com.restaurant.pos.purchasing.repository.CustomerRepository;
 import com.restaurant.pos.sequence.service.DocumentSequenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -67,12 +66,9 @@ class CreditCommandServiceTest {
         sequenceService = mock(DocumentSequenceService.class);
         auditLogService = mock(AuditLogService.class);
 
-        CustomerRepository customerRepository = mock(CustomerRepository.class);
-
         service = new CreditCommandService(
                 creditGuard,
                 creditCustomerRepository,
-                customerRepository,
                 invoiceRepository,
                 orderRepository,
                 paymentRepository,

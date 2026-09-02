@@ -110,6 +110,18 @@ public class OrderResponseDto {
     @Schema(description = "Credit customer UUID linked to the credit sale workflow")
     private UUID creditCustomerId;
 
+    @Schema(description = "Customer display name")
+    private String customerName;
+
+    @Schema(description = "Customer phone number")
+    private String customerPhone;
+
+    @Schema(description = "Credit customer name")
+    private String creditCustomerName;
+
+    @Schema(description = "Credit customer phone")
+    private String creditCustomerPhone;
+
     @Schema(description = "Customer current loyalty points balance")
     private Integer customerLoyaltyPoints;
 

@@ -55,6 +55,7 @@ public class SubscriptionService {
     private static final long PRICE_TABLE_QR_ANNUAL = 0;          // Free
     private static final long PRICE_MENU_IMAGES_ANNUAL = 0;        // Free
     private static final long PRICE_ONLINE_DELIVERY_ANNUAL = 0;   // Free
+    private static final long PRICE_BARCODE_SCANNER_ANNUAL = 99900; // ₹999/yr
 
     // One-Time Setup Fee
     private static final long PRICE_SETUP_FEE = 149900;           // ₹1499 setup fee
@@ -460,6 +461,7 @@ public class SubscriptionService {
             case TABLE_QR: return PRICE_TABLE_QR_ANNUAL;
             case MENU_IMAGES: return PRICE_MENU_IMAGES_ANNUAL;
             case ONLINE_DELIVERY: return PRICE_ONLINE_DELIVERY_ANNUAL;
+            case BARCODE_SCANNER: return PRICE_BARCODE_SCANNER_ANNUAL;
             default: return 0;
         }
     }

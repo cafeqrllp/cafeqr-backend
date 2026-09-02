@@ -20,6 +20,13 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     @Query("SELECT c FROM Customer c WHERE c.clientId = :clientId AND (c.orgId = :orgId OR c.orgId IS NULL) ORDER BY c.name ASC")
     List<Customer> findByClientIdAndOrgIdOrGlobalOrderByNameAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
 
+    // Partners page: exclude customers that are linked to a credit_customer record
+    @Query(value = "SELECT * FROM customers c WHERE c.client_id = :clientId AND c.id NOT IN (SELECT linked_customer_id FROM credit_customers WHERE linked_customer_id IS NOT NULL AND client_id = :clientId AND isactive = 'Y') ORDER BY c.name ASC", nativeQuery = true)
+    List<Customer> findNonCreditByClientIdOrderByNameAsc(@Param("clientId") UUID clientId);
+
+    @Query(value = "SELECT * FROM customers c WHERE c.client_id = :clientId AND (c.org_id = :orgId OR c.org_id IS NULL) AND c.id NOT IN (SELECT linked_customer_id FROM credit_customers WHERE linked_customer_id IS NOT NULL AND client_id = :clientId AND isactive = 'Y') ORDER BY c.name ASC", nativeQuery = true)
+    List<Customer> findNonCreditByClientIdAndOrgIdOrGlobalOrderByNameAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
     @Query("SELECT c FROM Customer c WHERE c.id = :id AND c.clientId = :clientId AND (c.orgId = :orgId OR c.orgId IS NULL)")
     Optional<Customer> findByIdAndClientIdAndOrgIdOrGlobal(@Param("id") UUID id, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
     Optional<Customer> findByPhoneAndClientIdAndOrgId(String phone, UUID clientId, UUID orgId);

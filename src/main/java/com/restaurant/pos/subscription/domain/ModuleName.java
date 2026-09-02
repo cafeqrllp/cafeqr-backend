@@ -7,5 +7,6 @@ public enum ModuleName {
     CREDIT_LEDGER,
     TABLE_QR,
     MENU_IMAGES,
-    ONLINE_DELIVERY
+    ONLINE_DELIVERY,
+    BARCODE_SCANNER
 }

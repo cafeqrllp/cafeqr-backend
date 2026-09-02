@@ -26,8 +26,6 @@ import com.restaurant.pos.sequence.domain.DocumentType;
 import com.restaurant.pos.sequence.service.DocumentSequenceService;
 
 import com.restaurant.pos.credit.dto.CreateCreditCustomerRequest;
-import com.restaurant.pos.purchasing.domain.Customer;
-import com.restaurant.pos.purchasing.repository.CustomerRepository;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -53,7 +51,6 @@ public class CreditCommandService {
 
     private final CreditGuard creditGuard;
     private final CreditCustomerRepository creditCustomerRepository;
-    private final CustomerRepository customerRepository;
     private final InvoiceRepository invoiceRepository;
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
@@ -98,37 +95,20 @@ public class CreditCommandService {
 
         String phone = request.getPhone() != null ? request.getPhone().trim().replaceAll("[\\s()\\-]", "") : null;
 
-        // Find or create linked Customer record
-        Customer customer = null;
+        // Check if CreditCustomer with same phone already exists
         if (phone != null && !phone.isBlank()) {
-            customer = customerRepository.findByPhoneAndClientId(phone, clientId).orElse(null);
+            var existingCredit = creditCustomerRepository.findFirstByClientIdAndPhoneAndIsactiveOrderByCreatedAtAsc(clientId, phone, "Y");
+            if (existingCredit.isPresent()) {
+                return toDtoWithBalance(existingCredit.get());
+            }
         }
 
-        if (customer == null) {
-            customer = Customer.builder()
-                    .name(request.getName().trim())
-                    .phone(phone)
-                    .email(request.getEmail())
-                    .creditLimit(request.getCreditLimit() != null ? request.getCreditLimit() : BigDecimal.ZERO)
-                    .openingBalance(request.getOpeningBalance() != null ? request.getOpeningBalance() : BigDecimal.ZERO)
-                    .build();
-            customer.setClientId(clientId);
-            customer.setOrgId(null);
-            customer = customerRepository.save(customer);
-        }
-
-        // Find or create CreditCustomer record
-        var existingCredit = creditCustomerRepository.findByClientIdAndLinkedCustomerIdAndIsactive(clientId,
-                customer.getId(), "Y");
-        if (existingCredit.isPresent()) {
-            return toDtoWithBalance(existingCredit.get());
-        }
-
+        // Credit customers are fully standalone — no linking to master customers table
         CreditCustomer creditCustomer = CreditCustomer.builder()
-                .linkedCustomerId(customer.getId())
-                .name(customer.getName())
-                .phone(customer.getPhone())
-                .email(customer.getEmail())
+                .linkedCustomerId(null)
+                .name(request.getName().trim())
+                .phone(phone)
+                .email(request.getEmail())
                 .status("ACTIVE")
                 .isactive("Y")
                 .creditLimit(request.getCreditLimit() != null ? request.getCreditLimit() : BigDecimal.ZERO)
@@ -167,16 +147,7 @@ public class CreditCommandService {
             customer.setNotes(request.getNotes());
         }
 
-        if (customer.getLinkedCustomerId() != null) {
-            customerRepository.findByIdAndClientId(customer.getLinkedCustomerId(), clientId).ifPresent(c -> {
-                c.setName(customer.getName());
-                c.setPhone(customer.getPhone());
-                c.setEmail(customer.getEmail());
-                c.setCreditLimit(customer.getCreditLimit());
-                c.setOpeningBalance(customer.getOpeningBalance());
-                customerRepository.save(c);
-            });
-        }
+        // Credit customers are fully standalone — no sync to master customers table
 
         CreditCustomer saved = creditCustomerRepository.save(customer);
         auditLogService.logAction("UPDATE_CREDIT_CUSTOMER", "CreditCustomer", id.toString());

@@ -33,9 +33,9 @@ public class PurchasingService {
     public List<Customer> getCustomers() {
         UUID tenantId = TenantContext.getCurrentTenant();
         if (SecurityUtils.isSuperAdmin()) {
-            return customerRepository.findByClientIdOrderByNameAsc(tenantId);
+            return customerRepository.findNonCreditByClientIdOrderByNameAsc(tenantId);
         }
-        return customerRepository.findByClientIdAndOrgIdOrGlobalOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
+        return customerRepository.findNonCreditByClientIdAndOrgIdOrGlobalOrderByNameAsc(tenantId, TenantContext.getCurrentOrg());
     }
 
     public Customer getCustomer(UUID id) {

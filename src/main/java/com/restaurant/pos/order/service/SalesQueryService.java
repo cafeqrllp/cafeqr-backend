@@ -4,6 +4,7 @@ import com.restaurant.pos.client.repository.TerminalRepository;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
+import com.restaurant.pos.order.dto.OrderCustomerDto;
 import com.restaurant.pos.order.dto.OrderLineSummaryDto;
 import com.restaurant.pos.order.dto.OrderSummaryDto;
 import com.restaurant.pos.order.domain.OrderType;
@@ -144,7 +145,7 @@ public class SalesQueryService {
             } else if ("PAID".equalsIgnoreCase(status)) {
                 where.append("AND o.payment_status = 'PAID' AND o.isactive = 'Y' AND o.order_status <> 'VOID' AND o.order_no NOT LIKE '%\\_VOID\\_%' ESCAPE '\\' ");
             } else if ("COMPLETED_CANCELLED".equalsIgnoreCase(status)) {
-                where.append("AND o.order_status IN ('COMPLETED', 'CANCELLED', 'BILLED') AND o.isactive = 'Y' AND o.order_status <> 'VOID' AND o.order_no NOT LIKE '%\\_VOID\\_%' ESCAPE '\\' ");
+                where.append("AND o.order_status IN ('COMPLETED', 'CANCELLED') AND o.isactive = 'Y' AND o.order_status <> 'VOID' AND o.order_no NOT LIKE '%\\_VOID\\_%' ESCAPE '\\' ");
             } else {
                 where.append("AND o.order_status = :status AND o.isactive = 'Y' AND o.order_status <> 'VOID' AND o.order_no NOT LIKE '%\\_VOID\\_%' ESCAPE '\\' ");
                 params.addValue("status", status);
@@ -196,6 +197,11 @@ public class SalesQueryService {
             where.append("      AND (:orgId IS NULL OR c.org_id = :orgId) ");
             where.append("      AND c.isactive = 'Y' ");
             where.append("      AND (LOWER(c.name) LIKE :searchPattern ESCAPE '\\' OR LOWER(COALESCE(c.phone, '')) LIKE :searchPattern ESCAPE '\\')");
+            where.append("  ) ");
+            where.append("  OR EXISTS (");
+            where.append("    SELECT 1 FROM credit_customers cc ");
+            where.append("    WHERE cc.id = o.credit_customer_id ");
+            where.append("      AND (LOWER(cc.name) LIKE :searchPattern ESCAPE '\\' OR LOWER(COALESCE(cc.phone, '')) LIKE :searchPattern ESCAPE '\\')");
             where.append("  ) ");
             where.append("  OR EXISTS (");
             where.append("    SELECT 1 FROM customers c ");
@@ -269,7 +275,7 @@ public class SalesQueryService {
     private List<OrderSummaryDto> fetchOrdersList(String whereClause, MapSqlParameterSource params, int page, int size) {
         String listSql = "SELECT o.id, o.order_no, o.order_type, o.order_status, o.payment_status, o.fulfillment_type, " +
                 "o.table_id, o.table_number, o.customer_id, " +
-                "c.name AS customer_name, c.phone AS customer_phone, " +
+                "COALESCE(c.name, cc.name) AS customer_name, COALESCE(c.phone, cc.phone) AS customer_phone, " +
                 "o.is_credit, o.credit_customer_id, " +
                 "o.total_amount, o.total_tax_amount, o.total_discount_amount, o.grand_total, o.gross_amount, " +
                 "o.order_date, o.created_at, o.updated_at, o.created_by, o.updated_by, " +
@@ -279,6 +285,7 @@ public class SalesQueryService {
                 "o.description, o.description AS remarks, o.warehouse_id, o.vendor_id " +
                 "FROM orders o " +
                 "LEFT JOIN customers c ON c.id = o.customer_id " +
+                "LEFT JOIN credit_customers cc ON cc.id = o.credit_customer_id " +
                 whereClause +
                 "ORDER BY o.order_date DESC, o.id DESC " + // Secondary key provides deterministic ordering when multiple orders share the same order_date
                 "LIMIT :limit OFFSET :offset";
@@ -290,6 +297,21 @@ public class SalesQueryService {
 
         List<OrderSummaryDto> orders = jdbcTemplate.query(listSql, pageParams, (rs, rowNum) -> {
             Calendar utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+            String custName = rs.getString("customer_name");
+            String custPhone = rs.getString("customer_phone");
+            UUID customerId = getUUID(rs, "customer_id");
+            UUID creditCustomerId = getUUID(rs, "credit_customer_id");
+
+            List<OrderCustomerDto> customers = new ArrayList<>();
+            if (custName != null || custPhone != null || customerId != null || creditCustomerId != null) {
+                customers.add(OrderCustomerDto.builder()
+                        .id(customerId != null ? customerId : creditCustomerId)
+                        .name(custName)
+                        .phone(custPhone)
+                        .primary(true)
+                        .build());
+            }
+
             return OrderSummaryDto.builder()
                     .id(getUUID(rs, "id"))
                     .orderNo(rs.getString("order_no"))
@@ -299,11 +321,12 @@ public class SalesQueryService {
                     .fulfillmentType(rs.getString("fulfillment_type"))
                     .tableId(getUUID(rs, "table_id"))
                     .tableNumber(rs.getString("table_number"))
-                    .customerId(getUUID(rs, "customer_id"))
-                    .customerName(rs.getString("customer_name"))
-                    .customerPhone(rs.getString("customer_phone"))
+                    .customerId(customerId)
+                    .customerName(custName)
+                    .customerPhone(custPhone)
                     .isCredit(rs.getBoolean("is_credit"))
-                    .creditCustomerId(getUUID(rs, "credit_customer_id"))
+                    .creditCustomerId(creditCustomerId)
+                    .customers(customers)
                     .totalAmount(rs.getBigDecimal("total_amount"))
                     .totalTaxAmount(rs.getBigDecimal("total_tax_amount"))
                     .totalDiscountAmount(rs.getBigDecimal("total_discount_amount"))

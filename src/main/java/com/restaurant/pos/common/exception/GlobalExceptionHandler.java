@@ -119,10 +119,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({DuplicateResourceException.class, org.springframework.dao.DataIntegrityViolationException.class})
     public ResponseEntity<ApiResponse<Void>> handleDuplicateResourceException(Exception ex) {
-        log.warn("Duplicate resource violation: {}", ex.getMessage());
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        log.error("Duplicate resource or data integrity violation: {}", root.getMessage(), ex);
         String message = ex instanceof DuplicateResourceException
                 ? ex.getMessage()
-                : "The resource you are trying to create already exists or violates a unique constraint.";
+                : "The resource you are trying to create already exists or violates a unique constraint: " + root.getMessage();
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error(message));
     }
@@ -160,20 +164,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGenericException(Exception ex, HttpServletRequest request) {
         String errorId = java.util.UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        if (RuntimeEndpointLoggingInterceptor.isRuntimeEndpoint(request.getRequestURI())) {
-            log.error("Runtime endpoint exception [Ref: {}] method={} path={} query={} user={} clientId={} orgId={}",
-                    errorId,
-                    request.getMethod(),
-                    request.getRequestURI(),
-                    request.getQueryString(),
-                    SecurityUtils.getCurrentUserEmail(),
-                    TenantContext.getCurrentTenant(),
-                    TenantContext.getCurrentOrg(),
-                    ex);
-        } else {
-            log.error("Unexpected error occurred [Ref: {}]", errorId, ex);
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
         }
+        String rootMsg = root.getMessage() != null && !root.getMessage().isBlank()
+                ? root.getMessage()
+                : (ex.getMessage() != null && !ex.getMessage().isBlank() ? ex.getMessage() : ex.getClass().getSimpleName());
+
+        log.error("Unexpected error occurred [Ref: {}] uri={} method={}: {}", errorId, request.getRequestURI(), request.getMethod(), rootMsg, ex);
+
+        String userMessage = rootMsg + " (Ref: " + errorId + ")";
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error("An unexpected error occurred. Please quote reference " + errorId + " to support.", errorId));
+                .body(ApiResponse.error(userMessage, errorId));
     }
 }

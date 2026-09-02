@@ -16,8 +16,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -33,6 +32,7 @@ public class LoyaltyQueryService {
     private final CustomerLoyaltyRepository accountRepository;
     private final LoyaltyTransactionRepository transactionRepository;
     private final com.restaurant.pos.purchasing.repository.CustomerRepository customerRepository;
+    private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
     private final LoyaltyDtoMapper mapper;
 
     @Transactional(readOnly = true)
@@ -40,11 +40,26 @@ public class LoyaltyQueryService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
 
+        // Return both branch-specific and client-wide programs visible to this branch
         List<LoyaltyProgram> programs = (orgId != null)
-                ? programRepository.findByClientIdAndOrgIdOrderByPriorityDescNameAsc(clientId, orgId)
+                ? programRepository.findAllVisibleForOrg(clientId, orgId)
                 : programRepository.findByClientIdAndOrgIdIsNullOrderByPriorityDescNameAsc(clientId);
 
-        return programs.stream().map(mapper::toProgramDto).collect(Collectors.toList());
+        Set<UUID> orgIds = programs.stream()
+                .map(LoyaltyProgram::getOrgId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<UUID, String> orgNameMap = orgIds.isEmpty() ? Map.of()
+                : organizationRepository.findAllById(orgIds).stream()
+                        .collect(Collectors.toMap(
+                                com.restaurant.pos.client.domain.Organization::getId,
+                                com.restaurant.pos.client.domain.Organization::getName,
+                                (a, b) -> a));
+
+        return programs.stream()
+                .map(p -> mapper.toProgramDto(p, p.getOrgId() != null ? orgNameMap.get(p.getOrgId()) : null))
+                .collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
@@ -66,12 +81,14 @@ public class LoyaltyQueryService {
 
         com.restaurant.pos.purchasing.domain.Customer customer = customerRepository.findById(customerId).orElse(null);
 
-        List<LoyaltyProgram> programs = (orgId != null)
-                ? programRepository.findByClientIdAndOrgIdOrderByPriorityDescNameAsc(clientId, orgId)
-                : programRepository.findByClientIdAndOrgIdIsNullOrderByPriorityDescNameAsc(clientId);
-
-        LoyaltyProgram defaultProg = programs.stream().filter(LoyaltyProgram::isDefault).findFirst()
-                .orElseGet(() -> programs.isEmpty() ? null : programs.get(0));
+        // Strict active + default resolution: branch first, then client-wide
+        LoyaltyProgram activeDefault = null;
+        if (orgId != null) {
+            activeDefault = programRepository.findByClientIdAndOrgIdAndIsDefaultTrueAndIsActiveTrue(clientId, orgId).orElse(null);
+        }
+        if (activeDefault == null) {
+            activeDefault = programRepository.findByClientIdAndOrgIdIsNullAndIsDefaultTrueAndIsActiveTrue(clientId).orElse(null);
+        }
 
         if (account == null) {
             int customerPoints = (customer != null && customer.getLoyaltyPoints() != null) ? customer.getLoyaltyPoints() : 0;
@@ -79,17 +96,23 @@ public class LoyaltyQueryService {
                     .customerId(customerId)
                     .customerName(customer != null ? customer.getName() : null)
                     .customerPhone(customer != null ? customer.getPhone() : null)
-                    .programId(defaultProg != null ? defaultProg.getId() : null)
-                    .programName(defaultProg != null ? defaultProg.getName() : null)
+                    .programId(activeDefault != null ? activeDefault.getId() : null)
+                    .programName(activeDefault != null ? activeDefault.getName() : null)
                     .currentPoints(customerPoints)
                     .lifetimeEarned(customerPoints)
                     .lifetimeRedeemed(0)
                     .build();
         }
 
-        LoyaltyProgram prog = account.getProgramId() != null
-                ? programRepository.findById(account.getProgramId()).orElse(defaultProg)
-                : defaultProg;
+        // Only active default program is applied
+        LoyaltyProgram prog = activeDefault;
+        if (prog != null && (account.getProgramId() == null || !account.getProgramId().equals(prog.getId()))) {
+            account.setProgramId(prog.getId());
+            accountRepository.save(account);
+        } else if (prog == null && account.getProgramId() != null) {
+            account.setProgramId(null);
+            accountRepository.save(account);
+        }
 
         CustomerLoyaltyDto dto = mapper.toCustomerLoyaltyDto(account, prog);
         if (customer != null && customer.getLoyaltyPoints() != null && customer.getLoyaltyPoints() > dto.getCurrentPoints()) {
@@ -112,6 +135,15 @@ public class LoyaltyQueryService {
             txns = transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtDesc(customerId, clientId, pageable);
         }
 
-        return txns.map(mapper::toTransactionDto);
+        // Batch-fetch program names for all transactions
+        Set<UUID> programIds = txns.getContent().stream()
+                .map(LoyaltyTransaction::getProgramId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, String> programNameMap = programIds.isEmpty() ? Map.of()
+                : programRepository.findAllById(programIds).stream()
+                        .collect(Collectors.toMap(LoyaltyProgram::getId, LoyaltyProgram::getName, (a, b) -> a));
+
+        return txns.map(t -> mapper.toTransactionDto(t, t.getProgramId() != null ? programNameMap.get(t.getProgramId()) : null));
     }
 }

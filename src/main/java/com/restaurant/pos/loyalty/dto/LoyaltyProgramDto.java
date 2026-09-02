@@ -20,6 +20,12 @@ public class LoyaltyProgramDto {
     private String name;
     private String description;
 
+    private UUID orgId;
+    private String branchName;
+
+    @JsonProperty("isClientWide")
+    private boolean isClientWide;
+
     @JsonProperty("isActive")
     private boolean isActive;
 
