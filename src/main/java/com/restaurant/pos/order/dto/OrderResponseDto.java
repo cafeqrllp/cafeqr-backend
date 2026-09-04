@@ -224,6 +224,9 @@ public class OrderResponseDto {
         @Schema(description = "Product name (denormalized for display)")
         private String productName;
 
+        @Schema(description = "Category name (for KOT routing)")
+        private String categoryName;
+
         @Schema(description = "Unit of measure (e.g. KG, PCS, BOX)")
         private String unitOfMeasure;
 
