@@ -229,6 +229,9 @@ public class CreateOrderRequest {
         @Schema(description = "Product name (for display/denormalization)")
         private String productName;
 
+        @Schema(description = "Category name (for KOT routing and display)")
+        private String categoryName;
+
         @Schema(description = "Unit of measure (e.g. KG, PCS, BOX)")
         private String unitOfMeasure;
 

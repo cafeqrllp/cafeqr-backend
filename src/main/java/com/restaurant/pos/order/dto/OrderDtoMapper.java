@@ -272,6 +272,7 @@ public class OrderDtoMapper {
                 .productId(line.getProductId())
                 .variantId(line.getVariantId())
                 .productName(line.getProductName())
+                .categoryName(line.getCategoryName())
                 .unitOfMeasure(line.getUnitOfMeasure())
                 .uomPrecision(line.getUomPrecision())
                 .quantity(line.getQuantity())
@@ -445,6 +446,7 @@ public class OrderDtoMapper {
                 line.setProductId(lineReq.getProductId());
                 line.setVariantId(lineReq.getVariantId());
                 line.setProductName(lineReq.getProductName());
+                line.setCategoryName(lineReq.getCategoryName());
                 line.setUnitOfMeasure(lineReq.getUnitOfMeasure());
                 line.setUomPrecision(lineReq.getUomPrecision() != null ? lineReq.getUomPrecision() : 0);
                 line.setQuantity(lineReq.getQuantity());
@@ -532,6 +534,7 @@ public class OrderDtoMapper {
                 line.setProductId(lineReq.getProductId());
                 line.setVariantId(lineReq.getVariantId());
                 line.setProductName(lineReq.getProductName());
+                line.setCategoryName(lineReq.getCategoryName());
                 line.setUnitOfMeasure(lineReq.getUnitOfMeasure());
                 line.setUomPrecision(lineReq.getUomPrecision() != null ? lineReq.getUomPrecision() : 0);
                 line.setQuantity(lineReq.getQuantity());
@@ -601,6 +604,7 @@ public class OrderDtoMapper {
                 line.setProductId(lineReq.getProductId());
                 line.setVariantId(lineReq.getVariantId());
                 line.setProductName(lineReq.getProductName());
+                line.setCategoryName(lineReq.getCategoryName());
                 line.setUnitOfMeasure(lineReq.getUnitOfMeasure());
                 line.setQuantity(lineReq.getQuantity());
                 line.setUnitPrice(lineReq.getUnitPrice());
