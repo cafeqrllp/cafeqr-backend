@@ -170,6 +170,7 @@ class OrderWorkflowParityTest {
                 sequenceService,
                 mock(OfflineSequenceLeaseService.class),
                 mock(PrintJobService.class),
+                mock(com.restaurant.pos.print.service.PrintConfigurationService.class),
                 mock(ProductRepository.class),
                 customerRepository,
                 creditCustomerRepository,
