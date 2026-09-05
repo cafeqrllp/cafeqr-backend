@@ -60,6 +60,7 @@ import com.restaurant.pos.table.repository.RestaurantTableRepository;
 import com.restaurant.pos.purchasing.domain.Customer;
 import com.restaurant.pos.purchasing.repository.CustomerRepository;
 import com.restaurant.pos.purchasing.repository.CurrencyRepository;
+import com.restaurant.pos.print.service.PrintConfigurationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import jakarta.persistence.criteria.Predicate;
@@ -126,6 +127,7 @@ public class OrderService {
     private final DocumentSequenceService sequenceService;
     private final OfflineSequenceLeaseService offlineSequenceLeaseService;
     private final PrintJobService printJobService;
+    private final PrintConfigurationService printConfigurationService;
     private final ProductRepository productRepository;
     private final CustomerRepository customerRepository;
     private final CreditCustomerRepository creditCustomerRepository;
@@ -490,6 +492,7 @@ public class OrderService {
                     if (!addedLines.isEmpty() || !removedLines.isEmpty()) {
                         log.info("Calling enqueueKotEditJob for order {}", order.getId());
                         printJobService.enqueueKotEditJob(order, addedLines, removedLines, "edit");
+                        dispatchMasterKotJobs(order, addedLines, removedLines);
                     } else {
                         log.info("addedLines and removedLines are both empty for order {}, no KOT edit generated",
                                 order.getId());
@@ -497,6 +500,7 @@ public class OrderService {
                 } else {
                     log.info("Calling enqueueForOrder (New KOT) for order {}", order.getId());
                     printJobService.enqueueForOrder(order, PrintJobKind.KOT, "auto");
+                    dispatchMasterKotJobs(order, null, null);
                 }
             } else if ("BILLED".equalsIgnoreCase(status)) {
                 if (shouldSkipAutoPrint(order, PrintJobKind.BILL)) {
@@ -517,6 +521,41 @@ public class OrderService {
             }
         } catch (Exception ex) {
             log.warn("Unable to enqueue cloud print job for order {}", order == null ? null : order.getId(), ex);
+        }
+    }
+
+    private void dispatchMasterKotJobs(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines) {
+        try {
+            UUID terminalId = order.getSourceTerminalId() != null ? order.getSourceTerminalId() : order.getTerminalId();
+            if (terminalId == null) {
+                terminalId = TenantContext.getCurrentTerminal();
+            }
+            Map<String, Object> configMap = printConfigurationService.effective(terminalId, order.getOrgId());
+            if (configMap == null || !configMap.containsKey("defaults")) return;
+            
+            Map<String, Object> defaults = (Map<String, Object>) configMap.get("defaults");
+            Object printMasterKotObj = defaults.get("printMasterKot");
+            boolean isMasterEnabled = Boolean.TRUE.equals(printMasterKotObj) || "true".equals(String.valueOf(printMasterKotObj));
+            
+            if (isMasterEnabled) {
+                Object profileIdsObj = defaults.get("masterKotProfileIds");
+                if (profileIdsObj instanceof List) {
+                    List<?> profileIds = (List<?>) profileIdsObj;
+                    for (Object profileId : profileIds) {
+                        String id = String.valueOf(profileId);
+                        if (id != null && !id.isBlank()) {
+                            log.info("Dispatching Master KOT to profile {} for order {}", id, order.getId());
+                            if (addedLines != null || removedLines != null) {
+                                printJobService.enqueueDirectedKotEditJob(order, addedLines, removedLines, "master", id);
+                            } else {
+                                printJobService.enqueueDirectedJob(order, PrintJobKind.KOT, "master", id);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to dispatch Master KOT jobs for order {}", order.getId(), ex);
         }
     }
 

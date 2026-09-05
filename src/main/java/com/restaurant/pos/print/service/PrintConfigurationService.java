@@ -287,6 +287,7 @@ public class PrintConfigurationService {
         validateAssignedProfiles(defaults.path("kotProfileIds"), "KOT", profilesById);
         validateAssignedProfiles(defaults.path("billProfileIds"), "BILL", profilesById);
         validateAssignedProfiles(defaults.path("invoiceProfileIds"), "INVOICE", profilesById);
+        validateAssignedProfiles(defaults.path("masterKotProfileIds"), "KOT", profilesById);
     }
 
     private void validateOutput(JsonNode defaults, String key, String label) {

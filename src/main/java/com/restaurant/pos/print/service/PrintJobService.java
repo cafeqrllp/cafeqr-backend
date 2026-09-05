@@ -83,7 +83,15 @@ public class PrintJobService {
         UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
         String dedupeKey = buildDedupeKey(order, kind, reason);
         log.info("enqueueForOrder: orderId={}, kind={}, reason={}, dedupeKey={}", order.getId(), kind, reason, dedupeKey);
-        return createJob(order, kind, reason, dedupeKey, clientId);
+        return createJob(order, kind, reason, dedupeKey, clientId, null);
+    }
+
+    @Transactional
+    public PrintJob enqueueDirectedJob(Order order, PrintJobKind kind, String reason, String printerProfileId) {
+        UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+        String dedupeKey = buildDedupeKey(order, kind, reason) + ":" + printerProfileId;
+        log.info("enqueueDirectedJob: orderId={}, kind={}, reason={}, profile={}, dedupeKey={}", order.getId(), kind, reason, printerProfileId, dedupeKey);
+        return createJob(order, kind, reason, dedupeKey, clientId, printerProfileId);
     }
 
     @Transactional
@@ -231,7 +239,7 @@ public class PrintJobService {
         return dto;
     }
 
-    private PrintJob createJob(Order order, PrintJobKind kind, String reason, String dedupeKey, UUID clientId) {
+    private PrintJob createJob(Order order, PrintJobKind kind, String reason, String dedupeKey, UUID clientId, String printerProfileId) {
         try {
             Map<String, Object> payloadMap = new LinkedHashMap<>();
             payloadMap.put("order", orderSnapshot(order, kind));
@@ -258,6 +266,9 @@ public class PrintJobService {
                     .build();
             job.setClientId(clientId);
             job.setOrgId(order.getOrgId());
+            if (printerProfileId != null && !printerProfileId.isBlank()) {
+                job.setPrinterProfileId(printerProfileId);
+            }
             PrintJob saved = printJobRepository.save(job);
             return saved;
         } catch (DataIntegrityViolationException ex) {
@@ -279,10 +290,18 @@ public class PrintJobService {
         UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
         String dedupeKey = buildDedupeKey(order, PrintJobKind.KOT, reason);
         log.info("enqueueKotEditJob: orderId={}, addedLines={}, removedLines={}, dedupeKey={}", order.getId(), (addedLines != null ? addedLines.size() : 0), (removedLines != null ? removedLines.size() : 0), dedupeKey);
-        return createKotEditJob(order, addedLines, removedLines, reason, dedupeKey, clientId);
+        return createKotEditJob(order, addedLines, removedLines, reason, dedupeKey, clientId, null);
     }
 
-    private PrintJob createKotEditJob(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines, String reason, String dedupeKey, UUID clientId) {
+    @Transactional
+    public PrintJob enqueueDirectedKotEditJob(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines, String reason, String printerProfileId) {
+        UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+        String dedupeKey = buildDedupeKey(order, PrintJobKind.KOT, reason) + ":" + printerProfileId;
+        log.info("enqueueDirectedKotEditJob: orderId={}, profile={}, dedupeKey={}", order.getId(), printerProfileId, dedupeKey);
+        return createKotEditJob(order, addedLines, removedLines, reason, dedupeKey, clientId, printerProfileId);
+    }
+
+    private PrintJob createKotEditJob(Order order, List<OrderLine> addedLines, List<OrderLine> removedLines, String reason, String dedupeKey, UUID clientId, String printerProfileId) {
         try {
             Map<String, Object> orderSnap = orderSnapshot(order, PrintJobKind.KOT);
             List<Map<String, Object>> addedSnaps = addedLines == null
@@ -325,6 +344,9 @@ public class PrintJobService {
                     .build();
             job.setClientId(clientId);
             job.setOrgId(order.getOrgId());
+            if (printerProfileId != null && !printerProfileId.isBlank()) {
+                job.setPrinterProfileId(printerProfileId);
+            }
             PrintJob saved = printJobRepository.save(job);
             log.info("createKotEditJob: successfully created PrintJob {} for order {} with dedupeKey {}", saved.getId(), order.getId(), dedupeKey);
             return saved;
