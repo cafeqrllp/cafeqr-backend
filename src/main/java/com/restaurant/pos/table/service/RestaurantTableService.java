@@ -7,6 +7,7 @@ import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.table.domain.RestaurantTable;
 import com.restaurant.pos.table.repository.RestaurantTableRepository;
+import com.restaurant.pos.order.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,30 +23,52 @@ import java.util.UUID;
 public class RestaurantTableService {
 
     private final RestaurantTableRepository tableRepository;
+    private final OrderRepository orderRepository;
     private final EmailService emailService;
     private final BranchContextService branchContext;
 
     @org.springframework.beans.factory.annotation.Value("${app.frontend-url:http://localhost:3000}")
     private String frontendUrl;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<RestaurantTable> getAllTables() {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
+        List<RestaurantTable> tables;
         if (orgId == null) {
-            return tableRepository.findByClientIdOrderByDisplayOrderAscTableNumberAsc(clientId);
+            tables = tableRepository.findByClientIdOrderByDisplayOrderAscTableNumberAsc(clientId);
+        } else {
+            tables = tableRepository.findByClientIdAndOrgIdOrderByDisplayOrderAscTableNumberAsc(clientId, orgId);
         }
-        return tableRepository.findByClientIdAndOrgIdOrderByDisplayOrderAscTableNumberAsc(clientId, orgId);
+        return reconcileTableStatuses(tables, clientId);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<RestaurantTable> getActiveTables() {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.getReadOrgId(null);
+        List<RestaurantTable> tables;
         if (orgId == null) {
-            return tableRepository.findByClientIdAndIsactiveOrderByDisplayOrderAscTableNumberAsc(clientId, "Y");
+            tables = tableRepository.findByClientIdAndIsactiveOrderByDisplayOrderAscTableNumberAsc(clientId, "Y");
+        } else {
+            tables = tableRepository.findByClientIdAndOrgIdAndIsactiveOrderByDisplayOrderAscTableNumberAsc(clientId, orgId, "Y");
         }
-        return tableRepository.findByClientIdAndOrgIdAndIsactiveOrderByDisplayOrderAscTableNumberAsc(clientId, orgId, "Y");
+        return reconcileTableStatuses(tables, clientId);
+    }
+
+    private List<RestaurantTable> reconcileTableStatuses(List<RestaurantTable> tables, UUID clientId) {
+        if (tables == null || tables.isEmpty()) return tables;
+        for (RestaurantTable table : tables) {
+            String status = String.valueOf(table.getStatus()).toUpperCase();
+            if ("OCCUPIED".equals(status) || "BILLED".equals(status)) {
+                boolean hasLiveOrder = orderRepository.existsLiveOrderByTable(clientId, table.getOrgId(), table.getId(), table.getTableNumber());
+                if (!hasLiveOrder) {
+                    table.setStatus("AVAILABLE");
+                    tableRepository.save(table);
+                }
+            }
+        }
+        return tables;
     }
 
     @Transactional(readOnly = true)

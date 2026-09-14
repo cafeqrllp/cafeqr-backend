@@ -1,0 +1,23 @@
+package com.restaurant.pos.hr.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PunchSegmentDto {
+    private UUID id;
+    private UUID attendanceId;
+    private LocalDateTime clockInTime;
+    private LocalDateTime clockOutTime;
+    private BigDecimal hoursWorked;
+    private String segmentType;
+}

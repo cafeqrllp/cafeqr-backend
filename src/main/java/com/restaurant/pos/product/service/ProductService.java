@@ -349,6 +349,40 @@ public class ProductService {
     }
 
     @Transactional(readOnly = true)
+    public org.springframework.data.domain.Page<ProductListDto> getProductsPaginated(int page, int size, String search, UUID categoryId, String status) {
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID orgId = TenantContext.getCurrentOrg();
+        boolean includeImages = isMenuImagesEnabled();
+
+        Boolean isActive = null;
+        if ("ACTIVE".equalsIgnoreCase(status)) {
+            isActive = true;
+        } else if ("INACTIVE".equalsIgnoreCase(status)) {
+            isActive = false;
+        }
+
+        String sanitizedSearch = (search != null && !search.trim().isEmpty()) ? search.trim().toLowerCase() : null;
+
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                Math.max(0, page),
+                Math.min(Math.max(1, size), 200),
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC, "name")
+        );
+
+        org.springframework.data.domain.Page<Product> productPage;
+        if (sanitizedSearch != null) {
+            String pattern = "%" + sanitizedSearch + "%";
+            productPage = productRepository.findFilteredWithSearch(
+                    clientId, orgId, categoryId, isActive, pattern, pageable);
+        } else {
+            productPage = productRepository.findFiltered(
+                    clientId, orgId, categoryId, isActive, pageable);
+        }
+
+        return productPage.map(p -> mapToDto(p, includeImages));
+    }
+
+    @Transactional(readOnly = true)
     public List<ProductListDto> getProductsChangedSince(Instant since) {
         if (since == null) {
             return getProducts();

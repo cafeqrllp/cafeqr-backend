@@ -29,10 +29,18 @@ public class ProductController {
 
     @GetMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
-    public ResponseEntity<ApiResponse<List<ProductListDto>>> getProducts() {
-        System.out.println("===> [DEBUG] ProductController: Request received for getProducts");
+    public ResponseEntity<ApiResponse<?>> getProducts(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) UUID categoryId,
+            @RequestParam(required = false) String status) {
+        if (page != null) {
+            org.springframework.data.domain.Page<ProductListDto> paginated =
+                    productService.getProductsPaginated(page, size, search, categoryId, status);
+            return ResponseEntity.ok(ApiResponse.success(paginated));
+        }
         List<ProductListDto> products = productService.getProducts();
-        System.out.println("===> [DEBUG] ProductController: Returning " + products.size() + " products");
         return ResponseEntity.ok(ApiResponse.success(products));
     }
 

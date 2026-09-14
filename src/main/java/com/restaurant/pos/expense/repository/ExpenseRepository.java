@@ -49,5 +49,13 @@ public interface ExpenseRepository extends JpaRepository<Expense, UUID>, JpaSpec
               AND e.expenseNo = :expenseNo
             """)
     boolean existsByClientIdAndOrgIdAndExpenseNo(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("expenseNo") String expenseNo);
+
+    @Query("""
+            SELECT e FROM Expense e
+            WHERE e.clientId = :clientId
+              AND ((:orgId IS NULL AND e.orgId IS NULL) OR e.orgId = :orgId)
+              AND e.expenseNo = :expenseNo
+            """)
+    List<Expense> findByClientIdAndOrgIdAndExpenseNo(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("expenseNo") String expenseNo);
 }
 

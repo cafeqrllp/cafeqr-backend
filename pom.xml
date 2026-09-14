@@ -139,6 +139,13 @@
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-hibernate6</artifactId>
         </dependency>
+
+        <!-- FixedFormat4j for Bank ACH Exports -->
+        <dependency>
+            <groupId>com.ancientprogramming.fixedformat4j</groupId>
+            <artifactId>fixedformat4j</artifactId>
+            <version>1.2.2</version>
+        </dependency>
     </dependencies>
 
     <build>

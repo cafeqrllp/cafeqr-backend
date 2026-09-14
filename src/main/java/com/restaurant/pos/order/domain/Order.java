@@ -289,6 +289,11 @@ public class Order extends BaseEntity {
     @Column(name = "loyalty_amount")
     private BigDecimal loyaltyAmount;
 
+    /** Denormalized active order-line count, maintained by DB trigger on order_lines. */
+    @Builder.Default
+    @Column(name = "item_count", nullable = false)
+    private Integer itemCount = 0;
+
     @Builder.Default
     @JsonProperty("isActive")
     @Column(name = "isactive", length = 1)

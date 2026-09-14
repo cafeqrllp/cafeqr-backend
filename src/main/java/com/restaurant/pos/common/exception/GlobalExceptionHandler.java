@@ -124,9 +124,21 @@ public class GlobalExceptionHandler {
             root = root.getCause();
         }
         log.error("Duplicate resource or data integrity violation: {}", root.getMessage(), ex);
-        String message = ex instanceof DuplicateResourceException
-                ? ex.getMessage()
-                : "The resource you are trying to create already exists or violates a unique constraint: " + root.getMessage();
+        
+        String message;
+        if (ex instanceof DuplicateResourceException) {
+            message = ex.getMessage();
+        } else {
+            String rootMsg = root.getMessage() != null ? root.getMessage() : "";
+            if (rootMsg.contains("violates foreign key constraint") || rootMsg.contains("is still referenced from table")) {
+                message = "Cannot delete or modify this record because it is referenced by other active records in the system.";
+            } else if (rootMsg.contains("violates unique constraint") || rootMsg.contains("already exists")) {
+                message = "A record with this information already exists in the system.";
+            } else {
+                message = "Data constraint error: The operation could not be completed due to database relations.";
+            }
+        }
+        
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error(message));
     }

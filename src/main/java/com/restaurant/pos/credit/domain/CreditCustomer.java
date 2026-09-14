@@ -55,6 +55,11 @@ public class CreditCustomer extends BaseEntity {
     @Column(name = "opening_balance", precision = 15, scale = 2, nullable = false)
     private BigDecimal openingBalance = BigDecimal.ZERO;
 
+    /** Denormalized outstanding balance (opening_balance + active invoice dues), maintained by DB trigger on invoices. */
+    @Builder.Default
+    @Column(name = "current_balance", precision = 15, scale = 2, nullable = false)
+    private BigDecimal currentBalance = BigDecimal.ZERO;
+
     @Column(columnDefinition = "TEXT")
     private String notes;
 

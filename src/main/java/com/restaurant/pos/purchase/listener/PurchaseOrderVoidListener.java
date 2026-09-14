@@ -1,4 +1,4 @@
-package com.restaurant.pos.purchase.listener;
+ package com.restaurant.pos.purchase.listener;
 
 import com.restaurant.pos.inventory.service.InventoryService;
 import com.restaurant.pos.invoice.domain.Invoice;

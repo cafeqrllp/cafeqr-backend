@@ -49,4 +49,16 @@ public interface ExpenseCategoryRepository extends JpaRepository<ExpenseCategory
             @Param("clientId") UUID clientId, 
             @Param("orgId") UUID orgId
     );
+
+    @Query("""
+            SELECT c FROM ExpenseCategory c
+            WHERE UPPER(c.name) = UPPER(:name)
+              AND c.clientId = :clientId
+              AND ((:orgId IS NULL AND c.orgId IS NULL) OR c.orgId = :orgId)
+            """)
+    Optional<ExpenseCategory> findByNameIgnoreCaseAndClientIdAndOrgId(
+            @Param("name") String name, 
+            @Param("clientId") UUID clientId, 
+            @Param("orgId") UUID orgId
+    );
 }

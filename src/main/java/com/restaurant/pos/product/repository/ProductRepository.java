@@ -23,6 +23,37 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     List<Product> findByClientIdAndOrgIdOrGlobal(UUID clientId, UUID orgId);
 
     @EntityGraph(attributePaths = {"category", "uom", "defaultPricelist"})
+    @Query(value = "SELECT p FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) " +
+           "AND (:categoryId IS NULL OR p.category.id = :categoryId) " +
+           "AND (:isActive IS NULL OR p.isActive = :isActive)",
+           countQuery = "SELECT count(p) FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) " +
+           "AND (:categoryId IS NULL OR p.category.id = :categoryId) " +
+           "AND (:isActive IS NULL OR p.isActive = :isActive)")
+    org.springframework.data.domain.Page<Product> findFiltered(
+            @org.springframework.data.repository.query.Param("clientId") UUID clientId,
+            @org.springframework.data.repository.query.Param("orgId") UUID orgId,
+            @org.springframework.data.repository.query.Param("categoryId") UUID categoryId,
+            @org.springframework.data.repository.query.Param("isActive") Boolean isActive,
+            org.springframework.data.domain.Pageable pageable);
+
+    @EntityGraph(attributePaths = {"category", "uom", "defaultPricelist"})
+    @Query(value = "SELECT p FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) " +
+           "AND (:categoryId IS NULL OR p.category.id = :categoryId) " +
+           "AND (:isActive IS NULL OR p.isActive = :isActive) " +
+           "AND (LOWER(p.name) LIKE :pattern OR (p.productCode IS NOT NULL AND LOWER(p.productCode) LIKE :pattern))",
+           countQuery = "SELECT count(p) FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) " +
+           "AND (:categoryId IS NULL OR p.category.id = :categoryId) " +
+           "AND (:isActive IS NULL OR p.isActive = :isActive) " +
+           "AND (LOWER(p.name) LIKE :pattern OR (p.productCode IS NOT NULL AND LOWER(p.productCode) LIKE :pattern))")
+    org.springframework.data.domain.Page<Product> findFilteredWithSearch(
+            @org.springframework.data.repository.query.Param("clientId") UUID clientId,
+            @org.springframework.data.repository.query.Param("orgId") UUID orgId,
+            @org.springframework.data.repository.query.Param("categoryId") UUID categoryId,
+            @org.springframework.data.repository.query.Param("isActive") Boolean isActive,
+            @org.springframework.data.repository.query.Param("pattern") String pattern,
+            org.springframework.data.domain.Pageable pageable);
+
+    @EntityGraph(attributePaths = {"category", "uom", "defaultPricelist"})
     @Query("SELECT p FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) AND (p.orgId = :orgId OR p.orgId IS NULL) AND p.isActive = true")
     List<Product> findByClientIdAndOrgIdOrGlobalAndIsActiveTrue(UUID clientId, UUID orgId);
 
