@@ -17,5 +17,6 @@ public interface EmployeeSalaryComponentRepository extends JpaRepository<Employe
     @Query("SELECT e FROM EmployeeSalaryComponent e JOIN FETCH e.salaryComponent WHERE e.employee.id = :employeeId")
     List<EmployeeSalaryComponent> findByEmployeeId(@Param("employeeId") UUID employeeId);
 
+    List<EmployeeSalaryComponent> findAllByEmployeeIdAndSalaryComponentId(UUID employeeId, UUID salaryComponentId);
     Optional<EmployeeSalaryComponent> findByEmployeeIdAndSalaryComponentId(UUID employeeId, UUID salaryComponentId);
 }

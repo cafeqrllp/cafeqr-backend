@@ -2,13 +2,16 @@ package com.restaurant.pos.hr.service;
 
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.hr.dto.HrSettingsDto;
+import com.restaurant.pos.hr.entity.Attendance;
 import com.restaurant.pos.hr.entity.HrSettings;
+import com.restaurant.pos.hr.repository.AttendanceRepository;
 import com.restaurant.pos.hr.repository.HrSettingsRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -16,6 +19,7 @@ import java.util.UUID;
 public class HrSettingsService {
 
     private final HrSettingsRepository hrSettingsRepository;
+    private final AttendanceRepository attendanceRepository;
 
     private static final BigDecimal DEFAULT_STANDARD_HOURS = new BigDecimal("8.00");
     private static final BigDecimal DEFAULT_OVERTIME_MULTIPLIER = new BigDecimal("1.50");
@@ -98,6 +102,26 @@ public class HrSettingsService {
         }
 
         HrSettings saved = hrSettingsRepository.save(settings);
+
+        // Recalculate overtime_hours for all tenant attendance records using updated threshold
+        if (attendanceRepository != null) {
+            List<Attendance> tenantAttendances = attendanceRepository.findByClientIdAndOrgId(clientId, orgId);
+            BigDecimal newThreshold = saved.getStandardHoursPerDay() != null ? saved.getStandardHoursPerDay() : DEFAULT_STANDARD_HOURS;
+            for (Attendance att : tenantAttendances) {
+                if ("ABSENT".equalsIgnoreCase(att.getStatus())) {
+                    att.setOvertimeHours(BigDecimal.ZERO);
+                } else {
+                    BigDecimal totalWorked = att.getTotalHoursWorked() != null ? att.getTotalHoursWorked() : BigDecimal.ZERO;
+                    if (totalWorked.compareTo(newThreshold) > 0) {
+                        att.setOvertimeHours(totalWorked.subtract(newThreshold));
+                    } else {
+                        att.setOvertimeHours(BigDecimal.ZERO);
+                    }
+                }
+                attendanceRepository.save(att);
+            }
+        }
+
         return mapToDto(saved);
     }
 
