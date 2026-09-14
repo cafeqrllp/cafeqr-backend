@@ -23,6 +23,7 @@ Thumbs.db
 
 
 # Logs
+logs/
 *.log
 *.txt
 !DEPLOY_FREE.md

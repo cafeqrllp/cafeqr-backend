@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 
@@ -36,12 +37,18 @@ public class ConfigurationDto {
     private boolean discountEnabled;
     private boolean purchaseEnabled;
     private boolean barcodeScannerEnabled;
+    @Builder.Default
+    private boolean payrollEnabled = true;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;
     @Builder.Default
-    private String defaultBillingUiMode = "standard";
+    private String defaultBillingUiMode = "board";
+    @Builder.Default
+    private String salesVersion = "v1";
+    @Builder.Default
+    private boolean posV2Enabled = false;
 
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;
@@ -101,6 +108,8 @@ public class ConfigurationDto {
     private String shippingAddressState;
     private String shippingPincode;
     private String timezone;
+
+    private LocalDateTime updatedAt;
 
     // Branch override metadata (not persisted — set by service layer)
     @Builder.Default

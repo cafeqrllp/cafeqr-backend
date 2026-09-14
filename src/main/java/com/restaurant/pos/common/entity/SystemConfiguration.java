@@ -55,13 +55,23 @@ public class SystemConfiguration {
     private boolean discountEnabled;
     private boolean purchaseEnabled;
     private boolean barcodeScannerEnabled;
+    @Builder.Default
+    private boolean payrollEnabled = true;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;
     @Column(name = "default_billing_ui_mode", length = 20)
     @Builder.Default
-    private String defaultBillingUiMode = "standard";
+    private String defaultBillingUiMode = "board";
+
+    @Column(name = "sales_version", length = 20)
+    @Builder.Default
+    private String salesVersion = "v1";
+
+    @Column(name = "pos_v2_enabled")
+    @Builder.Default
+    private boolean posV2Enabled = false;
 
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;

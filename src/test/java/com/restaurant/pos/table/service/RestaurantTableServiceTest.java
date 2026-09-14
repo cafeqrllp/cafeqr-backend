@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 class RestaurantTableServiceTest {
 
     private RestaurantTableRepository tableRepository;
+    private com.restaurant.pos.order.repository.OrderRepository orderRepository;
     private EmailService emailService;
     private RestaurantTableService tableService;
     private UUID clientId;
@@ -35,8 +36,9 @@ class RestaurantTableServiceTest {
     @BeforeEach
     void setUp() {
         tableRepository = mock(RestaurantTableRepository.class);
+        orderRepository = mock(com.restaurant.pos.order.repository.OrderRepository.class);
         emailService = mock(EmailService.class);
-        tableService = new RestaurantTableService(tableRepository, emailService, new BranchContextService());
+        tableService = new RestaurantTableService(tableRepository, orderRepository, emailService, new BranchContextService());
         clientId = UUID.randomUUID();
         branchId = UUID.randomUUID();
         TenantContext.setCurrentTenant(clientId);

@@ -152,4 +152,19 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     Optional<Order> findActiveByOrderNoAndClientId(
             @Param("orderNo") String orderNo,
             @Param("clientId") UUID clientId);
+
+    @Query("""
+            SELECT COUNT(o) > 0 FROM Order o
+            WHERE o.clientId = :clientId
+              AND (:orgId IS NULL OR o.orgId = :orgId)
+              AND ((:tableId IS NOT NULL AND o.tableId = :tableId) OR (:tableNumber IS NOT NULL AND o.tableNumber = :tableNumber))
+              AND o.isactive = 'Y'
+              AND (o.orderStatus IS NULL OR UPPER(o.orderStatus) NOT IN ('COMPLETED', 'CANCELLED', 'VOID', 'PAID'))
+            """)
+    boolean existsLiveOrderByTable(
+            @Param("clientId") UUID clientId,
+            @Param("orgId") UUID orgId,
+            @Param("tableId") UUID tableId,
+            @Param("tableNumber") String tableNumber);
 }
+
