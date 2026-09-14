@@ -56,7 +56,8 @@ public class SystemConfiguration {
     private boolean purchaseEnabled;
     private boolean barcodeScannerEnabled;
     @Builder.Default
-    private boolean payrollEnabled = true;
+    @Column(name = "payroll_enabled")
+    private boolean payrollEnabled = false;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;

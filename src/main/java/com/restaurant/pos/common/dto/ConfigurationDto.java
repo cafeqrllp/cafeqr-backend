@@ -38,7 +38,7 @@ public class ConfigurationDto {
     private boolean purchaseEnabled;
     private boolean barcodeScannerEnabled;
     @Builder.Default
-    private boolean payrollEnabled = true;
+    private boolean payrollEnabled = false;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;

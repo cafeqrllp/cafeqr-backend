@@ -242,7 +242,7 @@ public class SystemConfigurationService {
                 .discountEnabled(true)
                 .purchaseEnabled(true)
                 .barcodeScannerEnabled(false)
-                .payrollEnabled(true)
+                .payrollEnabled(false)
                 .takeawayAutoPrintKotOnSettle(false)
                 .takeawayHideKitchenMode(false)
                 .dineInAutoPrintKotOnSettle(false)
