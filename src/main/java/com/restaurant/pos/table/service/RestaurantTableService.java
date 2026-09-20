@@ -8,7 +8,10 @@ import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.table.domain.RestaurantTable;
 import com.restaurant.pos.table.repository.RestaurantTableRepository;
 import com.restaurant.pos.order.repository.OrderRepository;
+import com.restaurant.pos.pos.sale.query.PosCacheInvalidationService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +21,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class RestaurantTableService {
@@ -26,6 +30,10 @@ public class RestaurantTableService {
     private final OrderRepository orderRepository;
     private final EmailService emailService;
     private final BranchContextService branchContext;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private PosCacheInvalidationService posCacheInvalidationService;
 
     @org.springframework.beans.factory.annotation.Value("${app.frontend-url:http://localhost:3000}")
     private String frontendUrl;
@@ -107,12 +115,15 @@ public class RestaurantTableService {
         if (!isNew) {
             RestaurantTable existing = getTable(table.getId());
             copyMutableFields(existing, table);
-            return tableRepository.save(existing);
+            RestaurantTable saved = tableRepository.save(existing);
+            invalidatePosTableCache(saved.getClientId(), saved.getOrgId());
+            return saved;
         }
 
         table.setClientId(TenantContext.getCurrentTenant());
         table.setOrgId(branchContext.requireWriteOrgId(table.getOrgId()));
         RestaurantTable saved = tableRepository.save(table);
+        invalidatePosTableCache(saved.getClientId(), saved.getOrgId());
         
         // On creation, automatically send QR mail to owner
         if (isNew) {
@@ -142,7 +153,9 @@ public class RestaurantTableService {
     public RestaurantTable updateTableStatus(UUID id, String status) {
         RestaurantTable table = getTable(id);
         table.setStatus(status);
-        return tableRepository.save(table);
+        RestaurantTable saved = tableRepository.save(table);
+        invalidatePosTableCache(saved.getClientId(), saved.getOrgId());
+        return saved;
     }
 
     @Transactional
@@ -159,6 +172,17 @@ public class RestaurantTableService {
         // Soft Delete
         table.setIsactive("N");
         tableRepository.save(table);
+        invalidatePosTableCache(table.getClientId(), table.getOrgId());
+    }
+
+    private void invalidatePosTableCache(UUID clientId, UUID orgId) {
+        if (posCacheInvalidationService != null && clientId != null && orgId != null) {
+            try {
+                posCacheInvalidationService.invalidateTables(clientId, orgId);
+            } catch (Exception ex) {
+                log.warn("Failed to invalidate POS table cache for clientId={}, orgId={}: {}", clientId, orgId, ex.getMessage());
+            }
+        }
     }
 
     public void sendQRCode(UUID id, String targetEmail, String qrLink) {

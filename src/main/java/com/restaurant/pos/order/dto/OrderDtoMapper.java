@@ -408,6 +408,9 @@ public class OrderDtoMapper {
         order.setPricelistId(request.getPricelistId());
         order.setCurrencyId(request.getCurrencyId());
         order.setFulfillmentType(request.getFulfillmentType() != null ? request.getFulfillmentType() : "DINE_IN");
+        if (request.getCustomerId() != null) {
+            order.setCustomerId(request.getCustomerId());
+        }
         order.setCustomerIds(request.getCustomerIds());
         order.setIsCredit(Boolean.TRUE.equals(request.getIsCredit()));
         order.setCreditCustomerId(request.getCreditCustomerId());

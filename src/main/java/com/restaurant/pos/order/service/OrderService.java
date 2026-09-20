@@ -480,9 +480,14 @@ public class OrderService {
                     order.getId(), status, (addedLines != null ? addedLines.size() : 0),
                     (removedLines != null ? removedLines.size() : 0));
             if ("KITCHEN".equalsIgnoreCase(status)
+                    || "ORDERED".equalsIgnoreCase(status)
                     || "CONFIRMED".equalsIgnoreCase(status)
                     || "IN_PROGRESS".equalsIgnoreCase(status)
-                    || "READY".equalsIgnoreCase(status)) {
+                    || "READY".equalsIgnoreCase(status)
+                    || "PENDING".equalsIgnoreCase(status)
+                    || "NEW".equalsIgnoreCase(status)
+                    || "SAVED".equalsIgnoreCase(status)
+                    || "OPEN".equalsIgnoreCase(status)) {
                 if (shouldSkipAutoPrint(order, PrintJobKind.KOT)) {
                     log.info("Skipping backend auto KOT print job for order {} because requester will print locally",
                             order.getId());
@@ -492,7 +497,6 @@ public class OrderService {
                     if (!addedLines.isEmpty() || !removedLines.isEmpty()) {
                         log.info("Calling enqueueKotEditJob for order {}", order.getId());
                         printJobService.enqueueKotEditJob(order, addedLines, removedLines, "edit");
-                        dispatchMasterKotJobs(order, addedLines, removedLines);
                     } else {
                         log.info("addedLines and removedLines are both empty for order {}, no KOT edit generated",
                                 order.getId());
@@ -500,7 +504,6 @@ public class OrderService {
                 } else {
                     log.info("Calling enqueueForOrder (New KOT) for order {}", order.getId());
                     printJobService.enqueueForOrder(order, PrintJobKind.KOT, "auto");
-                    dispatchMasterKotJobs(order, null, null);
                 }
             } else if ("BILLED".equalsIgnoreCase(status)) {
                 if (shouldSkipAutoPrint(order, PrintJobKind.BILL)) {
@@ -2096,6 +2099,7 @@ public class OrderService {
             diagnosticPhase = "hydrate_saved_order";
             Order hydrated = hydrateOrder(saved);
             hydrated.setSkipAutoPrintKinds(order.getSkipAutoPrintKinds());
+            enqueueCloudPrintJobs(hydrated);
             logCreditOrderCreateSuccess(logCreditDiagnostics, hydrated);
 
             return hydrated;
@@ -2986,6 +2990,31 @@ public class OrderService {
         }
 
         recalculateOrderTotals(order);
+
+        // Attach customer from settle request if not already attached (e.g. kitchen/table orders settled from payment popup)
+        if (order.getCustomerId() == null && (safeRequest.getCustomerId() != null
+                || (safeRequest.getCustomerPhone() != null && !safeRequest.getCustomerPhone().isBlank())
+                || (safeRequest.getCustomerName() != null && !safeRequest.getCustomerName().isBlank()))) {
+            if (safeRequest.getCustomerId() != null) {
+                order.setCustomerId(safeRequest.getCustomerId());
+            }
+            if (safeRequest.getCustomerName() != null && !safeRequest.getCustomerName().isBlank()) {
+                order.setCustomerName(safeRequest.getCustomerName());
+            }
+            if (safeRequest.getCustomerPhone() != null && !safeRequest.getCustomerPhone().isBlank()) {
+                order.setCustomerPhone(safeRequest.getCustomerPhone());
+            }
+            prepareCustomerFields(order);
+            Order savedForCustomer = orderRepository.saveAndFlush(order);
+            linkCustomersToSavedOrder(savedForCustomer);
+            // Re-read to get linked customers hydrated
+            order.setCustomerId(savedForCustomer.getCustomerId());
+            order.setCustomerName(savedForCustomer.getCustomerName());
+            order.setCustomerPhone(savedForCustomer.getCustomerPhone());
+            order.setCustomers(savedForCustomer.getCustomers());
+            log.info("Attached customer during settlement | orderId={} | customerId={} | customerName={}",
+                    order.getId(), order.getCustomerId(), order.getCustomerName());
+        }
 
         // Process loyalty redemption if points are specified in settlement
         if (safeRequest.getRedeemPoints() != null && safeRequest.getRedeemPoints() > 0) {

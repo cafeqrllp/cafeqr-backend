@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 @Data
 @Schema(description = "Request payload for settling an order and recording corresponding payments")
@@ -45,6 +46,15 @@ public class OrderSettleRequest {
 
     @Schema(description = "Monetary discount value of loyalty points redeemed", example = "10.00")
     private BigDecimal loyaltyAmount;
+
+    @Schema(description = "Customer ID to attach during settlement (for orders without a pre-attached customer)")
+    private UUID customerId;
+
+    @Schema(description = "Customer name to attach during settlement")
+    private String customerName;
+
+    @Schema(description = "Customer phone to attach during settlement")
+    private String customerPhone;
 
     @Data
     @Schema(description = "Split payment item details")

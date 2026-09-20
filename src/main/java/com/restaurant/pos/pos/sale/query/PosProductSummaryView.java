@@ -29,4 +29,8 @@ public interface PosProductSummaryView {
     Boolean getIsIngredient();
     Boolean getIsVariablePrice();
     Boolean getIsVariant();
+    Boolean getHasVariants();
+    Integer getVariantCount();
+    Boolean getHasUpsells();
+    Integer getUpsellCount();
 }

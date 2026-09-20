@@ -44,7 +44,6 @@ public class PrintConfigurationService {
         UUID scopeId = normalizeScopeId(clientId, scopeType, request.getScopeId());
         UUID orgId = resolveOrgId(clientId, scopeType, scopeId, request.getOrgId());
         Map<String, Object> settings = request.getSettings() == null ? Map.of() : request.getSettings();
-        validateSettings(settings);
 
         if (TERMINAL.equals(scopeType)) {
             settings = new java.util.LinkedHashMap<>(settings);
@@ -53,6 +52,9 @@ public class PrintConfigurationService {
             settings.remove("thermalTemplate");
             settings.remove("regularTemplate");
         }
+
+        settings = sanitizeSettings(settings);
+        validateSettings(settings);
 
         PrintConfiguration entity = findScope(clientId, scopeType, scopeId)
                 .orElseGet(PrintConfiguration::new);
@@ -106,6 +108,7 @@ public class PrintConfigurationService {
         settings.remove("receiptTemplate");
         settings.remove("thermalTemplate");
         settings.remove("regularTemplate");
+        settings = sanitizeSettings(settings);
         validateSettings(settings);
         PrintConfiguration entity = existingLayer.orElseGet(PrintConfiguration::new);
         entity.setClientId(station.getClientId());
@@ -145,6 +148,7 @@ public class PrintConfigurationService {
         }
 
         Map<String, Object> result = objectMapper.convertValue(merged, new TypeReference<>() {});
+        result = sanitizeSettings(result);
         result.put("_meta", metadata(clientId, orgId, terminalId));
         return result;
     }
@@ -156,7 +160,81 @@ public class PrintConfigurationService {
         mergeInto(merged, findScope(clientId, ORGANIZATION, orgId));
         mergeInto(merged, findScope(clientId, TERMINAL, terminalId));
         Map<String, Object> result = objectMapper.convertValue(merged, new TypeReference<>() {});
+        result = sanitizeSettings(result);
         result.put("_meta", metadata(clientId, orgId, terminalId));
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sanitizeSettings(Map<String, Object> settings) {
+        if (settings == null) {
+            return new java.util.LinkedHashMap<>();
+        }
+        Map<String, Object> result = new java.util.LinkedHashMap<>(settings);
+
+        Set<String> knownProfileIds = new HashSet<>();
+        Object profilesObj = result.get("profiles");
+        if (profilesObj instanceof java.util.List) {
+            java.util.List<?> profilesList = (java.util.List<?>) profilesObj;
+            for (Object p : profilesList) {
+                if (p instanceof Map) {
+                    Object idObj = ((Map<?, ?>) p).get("id");
+                    if (idObj != null) {
+                        knownProfileIds.add(idObj.toString().trim());
+                    }
+                }
+            }
+        }
+
+        Object defaultsObj = result.get("defaults");
+        if (defaultsObj instanceof Map) {
+            Map<String, Object> defaultsMap = new java.util.LinkedHashMap<>((Map<String, Object>) defaultsObj);
+            String[] arrayKeys = {"kotProfileIds", "billProfileIds", "invoiceProfileIds", "labelProfileIds", "masterKotProfileIds"};
+            for (String key : arrayKeys) {
+                Object listObj = defaultsMap.get(key);
+                if (listObj instanceof java.util.List) {
+                    java.util.List<?> list = (java.util.List<?>) listObj;
+                    java.util.List<String> sanitized = list.stream()
+                            .filter(java.util.Objects::nonNull)
+                            .map(Object::toString)
+                            .map(String::trim)
+                            .filter(id -> !id.isEmpty() && knownProfileIds.contains(id))
+                            .collect(java.util.stream.Collectors.toList());
+                    defaultsMap.put(key, sanitized);
+                }
+            }
+            result.put("defaults", defaultsMap);
+        }
+
+        Object routesObj = result.get("routes");
+        if (routesObj instanceof java.util.List) {
+            java.util.List<?> routesList = (java.util.List<?>) routesObj;
+            java.util.List<Map<String, Object>> sanitizedRoutes = new java.util.ArrayList<>();
+            for (Object r : routesList) {
+                if (r instanceof Map) {
+                    Map<String, Object> routeMap = new java.util.LinkedHashMap<>((Map<String, Object>) r);
+                    Object routeProfileIdsObj = routeMap.get("profileIds");
+                    if (routeProfileIdsObj instanceof java.util.List) {
+                        java.util.List<?> list = (java.util.List<?>) routeProfileIdsObj;
+                        java.util.List<String> sanitized = list.stream()
+                                .filter(java.util.Objects::nonNull)
+                                .map(Object::toString)
+                                .map(String::trim)
+                                .filter(id -> !id.isEmpty() && knownProfileIds.contains(id))
+                                .collect(java.util.stream.Collectors.toList());
+                        routeMap.put("profileIds", sanitized);
+                        if (sanitized.isEmpty()) {
+                            routeMap.put("enabled", false);
+                        } else if (routeMap.get("enabled") == null || Boolean.FALSE.equals(routeMap.get("enabled"))) {
+                            routeMap.put("enabled", true);
+                        }
+                    }
+                    sanitizedRoutes.add(routeMap);
+                }
+            }
+            result.put("routes", sanitizedRoutes);
+        }
+
         return result;
     }
 

@@ -23,4 +23,8 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     List<LoyaltyTransaction> findByOrderIdAndClientId(UUID orderId, UUID clientId);
 
     Optional<LoyaltyTransaction> findFirstByOrderIdAndClientIdOrderByCreatedAtDesc(UUID orderId, UUID clientId);
+
+    List<LoyaltyTransaction> findByCustomerIdAndClientIdOrderByCreatedAtAsc(UUID customerId, UUID clientId);
+
+    List<LoyaltyTransaction> findByCustomerIdAndClientIdAndOrgIdOrderByCreatedAtAsc(UUID customerId, UUID clientId, UUID orgId);
 }

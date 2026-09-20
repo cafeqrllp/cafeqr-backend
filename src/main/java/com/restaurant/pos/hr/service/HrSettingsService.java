@@ -31,16 +31,28 @@ public class HrSettingsService {
     public HrSettingsDto getSettings() {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
+        return getSettingsForClientAndOrg(clientId, orgId);
+    }
 
-        return hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId)
+    @Transactional(readOnly = true)
+    public HrSettingsDto getSettingsForClientAndOrg(UUID clientId, UUID orgId) {
+        if (clientId == null) {
+            return getDefaultDto();
+        }
+        return hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId).stream()
+                .findFirst()
                 .map(this::mapToDto)
-                .orElseGet(() -> HrSettingsDto.builder()
-                        .standardHoursPerDay(DEFAULT_STANDARD_HOURS)
-                        .overtimeMultiplier(DEFAULT_OVERTIME_MULTIPLIER)
-                        .weeklyOvertimeThreshold(DEFAULT_WEEKLY_THRESHOLD)
-                        .overtimeMode(DEFAULT_OVERTIME_MODE)
-                        .shiftDayBoundaryHour(DEFAULT_SHIFT_DAY_BOUNDARY_HOUR)
-                        .build());
+                .orElseGet(this::getDefaultDto);
+    }
+
+    private HrSettingsDto getDefaultDto() {
+        return HrSettingsDto.builder()
+                .standardHoursPerDay(DEFAULT_STANDARD_HOURS)
+                .overtimeMultiplier(DEFAULT_OVERTIME_MULTIPLIER)
+                .weeklyOvertimeThreshold(DEFAULT_WEEKLY_THRESHOLD)
+                .overtimeMode(DEFAULT_OVERTIME_MODE)
+                .shiftDayBoundaryHour(DEFAULT_SHIFT_DAY_BOUNDARY_HOUR)
+                .build();
     }
 
     @Transactional(readOnly = true)
@@ -48,7 +60,8 @@ public class HrSettingsService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
 
-        return hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId)
+        return hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId).stream()
+                .findFirst()
                 .orElseGet(() -> HrSettings.builder()
                         .standardHoursPerDay(DEFAULT_STANDARD_HOURS)
                         .overtimeMultiplier(DEFAULT_OVERTIME_MULTIPLIER)
@@ -63,7 +76,8 @@ public class HrSettingsService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
 
-        HrSettings settings = hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId)
+        HrSettings settings = hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId).stream()
+                .findFirst()
                 .orElseGet(() -> {
                     HrSettings newSettings = new HrSettings();
                     newSettings.setClientId(clientId);
@@ -105,7 +119,7 @@ public class HrSettingsService {
 
         // Recalculate overtime_hours for all tenant attendance records using updated threshold
         if (attendanceRepository != null) {
-            List<Attendance> tenantAttendances = attendanceRepository.findByClientIdAndOrgId(clientId, orgId);
+            List<Attendance> tenantAttendances = attendanceRepository.findByClientIdAndOrgId(clientId, null);
             BigDecimal newThreshold = saved.getStandardHoursPerDay() != null ? saved.getStandardHoursPerDay() : DEFAULT_STANDARD_HOURS;
             for (Attendance att : tenantAttendances) {
                 if ("ABSENT".equalsIgnoreCase(att.getStatus())) {

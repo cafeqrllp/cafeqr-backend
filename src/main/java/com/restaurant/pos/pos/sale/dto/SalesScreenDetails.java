@@ -39,6 +39,12 @@ public class SalesScreenDetails {
     @Builder.Default
     private List<ProductBean> products = Collections.emptyList();
 
+    /** Keyset cursor for next page of products. */
+    private String nextCursor;
+
+    /** Whether more products exist beyond initial 50. */
+    private Boolean hasMore;
+
     /** Active tables (populated only if tableEnabled is true). */
     @Builder.Default
     private List<TableBean> tables = Collections.emptyList();

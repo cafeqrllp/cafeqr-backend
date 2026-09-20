@@ -251,7 +251,11 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
             p.is_packaged_good  AS isPackagedGood,
             p.is_ingredient     AS isIngredient,
             p.is_variable_price AS isVariablePrice,
-            p.is_variant        AS isVariant
+            p.is_variant        AS isVariant,
+            (EXISTS (SELECT 1 FROM product_variant_mappings pvm WHERE pvm.product_id = p.id)) AS hasVariants,
+            (CAST((SELECT COUNT(*) FROM product_variant_mappings pvm WHERE pvm.product_id = p.id) AS integer)) AS variantCount,
+            (EXISTS (SELECT 1 FROM product_upsells pu WHERE pu.parent_product_id = p.id AND pu.is_active = true)) AS hasUpsells,
+            (CAST((SELECT COUNT(*) FROM product_upsells pu WHERE pu.parent_product_id = p.id AND pu.is_active = true) AS integer)) AS upsellCount
         FROM products p
         LEFT JOIN categories c ON c.id = p.category_id
         WHERE (p.client_id = :clientId OR p.client_id IS NULL)

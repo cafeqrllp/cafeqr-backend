@@ -9,6 +9,7 @@ import com.restaurant.pos.loyalty.mapper.LoyaltyDtoMapper;
 import com.restaurant.pos.loyalty.repository.CustomerLoyaltyRepository;
 import com.restaurant.pos.loyalty.repository.LoyaltyProgramRepository;
 import com.restaurant.pos.loyalty.repository.LoyaltyTransactionRepository;
+import com.restaurant.pos.purchasing.repository.CustomerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,6 +33,7 @@ public class LoyaltyCommandService {
     private final LoyaltyProgramRepository programRepository;
     private final CustomerLoyaltyRepository accountRepository;
     private final LoyaltyTransactionRepository transactionRepository;
+    private final CustomerRepository customerRepository;
     private final SystemConfigurationService configService;
     private final LoyaltyDtoMapper mapper;
 
@@ -184,6 +186,7 @@ public class LoyaltyCommandService {
         account.setProgramId(program.getId());
         account.creditPoints(points);
         accountRepository.save(account);
+        syncCustomerEntityPoints(customerId, account.getCurrentPoints());
 
         LoyaltyTransaction txn = LoyaltyTransaction.builder()
                 .customerLoyaltyId(account.getId())
@@ -252,6 +255,7 @@ public class LoyaltyCommandService {
         account.setProgramId(program.getId());
         account.debitPoints(pointsToUse);
         accountRepository.save(account);
+        syncCustomerEntityPoints(customerId, account.getCurrentPoints());
 
         transactionRepository.save(LoyaltyTransaction.builder()
                 .customerLoyaltyId(account.getId())
@@ -289,12 +293,19 @@ public class LoyaltyCommandService {
                     .orElseThrow(() -> new BusinessException("Loyalty account not found for reversal."));
 
             int reversalPoints = -original.getPoints();
-            if (reversalPoints > 0) {
-                account.creditPoints(reversalPoints);
+            if (original.getTransactionType() == LoyaltyTransactionType.EARN) {
+                account.reverseEarnedPoints(original.getPoints());
+            } else if (original.getTransactionType() == LoyaltyTransactionType.REDEEM) {
+                account.reverseRedeemedPoints(Math.abs(original.getPoints()));
             } else {
-                account.debitPoints(Math.abs(reversalPoints));
+                if (reversalPoints > 0) {
+                    account.creditPoints(reversalPoints);
+                } else {
+                    account.debitPoints(Math.abs(reversalPoints));
+                }
             }
             accountRepository.save(account);
+            syncCustomerEntityPoints(original.getCustomerId(), account.getCurrentPoints());
 
             transactionRepository.save(LoyaltyTransaction.builder()
                     .customerLoyaltyId(account.getId())
@@ -311,6 +322,18 @@ public class LoyaltyCommandService {
                     .build());
 
             log.info("Loyalty REVERSAL: original={} order={} points={}", original.getId(), orderId, reversalPoints);
+        }
+    }
+
+    private void syncCustomerEntityPoints(UUID customerId, int points) {
+        if (customerId == null || customerRepository == null) return;
+        try {
+            customerRepository.findById(customerId).ifPresent(c -> {
+                c.setLoyaltyPoints(points);
+                customerRepository.save(c);
+            });
+        } catch (Exception ex) {
+            log.warn("Failed to sync loyalty points to Customer entity for customerId={}", customerId, ex);
         }
     }
 

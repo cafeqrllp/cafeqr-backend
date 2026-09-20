@@ -69,7 +69,7 @@ public class LoyaltyQueryService {
                 .orElseThrow(() -> new BusinessException("Loyalty programme not found: " + id));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public CustomerLoyaltyDto getCustomerLoyalty(UUID customerId) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
@@ -114,11 +114,68 @@ public class LoyaltyQueryService {
             accountRepository.save(account);
         }
 
+        reconcileAccountFromLedger(account, customerId, clientId);
+
         CustomerLoyaltyDto dto = mapper.toCustomerLoyaltyDto(account, prog);
-        if (customer != null && customer.getLoyaltyPoints() != null && customer.getLoyaltyPoints() > dto.getCurrentPoints()) {
-            dto.setCurrentPoints(customer.getLoyaltyPoints());
+        if (customer != null && !Objects.equals(customer.getLoyaltyPoints(), account.getCurrentPoints())) {
+            customer.setLoyaltyPoints(account.getCurrentPoints());
+            customerRepository.save(customer);
         }
         return dto;
+    }
+
+    private void reconcileAccountFromLedger(CustomerLoyalty account, UUID customerId, UUID clientId) {
+        if (account == null || customerId == null) return;
+        List<LoyaltyTransaction> txns = (account.getOrgId() != null)
+                ? transactionRepository.findByCustomerIdAndClientIdAndOrgIdOrderByCreatedAtAsc(customerId, clientId, account.getOrgId())
+                : transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
+
+        if (txns.isEmpty() && account.getOrgId() != null) {
+            txns = transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
+        }
+
+        if (txns.isEmpty()) return;
+
+        int calculatedEarned = 0;
+        int calculatedRedeemed = 0;
+
+        for (LoyaltyTransaction t : txns) {
+            if (t.getTransactionType() == LoyaltyTransactionType.EARN) {
+                calculatedEarned += t.getPoints();
+            } else if (t.getTransactionType() == LoyaltyTransactionType.REDEEM) {
+                calculatedRedeemed += Math.abs(t.getPoints());
+            } else if (t.getTransactionType() == LoyaltyTransactionType.REVERSAL) {
+                if (t.getPoints() < 0) {
+                    // Reversal of EARN: deduct from lifetime earned
+                    calculatedEarned = Math.max(0, calculatedEarned - Math.abs(t.getPoints()));
+                } else {
+                    // Reversal of REDEEM: deduct from lifetime redeemed
+                    calculatedRedeemed = Math.max(0, calculatedRedeemed - t.getPoints());
+                }
+            }
+        }
+
+        int calculatedBalance = Math.max(0, calculatedEarned - calculatedRedeemed);
+
+        boolean changed = false;
+        if (account.getCurrentPoints() != calculatedBalance) {
+            account.setCurrentPoints(calculatedBalance);
+            changed = true;
+        }
+        if (account.getLifetimeEarned() != calculatedEarned) {
+            account.setLifetimeEarned(calculatedEarned);
+            changed = true;
+        }
+        if (account.getLifetimeRedeemed() != calculatedRedeemed) {
+            account.setLifetimeRedeemed(calculatedRedeemed);
+            changed = true;
+        }
+
+        if (changed) {
+            accountRepository.save(account);
+            log.info("Reconciled CustomerLoyalty for customerId={}: balance={}, earned={}, redeemed={}",
+                    customerId, calculatedBalance, calculatedEarned, calculatedRedeemed);
+        }
     }
 
     @Transactional(readOnly = true)

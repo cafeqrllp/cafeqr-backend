@@ -36,8 +36,16 @@ public class PosProductSummaryDto implements PosProductSummaryView {
     private Boolean isIngredient;
     private Boolean isVariablePrice;
     private Boolean isVariant;
+    private Boolean hasVariants;
+    private Integer variantCount;
+    private Boolean hasUpsells;
+    private Integer upsellCount;
 
     public static PosProductSummaryDto from(PosProductSummaryView v) {
+        return from(v, true);
+    }
+
+    public static PosProductSummaryDto from(PosProductSummaryView v, boolean includeImages) {
         if (v == null) return null;
         return PosProductSummaryDto.builder()
                 .id(v.getId())
@@ -47,7 +55,7 @@ public class PosProductSummaryDto implements PosProductSummaryView {
                 .costPrice(v.getCostPrice())
                 .mrp(v.getMrp())
                 .isAvailable(v.getIsAvailable())
-                .imageUrl(v.getImageUrl())
+                .imageUrl(includeImages ? v.getImageUrl() : null)
                 .categoryId(v.getCategoryId())
                 .categoryName(v.getCategoryName())
                 .productCode(v.getProductCode())
@@ -60,6 +68,10 @@ public class PosProductSummaryDto implements PosProductSummaryView {
                 .isIngredient(v.getIsIngredient())
                 .isVariablePrice(v.getIsVariablePrice())
                 .isVariant(v.getIsVariant())
+                .hasVariants(v.getHasVariants())
+                .variantCount(v.getVariantCount())
+                .hasUpsells(v.getHasUpsells())
+                .upsellCount(v.getUpsellCount())
                 .build();
     }
 }

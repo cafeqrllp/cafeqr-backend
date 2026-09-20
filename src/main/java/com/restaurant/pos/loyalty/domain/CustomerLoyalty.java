@@ -90,4 +90,18 @@ public class CustomerLoyalty {
         this.lifetimeRedeemed += points;
         this.updatedAt = Instant.now();
     }
+
+    public void reverseEarnedPoints(int points) {
+        int abs = Math.abs(points);
+        this.currentPoints = Math.max(0, this.currentPoints - abs);
+        this.lifetimeEarned = Math.max(0, this.lifetimeEarned - abs);
+        this.updatedAt = Instant.now();
+    }
+
+    public void reverseRedeemedPoints(int points) {
+        int abs = Math.abs(points);
+        this.currentPoints += abs;
+        this.lifetimeRedeemed = Math.max(0, this.lifetimeRedeemed - abs);
+        this.updatedAt = Instant.now();
+    }
 }

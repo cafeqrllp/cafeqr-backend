@@ -812,4 +812,137 @@ class OrderServiceTest {
 
         private record CriteriaProbe(Root<Order> root, CriteriaQuery query, CriteriaBuilder cb) {
         }
+
+        @Test
+        void settleOrderAttachesCustomerFromSettleRequestWhenNoCustomerExists() {
+                UUID orderId = UUID.randomUUID();
+                UUID customerId = UUID.randomUUID();
+
+                Order order = Order.builder()
+                                .id(orderId)
+                                .orderNo("SO-KITCHEN-1")
+                                .orderType(OrderType.SALE)
+                                .orderStatus("BILLED")
+                                .paymentStatus("PENDING")
+                                .grandTotal(new BigDecimal("200.00"))
+                                .totalTaxAmount(BigDecimal.ZERO)
+                                .build();
+                order.setClientId(clientId);
+                order.setOrgId(orgId);
+                // No customer attached (simulating kitchen order)
+
+                Customer testCustomer = Customer.builder()
+                                .id(customerId)
+                                .name("Test Customer")
+                                .phone("9876543210")
+                                .customerCategory("REGULAR")
+                                .orderLinks(new java.util.ArrayList<>())
+                                .build();
+                testCustomer.setClientId(clientId);
+
+                Invoice invoice = Invoice.builder()
+                                .id(UUID.randomUUID())
+                                .orderId(orderId)
+                                .invoiceNo("INV-K1")
+                                .status("UNPAID")
+                                .docStatus("COMPLETED")
+                                .isPaid(false)
+                                .totalAmount(new BigDecimal("200.00"))
+                                .amountDue(new BigDecimal("200.00"))
+                                .build();
+                invoice.setClientId(clientId);
+                invoice.setOrgId(orgId);
+
+                when(orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId))
+                                .thenReturn(Optional.of(order));
+                when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(orderRepository.saveAndFlush(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(invoiceRepository.findByOrderId(orderId)).thenReturn(List.of(invoice));
+                when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(sequenceService.generateNextSequence(DocumentType.INBOUND_PAYMENT)).thenReturn("PAY-K1");
+                when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(customerRepository.findByClientIdAndOrderLink(eq(clientId), any(), any())).thenReturn(List.of());
+                when(customerRepository.findByIdAndClientId(eq(customerId), eq(clientId)))
+                                .thenReturn(Optional.of(testCustomer));
+                when(customerRepository.save(any(Customer.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+                OrderSettleRequest request = new OrderSettleRequest();
+                request.setPaymentMethod("CASH");
+                request.setAmountPaid(new BigDecimal("200.00"));
+                request.setCustomerId(customerId);
+                request.setCustomerName("Test Customer");
+                request.setCustomerPhone("9876543210");
+
+                Order settled = orderService.settleOrder(orderId, request);
+
+                assertThat(settled.getCustomerId()).isEqualTo(customerId);
+                assertThat(settled.getCustomerName()).isEqualTo("Test Customer");
+                assertThat(settled.getOrderStatus()).isEqualTo("COMPLETED");
+                assertThat(settled.getPaymentStatus()).isEqualTo("PAID");
+        }
+
+        @Test
+        void settleOrderCreatesAndAttachesNewCustomerWhenCustomerDoesNotExistYet() {
+                UUID orderId = UUID.randomUUID();
+                UUID generatedCustomerId = UUID.randomUUID();
+
+                Order order = Order.builder()
+                                .id(orderId)
+                                .orderNo("SO-KITCHEN-NEWCUST")
+                                .orderType(OrderType.SALE)
+                                .orderStatus("BILLED")
+                                .paymentStatus("PENDING")
+                                .grandTotal(new BigDecimal("150.00"))
+                                .totalTaxAmount(BigDecimal.ZERO)
+                                .build();
+                order.setClientId(clientId);
+                order.setOrgId(orgId);
+
+                Invoice invoice = Invoice.builder()
+                                .id(UUID.randomUUID())
+                                .orderId(orderId)
+                                .invoiceNo("INV-K2")
+                                .status("UNPAID")
+                                .docStatus("COMPLETED")
+                                .isPaid(false)
+                                .totalAmount(new BigDecimal("150.00"))
+                                .amountDue(new BigDecimal("150.00"))
+                                .build();
+                invoice.setClientId(clientId);
+                invoice.setOrgId(orgId);
+
+                when(orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId))
+                                .thenReturn(Optional.of(order));
+                when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(orderRepository.saveAndFlush(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(invoiceRepository.findByOrderId(orderId)).thenReturn(List.of(invoice));
+                when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(sequenceService.generateNextSequence(DocumentType.INBOUND_PAYMENT)).thenReturn("PAY-K2");
+                when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+                when(customerRepository.findByClientIdAndOrderLink(eq(clientId), any(), any())).thenReturn(List.of());
+                when(customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(eq("9111222333"), eq(clientId)))
+                                .thenReturn(Optional.empty());
+                when(customerRepository.save(any(Customer.class))).thenAnswer(invocation -> {
+                        Customer c = invocation.getArgument(0);
+                        if (c.getId() == null) {
+                                c.setId(generatedCustomerId);
+                        }
+                        return c;
+                });
+
+                OrderSettleRequest request = new OrderSettleRequest();
+                request.setPaymentMethod("CASH");
+                request.setAmountPaid(new BigDecimal("150.00"));
+                request.setCustomerId(null); // No customerId provided (new customer entered)
+                request.setCustomerName("Brand New Customer");
+                request.setCustomerPhone("9111222333");
+
+                Order settled = orderService.settleOrder(orderId, request);
+
+                assertThat(settled.getCustomerId()).isEqualTo(generatedCustomerId);
+                assertThat(settled.getCustomerName()).isEqualTo("Brand New Customer");
+                assertThat(settled.getCustomerPhone()).isEqualTo("9111222333");
+                assertThat(settled.getOrderStatus()).isEqualTo("COMPLETED");
+                assertThat(settled.getPaymentStatus()).isEqualTo("PAID");
+        }
 }
