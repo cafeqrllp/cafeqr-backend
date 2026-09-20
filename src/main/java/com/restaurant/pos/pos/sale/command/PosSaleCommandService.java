@@ -107,8 +107,11 @@ public class PosSaleCommandService {
         boolean settled = isActuallySettled(order);
 
         // 1. Asynchronous print event (if print not explicitly skipped)
-        boolean skipPrint = request.getSkipAutoPrintKinds() != null
-                && request.getSkipAutoPrintKinds().contains("BILL");
+        boolean skipPrint = request.getSkipAutoPrintKinds() != null && (
+                settled
+                        ? request.getSkipAutoPrintKinds().stream().anyMatch(k -> "BILL".equalsIgnoreCase(k) || "SETTLE".equalsIgnoreCase(k))
+                        : request.getSkipAutoPrintKinds().stream().anyMatch(k -> "KOT".equalsIgnoreCase(k))
+        );
         if (!skipPrint) {
             String printEventType = settled ? "ORDER_SETTLED_PRINT" : "ORDER_CONFIRMED";
             outboxService.enqueue(
@@ -139,8 +142,15 @@ public class PosSaleCommandService {
                 )
         );
 
-        // 3. Asynchronous loyalty earn/redeem if order is actually settled and customer is attached
-        if (settled && order.getCustomerId() != null) {
+        // 3. Asynchronous loyalty earn/redeem if order is actually settled, customer is attached,
+        //    and order is NOT a credit sale (credit orders must not earn loyalty points).
+        boolean isCredit = Boolean.TRUE.equals(order.getIsCredit()) || order.getCreditCustomerId() != null;
+        UUID targetCustomerId = order.getCustomerId();
+        if (targetCustomerId == null && order.getCustomers() != null && !order.getCustomers().isEmpty()) {
+            targetCustomerId = order.getCustomers().get(0).getId();
+        }
+
+        if (settled && !isCredit && targetCustomerId != null) {
             BigDecimal eligible = orderService.computeLoyaltyEligibleAmount(order);
             Integer redeemPoints = order.getRedeemPoints() != null ? order.getRedeemPoints() : 0;
             outboxService.enqueue(
@@ -151,11 +161,16 @@ public class PosSaleCommandService {
                     order.getOrgId(),
                     Map.of(
                             "orderId", order.getId().toString(),
-                            "customerId", order.getCustomerId().toString(),
+                            "customerId", targetCustomerId.toString(),
                             "redeemPoints", redeemPoints,
                             "loyaltyEligibleAmount", eligible != null ? eligible.toPlainString() : "0"
                     )
             );
+            log.info("Enqueued ORDER_SETTLED loyalty outbox event for orderId={} customerId={} eligible={}",
+                    order.getId(), targetCustomerId, eligible);
+        } else {
+            log.info("Skipped loyalty outbox event for orderId={} | settled={} | isCredit={} | customerId={}",
+                    order.getId(), settled, isCredit, targetCustomerId);
         }
 
         log.info("POS Sale outbox events enqueued successfully for order {} | settled={}",

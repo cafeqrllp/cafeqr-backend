@@ -114,6 +114,7 @@ class AttendanceServiceTest {
                 .overtimeMultiplier(new BigDecimal("1.50"))
                 .build();
         when(hrSettingsService.getSettings()).thenReturn(settingsDto);
+        when(hrSettingsService.getSettingsForClientAndOrg(any(), any())).thenReturn(settingsDto);
 
         com.restaurant.pos.hr.dto.AttendanceDto dto = com.restaurant.pos.hr.dto.AttendanceDto.builder()
                 .id(attId)
@@ -172,6 +173,7 @@ class AttendanceServiceTest {
                 .overtimeMultiplier(new BigDecimal("1.50"))
                 .build();
         when(hrSettingsService.getSettings()).thenReturn(settingsDto);
+        when(hrSettingsService.getSettingsForClientAndOrg(any(), any())).thenReturn(settingsDto);
 
         com.restaurant.pos.hr.dto.AttendanceDto dto = com.restaurant.pos.hr.dto.AttendanceDto.builder()
                 .id(attId)
@@ -205,8 +207,8 @@ class AttendanceServiceTest {
         pastAtt2.setTotalHoursWorked(new BigDecimal("12.00"));
         pastAtt2.setOvertimeHours(new BigDecimal("4.00")); // Old calculation based on 8 hr threshold
 
-        when(attendanceRepository.findByClientIdAndOrgId(clientId, orgId)).thenReturn(List.of(pastAtt1, pastAtt2));
-        when(hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId)).thenReturn(java.util.Optional.empty());
+        when(attendanceRepository.findByClientIdAndOrgId(clientId, null)).thenReturn(List.of(pastAtt1, pastAtt2));
+        when(hrSettingsRepository.findByClientIdAndOrgId(clientId, orgId)).thenReturn(List.of());
         when(hrSettingsRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         HrSettingsDto newPolicy = HrSettingsDto.builder()
@@ -245,5 +247,58 @@ class AttendanceServiceTest {
         assertThatThrownBy(() -> attendanceService.saveManualAttendance(dto))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Clock Out time must be later than Clock In time.");
+    }
+
+    @Test
+    void saveManualAttendance_ValidOvernightShift_SavesWithNextDayClockOutAndCalculatesHours() {
+        UUID employeeId = UUID.randomUUID();
+        UUID attId = UUID.randomUUID();
+
+        Employee emp = new Employee();
+        emp.setId(employeeId);
+        emp.setFirstName("Boo");
+        emp.setLastName("E");
+        emp.setActive(true);
+
+        Attendance att = new Attendance();
+        att.setId(attId);
+        att.setEmployee(emp);
+        att.setAttendanceDate(LocalDate.of(2026, 9, 11));
+        att.setClientId(clientId);
+        att.setOrgId(orgId);
+
+        PunchSegment seg = new PunchSegment();
+        seg.setId(UUID.randomUUID());
+        seg.setAttendance(att);
+        seg.setSegmentType("WORK");
+        seg.setClockInTime(LocalDateTime.of(2026, 9, 11, 16, 30));
+        seg.setClockOutTime(LocalDateTime.of(2026, 9, 12, 2, 30));
+        seg.setHoursWorked(new BigDecimal("10.00"));
+
+        when(employeeRepository.findByIdAndClientIdAndOrgId(employeeId, clientId, orgId))
+                .thenReturn(java.util.Optional.of(emp));
+        when(attendanceRepository.findByIdAndClientIdAndOrgId(attId, clientId, orgId))
+                .thenReturn(java.util.Optional.of(att));
+        when(attendanceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(punchSegmentRepository.findByAttendanceId(attId)).thenReturn(List.of(seg));
+
+        AttendanceDto dto = AttendanceDto.builder()
+                .id(attId)
+                .employeeId(employeeId)
+                .attendanceDate(LocalDate.of(2026, 9, 11))
+                .clockInTime(LocalDateTime.of(2026, 9, 11, 16, 30)) // 04:30 PM
+                .clockOutTime(LocalDateTime.of(2026, 9, 11, 2, 30)) // 02:30 AM (overnight)
+                .status("PRESENT")
+                .punchMethod("FACE_SCAN")
+                .build();
+
+        AttendanceDto result = attendanceService.saveManualAttendance(dto);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getAttendanceDate()).isEqualTo(LocalDate.of(2026, 9, 11));
+        assertThat(result.getClockInTime()).isEqualTo(LocalDateTime.of(2026, 9, 11, 16, 30));
+        assertThat(result.getClockOutTime()).isEqualTo(LocalDateTime.of(2026, 9, 12, 2, 30));
+        assertThat(result.getTotalHoursWorked()).isEqualByComparingTo("10.00");
+        assertThat(result.getOvertimeHours()).isEqualByComparingTo("2.00");
     }
 }

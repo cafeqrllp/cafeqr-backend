@@ -216,17 +216,18 @@ public class PosSaleQueryService {
                     }
                 }), executor);
 
-        CompletableFuture<List<ProductBean>> productsFuture = req.isStandardMode()
+        final boolean menuImagesEnabled = config.isMenuImagesEnabled();
+        CompletableFuture<com.restaurant.pos.pos.sale.dto.PosProductPageResponse> productsFuture = req.isStandardMode()
                 ? CompletableFuture.supplyAsync(
                         withUserContext(callerContext, () -> {
                             long s = System.nanoTime();
                             try {
-                                return getInitialProductBeans(clientId, orgId);
+                                return getInitialProductPage(clientId, orgId, menuImagesEnabled);
                             } finally {
                                 productsTimeMs.set(elapsedMs(s));
                             }
                         }), executor)
-                : CompletableFuture.completedFuture(Collections.emptyList());
+                : CompletableFuture.completedFuture(new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(Collections.emptyList(), null, false));
 
         CompletableFuture<List<TableBean>> tablesFuture = req.isTableEnabled()
                 ? CompletableFuture.supplyAsync(
@@ -245,7 +246,10 @@ public class PosSaleQueryService {
 
         List<ProductCategoryBean> categories = categoriesFuture.get();
         List<PaymentModeBean> paymentModes = paymentModesFuture.get();
-        List<ProductBean> products = productsFuture.get();
+        com.restaurant.pos.pos.sale.dto.PosProductPageResponse productPage = productsFuture.get();
+        List<ProductBean> products = productPage.items().stream()
+                .map(p -> mapProductBean(p, menuImagesEnabled))
+                .toList();
         List<TableBean> tables = tablesFuture.get();
 
         final long totalTimeMs = elapsedMs(t0);
@@ -263,6 +267,8 @@ public class PosSaleQueryService {
                 .configuration(config)
                 .categories(categories)
                 .products(products)
+                .nextCursor(productPage.nextCursor())
+                .hasMore(productPage.hasMore())
                 .tables(tables)
                 .paymentModes(paymentModes)
                 .build();
@@ -278,9 +284,10 @@ public class PosSaleQueryService {
         TenantOrgContext ctx = resolveTenantOrgContext(null);
         int limit = Math.min(Math.max(requestedLimit, 1), 100);
         String normSearch = normalizeSearch(search);
+        boolean includeImages = getConfigurations().isMenuImagesEnabled();
 
         long version = versionService.getVersion(PosCacheVersionService.Namespace.PRODUCTS, ctx.clientId(), ctx.orgId());
-        String cacheKey = PosCacheKeys.productSearch(ctx.clientId(), ctx.orgId(), version, categoryId, normSearch, limit);
+        String cacheKey = PosCacheKeys.productSearch(ctx.clientId(), ctx.orgId(), version, categoryId, normSearch, limit) + (includeImages ? "" : ":noimg");
 
         Optional<List<ProductBean>> cached = redisCacheService.get(cacheKey, new TypeReference<List<ProductBean>>() {
         });
@@ -292,7 +299,7 @@ public class PosSaleQueryService {
         List<PosProductSummaryView> views = projectionRepository.findProductsKeyset(
                 ctx.clientId(), ctx.orgId(), categoryId, normSearch, null, null, limit);
 
-        List<ProductBean> result = views.stream().map(this::mapProductBean).toList();
+        List<ProductBean> result = views.stream().map(p -> mapProductBean(p, includeImages)).toList();
         redisCacheService.put(cacheKey, result, PosCacheKeys.jittered(PosCacheKeys.TTL_PRODUCT_SEARCH));
         return result;
     }
@@ -422,21 +429,40 @@ public class PosSaleQueryService {
         }, (k, v) -> redisCacheService.put(k, v, PosCacheKeys.jittered(PosCacheKeys.TTL_PAYMENT_MODES)));
     }
 
-    private List<ProductBean> getInitialProductBeans(UUID clientId, UUID orgId) {
+    private com.restaurant.pos.pos.sale.dto.PosProductPageResponse getInitialProductPage(UUID clientId, UUID orgId, boolean includeImages) {
         long version = versionService.getVersion(PosCacheVersionService.Namespace.PRODUCTS, clientId, orgId);
-        String cacheKey = PosCacheKeys.initialProducts(clientId, orgId, version);
-        Optional<List<ProductBean>> cached = redisCacheService.get(cacheKey, new TypeReference<List<ProductBean>>() {
-        });
+        String cacheKey = PosCacheKeys.initialProducts(clientId, orgId, version) + (includeImages ? "" : ":noimg");
+        Optional<PosProductPageDto> cached = redisCacheService.get(cacheKey, PosProductPageDto.class);
         if (cached.isPresent()) {
-            return cached.get();
+            PosProductPageDto dto = cached.get();
+            List<PosProductSummaryView> items = dto.getItems() != null
+                    ? new java.util.ArrayList<>(dto.getItems())
+                    : Collections.emptyList();
+            return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(items, dto.getNextCursor(), dto.isHasMore());
         }
 
         return singleFlightLoader.loadAndCache(cacheKey, () -> {
-            // Critical metadata - fail fast
-            List<PosProductSummaryView> list = projectionRepository.findProductsKeyset(
-                    clientId, orgId, null, null, null, null, 50);
-            return list.stream().map(this::mapProductBean).toList();
-        }, (k, v) -> redisCacheService.put(k, v, PosCacheKeys.jittered(PosCacheKeys.TTL_INITIAL_PRODUCTS)));
+            List<PosProductSummaryView> products = projectionRepository.findProductsKeyset(
+                    clientId, orgId, null, null, null, null, 51);
+            boolean hasMore = products.size() > 50;
+            if (hasMore) {
+                products = products.subList(0, 50);
+            }
+            String nextCursor = null;
+            if (hasMore && !products.isEmpty()) {
+                PosProductSummaryView last = products.get(products.size() - 1);
+                nextCursor = com.restaurant.pos.pos.sale.dto.ProductCursor.of(last).encode();
+            }
+            List<PosProductSummaryDto> dtoItems = products.stream()
+                    .map(p -> PosProductSummaryDto.from(p, includeImages))
+                    .toList();
+            return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(new java.util.ArrayList<>(dtoItems), nextCursor, hasMore);
+        }, (k, v) -> {
+            List<PosProductSummaryDto> dtoItems = v.items().stream()
+                    .map(p -> (p instanceof PosProductSummaryDto dto) ? dto : PosProductSummaryDto.from(p, includeImages))
+                    .toList();
+            redisCacheService.put(k, new PosProductPageDto(dtoItems, v.nextCursor(), v.hasMore()), PosCacheKeys.jittered(PosCacheKeys.TTL_INITIAL_PRODUCTS));
+        });
     }
 
     private List<TableBean> getTableBeans(UUID clientId, UUID orgId) {
@@ -473,6 +499,10 @@ public class PosSaleQueryService {
     }
 
     private ProductBean mapProductBean(PosProductSummaryView p) {
+        return mapProductBean(p, true);
+    }
+
+    private ProductBean mapProductBean(PosProductSummaryView p, boolean includeImages) {
         return ProductBean.builder()
                 .id(p.getId())
                 .name(p.getName())
@@ -481,7 +511,7 @@ public class PosSaleQueryService {
                 .costPrice(p.getCostPrice())
                 .mrp(p.getMrp())
                 .isAvailable(p.getIsAvailable())
-                .imageUrl(p.getImageUrl())
+                .imageUrl(includeImages ? p.getImageUrl() : null)
                 .categoryId(p.getCategoryId())
                 .categoryName(p.getCategoryName())
                 .productCode(p.getProductCode())
@@ -492,6 +522,10 @@ public class PosSaleQueryService {
                 .isPackagedGood(p.getIsPackagedGood())
                 .isVariablePrice(p.getIsVariablePrice())
                 .isVariant(p.getIsVariant())
+                .hasVariants(p.getHasVariants())
+                .variantCount(p.getVariantCount())
+                .hasUpsells(p.getHasUpsells())
+                .upsellCount(p.getUpsellCount())
                 .build();
     }
 
@@ -525,6 +559,9 @@ public class PosSaleQueryService {
                 .dineInHideKitchenMode(c.isDineInHideKitchenMode())
                 .sendToKitchenEnabled(c.isSendToKitchenEnabled())
                 .loyaltyEnabled(c.isLoyaltyEnabled())
+                .menuImagesEnabled(c.isMenuImagesEnabled())
+                .creditEnabled(c.isCreditEnabled())
+                .creditAllocationMode(c.getCreditAllocationMode())
                 .currencySymbol(c.getCurrencySymbol())
                 .currencyPosition(c.getCurrencyPosition())
                 .currencyDecimalPlaces(c.getCurrencyDecimalPlaces() != null ? c.getCurrencyDecimalPlaces() : 2)
@@ -589,8 +626,9 @@ public class PosSaleQueryService {
         int limit = Math.min(Math.max(requestedLimit, 1), 100);
         TenantOrgContext ctx = resolveTenantOrgContext(null);
         String normalizedSearch = (search != null && !search.isBlank()) ? search.trim() : null;
+        boolean includeImages = getConfigurations().isMenuImagesEnabled();
 
-        String cacheKey = PosCacheKeys.productPage(ctx.clientId(), ctx.orgId(), categoryId, normalizedSearch, limit, cursor);
+        String cacheKey = PosCacheKeys.productPage(ctx.clientId(), ctx.orgId(), categoryId, normalizedSearch, limit, cursor) + (includeImages ? "" : ":noimg");
 
         Optional<PosProductPageDto> cached = redisCacheService.get(cacheKey, PosProductPageDto.class);
         if (cached.isPresent()) {
@@ -632,7 +670,7 @@ public class PosSaleQueryService {
         }
 
         List<PosProductSummaryDto> dtoItems = products.stream()
-                .map(PosProductSummaryDto::from)
+                .map(p -> PosProductSummaryDto.from(p, includeImages))
                 .toList();
 
         redisCacheService.put(cacheKey,
@@ -640,7 +678,7 @@ public class PosSaleQueryService {
                 PosCacheKeys.jittered(PosCacheKeys.TTL_PRODUCT_PAGE));
 
         return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(
-                java.util.List.copyOf(products),
+                new java.util.ArrayList<>(dtoItems),
                 nextCursor,
                 hasMore);
     }

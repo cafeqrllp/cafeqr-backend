@@ -13,12 +13,15 @@ import java.util.UUID;
 @Repository
 public interface SalaryComponentRepository extends JpaRepository<SalaryComponent, UUID> {
     
-    @Query("SELECT s FROM SalaryComponent s WHERE (s.clientId = :clientId OR s.clientId IS NULL) AND (s.orgId = :orgId OR s.orgId IS NULL)")
+    @Query("SELECT s FROM SalaryComponent s WHERE (s.clientId = :clientId OR s.clientId IS NULL) AND (:orgId IS NULL OR s.orgId = :orgId OR s.orgId IS NULL)")
     List<SalaryComponent> findByClientIdAndOrgIdOrGlobal(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
 
-    @Query("SELECT s FROM SalaryComponent s WHERE s.id = :id AND (s.clientId = :clientId OR s.clientId IS NULL) AND (s.orgId = :orgId OR s.orgId IS NULL)")
+    @Query("SELECT s FROM SalaryComponent s WHERE s.id = :id AND (s.clientId = :clientId OR s.clientId IS NULL) AND (:orgId IS NULL OR s.orgId = :orgId OR s.orgId IS NULL)")
     Optional<SalaryComponent> findByIdAndClientIdAndOrgIdOrGlobal(@Param("id") UUID id, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
     
-    @Query("SELECT s FROM SalaryComponent s WHERE s.isActive = true AND (s.clientId = :clientId OR s.clientId IS NULL) AND (s.orgId = :orgId OR s.orgId IS NULL)")
+    @Query("SELECT s FROM SalaryComponent s WHERE s.isActive = true AND (s.clientId = :clientId OR s.clientId IS NULL) AND (:orgId IS NULL OR s.orgId = :orgId OR s.orgId IS NULL)")
     List<SalaryComponent> findActiveComponents(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    @Query("SELECT s FROM SalaryComponent s WHERE LOWER(TRIM(s.name)) = LOWER(TRIM(:name)) AND (s.clientId = :clientId OR s.clientId IS NULL) AND (:orgId IS NULL OR s.orgId = :orgId OR s.orgId IS NULL)")
+    List<SalaryComponent> findByNameIgnoreCaseAndClientIdAndOrgIdOrGlobal(@Param("name") String name, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
 }

@@ -35,4 +35,8 @@ public class ProductBean {
     private Boolean isPackagedGood;
     private Boolean isVariablePrice;
     private Boolean isVariant;
+    private Boolean hasVariants;
+    private Integer variantCount;
+    private Boolean hasUpsells;
+    private Integer upsellCount;
 }

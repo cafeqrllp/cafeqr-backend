@@ -14,10 +14,13 @@ import com.restaurant.pos.purchasing.repository.CurrencyRepository;
 import com.restaurant.pos.subscription.domain.ModuleName;
 import com.restaurant.pos.subscription.domain.ClientSubscriptionModule;
 import com.restaurant.pos.subscription.repository.ClientSubscriptionModuleRepository;
+import com.restaurant.pos.pos.sale.query.PosCacheInvalidationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +41,10 @@ public class SystemConfigurationService {
     private final OrganizationRepository organizationRepository;
     private final CurrencyRepository currencyRepository;
     private final ClientSubscriptionModuleRepository clientSubscriptionModuleRepository;
+
+    @Autowired(required = false)
+    @Lazy
+    private PosCacheInvalidationService posCacheInvalidationService;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ConfigurationDto getConfiguration() {
@@ -73,6 +80,7 @@ public class SystemConfigurationService {
 
         updateEntityFromDto(config, dto);
         SystemConfiguration saved = repository.save(config);
+        invalidatePosCaches(clientId, orgId);
         log.info("System configuration updated successfully. clientId={}", clientId);
         return mapToDto(saved);
     }
@@ -165,6 +173,7 @@ public class SystemConfigurationService {
 
         updateEntityFromDto(branchConfig, dto);
         SystemConfiguration saved = repository.save(branchConfig);
+        invalidatePosCaches(clientId, orgId);
         log.info("Branch configuration updated. clientId={}, orgId={}", clientId, orgId);
         ConfigurationDto result = mapToDto(saved);
         result.setBranchOverride(true);
@@ -184,8 +193,20 @@ public class SystemConfigurationService {
             throw new BusinessException("Branch ID is required");
         }
         repository.deleteByClientIdAndOrgId(clientId, orgId);
+        invalidatePosCaches(clientId, orgId);
         log.info("Branch configuration override deleted (reverted to client default). clientId={}, orgId={}", clientId,
                 orgId);
+    }
+
+    private void invalidatePosCaches(UUID clientId, UUID orgId) {
+        if (posCacheInvalidationService != null) {
+            try {
+                posCacheInvalidationService.invalidateConfiguration(clientId, orgId);
+                posCacheInvalidationService.invalidateProducts(clientId, orgId);
+            } catch (Exception ex) {
+                log.warn("Failed to invalidate POS caches for clientId={}, orgId={}: {}", clientId, orgId, ex.getMessage());
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

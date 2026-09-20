@@ -54,11 +54,27 @@ public class PrintEventConsumer {
         outboxProcessor.registerHandler("ORDER_SETTLED_PRINT", this::handleOrderSettledPrint);
     }
 
+    private boolean shouldSkipAutoPrint(Order order, PrintJobKind kind) {
+        if (order == null || kind == null || order.getSkipAutoPrintKinds() == null) {
+            return false;
+        }
+        return order.getSkipAutoPrintKinds().stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .anyMatch(value -> kind.name().equalsIgnoreCase(value) || ("BILL".equalsIgnoreCase(kind.name()) && "SETTLE".equalsIgnoreCase(value)));
+    }
+
     private void handleOrderConfirmed(OutboxEvent event) {
         if (isAlreadyProcessed(event)) return;
 
         Order order = loadOrder(event);
         if (order == null) {
+            markProcessed(event);
+            return;
+        }
+
+        if (shouldSkipAutoPrint(order, PrintJobKind.KOT)) {
+            log.info("[PrintConsumer] Skipping outbox KOT print for order {} because requester will print locally", order.getId());
             markProcessed(event);
             return;
         }
@@ -84,6 +100,12 @@ public class PrintEventConsumer {
             return;
         }
 
+        if (shouldSkipAutoPrint(order, PrintJobKind.BILL)) {
+            log.info("[PrintConsumer] Skipping outbox BILL print for order {} because requester will print locally", order.getId());
+            markProcessed(event);
+            return;
+        }
+
         try {
             printJobService.enqueueForOrder(order, PrintJobKind.BILL, "outbox");
             log.info("[PrintConsumer] Enqueued BILL print job for order {}", order.getId());
@@ -101,6 +123,12 @@ public class PrintEventConsumer {
 
         Order order = loadOrder(event);
         if (order == null) {
+            markProcessed(event);
+            return;
+        }
+
+        if (shouldSkipAutoPrint(order, PrintJobKind.BILL)) {
+            log.info("[PrintConsumer] Skipping outbox receipt print for settled order {} because requester will print locally", order.getId());
             markProcessed(event);
             return;
         }

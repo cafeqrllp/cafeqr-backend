@@ -68,6 +68,9 @@ public class CreateOrderRequest {
     @Schema(description = "Fulfillment type (DINE_IN, TAKEAWAY, DELIVERY)", example = "DINE_IN")
     private String fulfillmentType;
 
+    @Schema(description = "Primary customer UUID linked to this order")
+    private UUID customerId;
+
     @Schema(description = "Dynamic list of customer details linked to this order")
     private com.fasterxml.jackson.databind.JsonNode customerIds;
 

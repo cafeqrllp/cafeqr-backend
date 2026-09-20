@@ -50,6 +50,30 @@ public class ProductService {
     private final PricelistRepository pricelistRepository;
     private final SystemConfigurationService systemConfigurationService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.restaurant.pos.pos.sale.query.PosCacheInvalidationService posCacheInvalidationService;
+
+    private void invalidatePosCategories(UUID clientId, UUID orgId) {
+        if (posCacheInvalidationService != null && clientId != null) {
+            try {
+                posCacheInvalidationService.invalidateCategories(clientId, orgId);
+            } catch (Exception ex) {
+                log.warn("Failed to invalidate POS categories cache for clientId={}, orgId={}: {}", clientId, orgId, ex.getMessage());
+            }
+        }
+    }
+
+    private void invalidatePosProducts(UUID clientId, UUID orgId) {
+        if (posCacheInvalidationService != null && clientId != null) {
+            try {
+                posCacheInvalidationService.invalidateProducts(clientId, orgId);
+            } catch (Exception ex) {
+                log.warn("Failed to invalidate POS products cache for clientId={}, orgId={}: {}", clientId, orgId, ex.getMessage());
+            }
+        }
+    }
+
     /**
      * Returns true when the current tenant/branch configuration has menuImagesEnabled=true.
      * Falls back to true on any error so that images are never accidentally hidden.
@@ -86,7 +110,9 @@ public class ProductService {
 
         category.setClientId(clientId);
         category.setOrgId(orgId);
-        return categoryRepository.save(category);
+        Category saved = categoryRepository.save(category);
+        invalidatePosCategories(clientId, orgId);
+        return saved;
     }
 
     @Transactional
@@ -101,7 +127,9 @@ public class ProductService {
         existing.setDescription(category.getDescription());
         existing.setActive(category.isActive());
         existing.setImageUrl(category.getImageUrl());
-        return categoryRepository.save(existing);
+        Category saved = categoryRepository.save(existing);
+        invalidatePosCategories(existing.getClientId(), existing.getOrgId());
+        return saved;
     }
 
     @Transactional
@@ -114,6 +142,7 @@ public class ProductService {
 
         category.setActive(false);
         categoryRepository.save(category);
+        invalidatePosCategories(category.getClientId(), category.getOrgId());
     }
 
     // --- UOM Methods ---
@@ -217,7 +246,9 @@ public class ProductService {
                 opt.setOrgId(group.getOrgId());
             });
         }
-        return mapVariantGroupToDto(variantGroupRepository.save(group));
+        VariantGroup saved = variantGroupRepository.save(group);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return mapVariantGroupToDto(saved);
     }
 
     @Transactional
@@ -248,7 +279,9 @@ public class ProductService {
                 existing.getOptions().add(opt);
             });
         }
-        return mapVariantGroupToDto(variantGroupRepository.save(existing));
+        VariantGroup saved = variantGroupRepository.save(existing);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return mapVariantGroupToDto(saved);
     }
 
     @Transactional
@@ -261,6 +294,7 @@ public class ProductService {
 
         group.setActive(false);
         variantGroupRepository.save(group);
+        invalidatePosProducts(group.getClientId(), group.getOrgId());
     }
 
     @Transactional(readOnly = true)
@@ -290,7 +324,9 @@ public class ProductService {
         option.setGroup(group);
         option.setClientId(TenantContext.getCurrentTenant());
         option.setOrgId(effectiveWriteOrgId(group.getOrgId()));
-        return mapVariantOptionToDto(variantOptionRepository.save(option));
+        VariantOption saved = variantOptionRepository.save(option);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return mapVariantOptionToDto(saved);
     }
 
     @Transactional
@@ -311,7 +347,9 @@ public class ProductService {
         existing.setName(option.getName());
         existing.setAdditionalPrice(option.getAdditionalPrice());
         existing.setActive(option.isActive());
-        return mapVariantOptionToDto(variantOptionRepository.save(existing));
+        VariantOption saved = variantOptionRepository.save(existing);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return mapVariantOptionToDto(saved);
     }
 
     @Transactional
@@ -324,6 +362,7 @@ public class ProductService {
 
         option.setActive(false);
         variantOptionRepository.save(option);
+        invalidatePosProducts(option.getClientId(), option.getOrgId());
     }
 
     // --- Product Methods ---
@@ -669,7 +708,9 @@ public class ProductService {
 
         setProductRelationships(product, clientId, orgId);
 
-        return productRepository.save(product);
+        Product saved = productRepository.save(product);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return saved;
     }
 
     private void setProductRelationships(Product product, UUID clientId, UUID orgId) {
@@ -711,12 +752,40 @@ public class ProductService {
                 upsell.setOrgId(orgId);
             });
         }
+        if (product.getDefaultPricelist() != null) {
+            if (product.getDefaultPricelist().getId() == null) {
+                product.setDefaultPricelist(null);
+            } else {
+                product.setDefaultPricelist(pricelistRepository.findById(product.getDefaultPricelist().getId()).orElse(null));
+            }
+        }
+        if (product.getCategory() != null) {
+            if (product.getCategory().getId() == null) {
+                product.setCategory(null);
+            } else {
+                product.setCategory(categoryRepository.findById(product.getCategory().getId()).orElse(null));
+            }
+        }
+        if (product.getUom() != null) {
+            if (product.getUom().getId() == null) {
+                product.setUom(null);
+            } else {
+                product.setUom(uomRepository.findById(product.getUom().getId()).orElse(null));
+            }
+        }
         if (product.getPricelistProducts() != null) {
+            product.getPricelistProducts().removeIf(pp -> pp == null || (pp.getPricelist() == null && pp.getPricelistId() == null));
             product.getPricelistProducts().forEach(pp -> {
+                if (pp.getPricelist() == null && pp.getPricelistId() != null) {
+                    pp.setPricelist(pricelistRepository.findById(pp.getPricelistId()).orElse(null));
+                } else if (pp.getPricelist() != null && pp.getPricelist().getId() != null) {
+                    pp.setPricelist(pricelistRepository.findById(pp.getPricelist().getId()).orElse(null));
+                }
                 pp.setProduct(product);
                 pp.setClientId(clientId);
                 pp.setOrgId(orgId);
             });
+            product.getPricelistProducts().removeIf(pp -> pp.getPricelist() == null);
         }
         if (product.getRecipeLines() != null) {
             java.util.Set<UUID> addedIngredientIds = new java.util.HashSet<>();
@@ -808,6 +877,7 @@ public class ProductService {
         }
         @SuppressWarnings("null")
         List<Product> savedProducts = productRepository.saveAll(products);
+        invalidatePosProducts(clientId, orgId);
         return savedProducts;
     }
 
@@ -880,7 +950,11 @@ public class ProductService {
 
         existing.setCategory(resolveCategoryReference(product.getCategory(), clientId, orgId));
         existing.setUom(resolveUomReference(product.getUom(), clientId, orgId));
-        existing.setDefaultPricelist(product.getDefaultPricelist());
+        if (product.getDefaultPricelist() != null && product.getDefaultPricelist().getId() != null) {
+            existing.setDefaultPricelist(pricelistRepository.findById(product.getDefaultPricelist().getId()).orElse(null));
+        } else {
+            existing.setDefaultPricelist(null);
+        }
 
         // Update Mappings
 
@@ -956,12 +1030,13 @@ public class ProductService {
                 pp.setProduct(existing);
                 pp.setClientId(clientId);
                 pp.setOrgId(orgId);
-                if (pp.getPricelist() != null && pp.getPricelist().getId() != null) {
-                    Pricelist pl = pricelistRepository.findById(pp.getPricelist().getId())
-                            .orElseThrow(() -> new ResourceNotFoundException("Pricelist not found"));
-                    pp.setPricelist(pl);
+                if (pp.getPricelist() == null && pp.getPricelistId() != null) {
+                    pp.setPricelist(pricelistRepository.findById(pp.getPricelistId()).orElse(null));
+                } else if (pp.getPricelist() != null && pp.getPricelist().getId() != null) {
+                    pp.setPricelist(pricelistRepository.findById(pp.getPricelist().getId()).orElse(null));
                 }
             });
+            product.getPricelistProducts().removeIf(pp -> pp.getPricelist() == null);
             existing.getPricelistProducts().addAll(product.getPricelistProducts());
         }
 
@@ -1008,7 +1083,9 @@ public class ProductService {
 
 
 
-        return productRepository.save(existing);
+        Product saved = productRepository.save(existing);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return saved;
     }
 
     private Category resolveCategoryReference(Category category, UUID clientId, UUID orgId) {
@@ -1110,7 +1187,9 @@ public class ProductService {
 
         existing.setActive(active);
         existing.setAvailable(active);
-        return productRepository.save(existing);
+        Product saved = productRepository.save(existing);
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return saved;
     }
 
     @Transactional
@@ -1124,6 +1203,7 @@ public class ProductService {
         // Soft delete
         existing.setActive(false);
         productRepository.save(existing);
+        invalidatePosProducts(existing.getClientId(), existing.getOrgId());
     }
 
     private void validateOwnership(UUID ownerClientId, UUID ownerOrgId, String entityName) {
