@@ -46,7 +46,10 @@ public class AccountingController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId
     ) {
-        defaultsService.ensureDefaultAccounts(orgId);
+        UUID effectiveOrgId = orgId != null ? orgId : com.restaurant.pos.common.tenant.TenantContext.getCurrentOrg();
+        if (effectiveOrgId != null) {
+            defaultsService.ensureDefaultAccounts(effectiveOrgId);
+        }
         return ResponseEntity.ok(ApiResponse.success(accountingService.getPeriodAccounts(
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),
@@ -127,7 +130,10 @@ public class AccountingController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId
     ) {
-        defaultsService.ensureDefaultAccounts(orgId);
+        UUID effectiveOrgId = orgId != null ? orgId : com.restaurant.pos.common.tenant.TenantContext.getCurrentOrg();
+        if (effectiveOrgId != null) {
+            defaultsService.ensureDefaultAccounts(effectiveOrgId);
+        }
         return ResponseEntity.ok(ApiResponse.success(accountingService.getSummary(
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),
