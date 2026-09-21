@@ -308,7 +308,7 @@ public class OrderController {
         return ResponseEntity.status(status).body(ApiResponse.success(orderDtoMapper.toResponseDto(result.order())));
     }
 
-    @PatchMapping("/{id}")
+    @RequestMapping(value = "/{id}", method = {RequestMethod.PATCH, RequestMethod.PUT})
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF') or hasAuthority('ORDER_WRITE')")
     @Operation(summary = "Update order", description = "Merges changes into the existing order (partial update). Triggers invoice/payment generation on status transitions.")
     @ApiResponses(value = {

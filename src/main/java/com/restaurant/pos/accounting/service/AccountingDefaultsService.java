@@ -65,30 +65,34 @@ public class AccountingDefaultsService {
     @Transactional
     public List<AccountingAccount> ensureDefaultAccounts(UUID orgId) {
         UUID clientId = requireClient();
+        UUID effectiveOrgId = orgId != null ? orgId : TenantContext.getCurrentOrg();
+        if (effectiveOrgId == null) {
+            return Collections.emptyList();
+        }
         Map<String, AccountingAccount> accountsByKey = new LinkedHashMap<>();
 
         for (AccountTemplate template : ACCOUNT_TEMPLATES) {
             AccountingAccount account = accountRepository
-                    .findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, orgId, template.getSystemKey())
-                    .or(() -> accountRepository.findByClientIdAndOrgIdAndCodeIgnoreCase(clientId, orgId, template.getCode())
+                    .findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, effectiveOrgId, template.getSystemKey())
+                    .or(() -> accountRepository.findByClientIdAndOrgIdAndCodeIgnoreCase(clientId, effectiveOrgId, template.getCode())
                             .map(existingAccount -> recoverSystemAccount(existingAccount, template)))
-                    .orElseGet(() -> createSystemAccount(clientId, orgId, template));
+                    .orElseGet(() -> createSystemAccount(clientId, effectiveOrgId, template));
             accountsByKey.put(template.getSystemKey(), account);
         }
 
         for (Map.Entry<String, AccountingAccount> entry : accountsByKey.entrySet()) {
-            upsertAccountMapping(clientId, orgId, entry.getKey(), entry.getValue().getId(), "System default mapping");
+            upsertAccountMapping(clientId, effectiveOrgId, entry.getKey(), entry.getValue().getId(), "System default mapping");
         }
 
-        upsertPaymentMapping(clientId, orgId, "CASH", accountsByKey.get(CASH).getId());
+        upsertPaymentMapping(clientId, effectiveOrgId, "CASH", accountsByKey.get(CASH).getId());
         UUID bankAccountId = accountsByKey.get(BANK_UPI_CLEARING).getId();
         for (String method : PAYMENT_METHODS) {
             if (!"CASH".equals(method)) {
-                upsertPaymentMapping(clientId, orgId, method, bankAccountId);
+                upsertPaymentMapping(clientId, effectiveOrgId, method, bankAccountId);
             }
         }
 
-        ensuredDefaults.put(defaultsKey(clientId, orgId), true);
+        ensuredDefaults.put(defaultsKey(clientId, effectiveOrgId), true);
         return new ArrayList<>(accountsByKey.values());
     }
 
@@ -165,16 +169,20 @@ public class AccountingDefaultsService {
     }
 
     private void ensureDefaultsIfMissing(UUID clientId, UUID orgId, String requiredSystemKey) {
-        String cacheKey = defaultsKey(clientId, orgId);
-        if (Boolean.TRUE.equals(ensuredDefaults.get(cacheKey))
-                && accountRepository.findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, orgId, requiredSystemKey).isPresent()) {
+        UUID effectiveOrgId = orgId != null ? orgId : TenantContext.getCurrentOrg();
+        if (effectiveOrgId == null) {
             return;
         }
-        if (accountRepository.findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, orgId, requiredSystemKey).isPresent()) {
+        String cacheKey = defaultsKey(clientId, effectiveOrgId);
+        if (Boolean.TRUE.equals(ensuredDefaults.get(cacheKey))
+                && accountRepository.findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, effectiveOrgId, requiredSystemKey).isPresent()) {
+            return;
+        }
+        if (accountRepository.findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, effectiveOrgId, requiredSystemKey).isPresent()) {
             ensuredDefaults.put(cacheKey, true);
             return;
         }
-        ensureDefaultAccounts(orgId);
+        ensureDefaultAccounts(effectiveOrgId);
     }
 
     private String defaultsKey(UUID clientId, UUID orgId) {
