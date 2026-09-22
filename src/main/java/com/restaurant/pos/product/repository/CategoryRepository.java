@@ -12,13 +12,13 @@ import java.util.UUID;
 
 @Repository
 public interface CategoryRepository extends JpaRepository<Category, UUID> {
-    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL)")
+    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL) ORDER BY LOWER(c.name) ASC")
     List<Category> findByClientIdAndOrgIdOrGlobal(UUID clientId, UUID orgId);
 
-    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL) AND c.isActive = true")
+    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL) AND c.isActive = true ORDER BY LOWER(c.name) ASC")
     List<Category> findByClientIdAndOrgIdOrGlobalAndIsActiveTrue(UUID clientId, UUID orgId);
 
-    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL) AND c.updatedAt >= :updatedAfter")
+    @Query("SELECT c FROM Category c WHERE (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL) AND c.updatedAt >= :updatedAfter ORDER BY LOWER(c.name) ASC")
     List<Category> findChangedByClientIdAndOrgIdOrGlobal(UUID clientId, UUID orgId, LocalDateTime updatedAfter);
     
     @Query("SELECT c FROM Category c WHERE c.id = :id AND (c.clientId = :clientId OR c.clientId IS NULL) AND (c.orgId = :orgId OR c.orgId IS NULL)")

@@ -67,7 +67,7 @@ public class ExpenseSpecification {
 
             // Payment Method
             if (criteria.getPaymentMethod() != null && !criteria.getPaymentMethod().isBlank()) {
-                predicates.add(cb.equal(root.get("paymentMethod"), criteria.getPaymentMethod()));
+                predicates.add(cb.equal(cb.upper(root.get("paymentMethod")), criteria.getPaymentMethod().trim().toUpperCase()));
             }
 
             // Fuzzy Search (Expense No or Description)
