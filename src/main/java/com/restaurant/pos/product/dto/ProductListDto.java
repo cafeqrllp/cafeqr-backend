@@ -27,6 +27,8 @@ public class ProductListDto {
     private BigDecimal mrp;
     @JsonProperty("isAvailable")
     private boolean isAvailable;
+    @JsonProperty("isDeliveryVisible")
+    private boolean isDeliveryVisible;
     private String imageUrl;
     private UUID categoryId;
     private String categoryName;

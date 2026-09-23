@@ -24,6 +24,9 @@ public class ProductDetailDto {
     @JsonProperty("isAvailable")
     private boolean isAvailable;
 
+    @JsonProperty("isDeliveryVisible")
+    private boolean isDeliveryVisible;
+
     private String imageUrl;
     private String productType;
 
