@@ -346,7 +346,7 @@ public class DeliveryController {
                 .findByClientIdAndOrgIdOrGlobalAndIsActiveTrue(clientId, orgUuid);
 
         List<Map<String, Object>> menu = products.stream()
-                .filter(Product::isAvailable)
+                .filter(p -> p.isAvailable() && p.isDeliveryVisible())
                 .map(p -> {
                     Map<String, Object> item = new LinkedHashMap<>();
                     item.put("id",          p.getId());
