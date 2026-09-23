@@ -489,6 +489,7 @@ public class ProductService {
                     .costPrice(product.getCostPrice())
                     .mrp(product.getMrp())
                     .isAvailable(product.isAvailable())
+                    .isDeliveryVisible(product.isDeliveryVisible())
                     .imageUrl(includeImages ? product.getImageUrl() : null)
                     .categoryId(product.getCategory() != null ? product.getCategory().getId() : null)
                     .categoryName(product.getCategory() != null ? product.getCategory().getName() : null)
@@ -601,6 +602,7 @@ public class ProductService {
                 .description(product.getDescription())
                 .price(product.getPrice())
                 .isAvailable(product.isAvailable())
+                .isDeliveryVisible(product.isDeliveryVisible())
                 .imageUrl(product.getImageUrl())
                 .productType(product.getProductType())
                 .isVariant(product.isVariant())
@@ -924,6 +926,7 @@ public class ProductService {
         existing.setAvailable(product.isAvailable());
         existing.setImageUrl(product.getImageUrl());
         existing.setActive(product.isActive());
+        existing.setDeliveryVisible(product.isDeliveryVisible());
 
         // ERP Fields
         existing.setProductType(product.getProductType());

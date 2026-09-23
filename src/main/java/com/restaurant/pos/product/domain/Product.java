@@ -40,6 +40,11 @@ public class Product extends AuditableEntity {
     @JsonProperty("isAvailable")
     private boolean isAvailable = true;
     
+    @Builder.Default
+    @JsonProperty("isDeliveryVisible")
+    @Column(name = "is_delivery_visible")
+    private boolean isDeliveryVisible = true;
+
     @Column(columnDefinition = "TEXT")
     private String imageUrl;
 
