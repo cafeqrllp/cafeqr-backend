@@ -71,6 +71,10 @@ public class Organization extends AuditableEntity {
     private Double latitude;
     private Double longitude;
     private Double deliveryRadiusKm;
+    @Column(name = "upi_id", length = 100)
+    private String upiId;
+    @Column(name = "upi_payee_name", length = 150)
+    private String upiPayeeName;
 
     @Builder.Default
     @Column(name = "reviews_enabled")

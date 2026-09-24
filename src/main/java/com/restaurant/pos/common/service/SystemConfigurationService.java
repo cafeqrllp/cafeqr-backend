@@ -428,11 +428,21 @@ public class SystemConfigurationService {
         String resolvedAddress = org != null ? org.getAddress() : (client != null ? client.getAddress() : null);
         String resolvedPincode = org != null ? org.getPinCode() : (client != null ? client.getPinCode() : null);
         String resolvedTimezone = org != null ? org.getTimezone() : (client != null ? client.getTimezone() : null);
+        String resolvedUpiId = (org != null && org.getUpiId() != null && !org.getUpiId().isBlank())
+                ? org.getUpiId()
+                : entity.getUpiId();
+        String resolvedUpiPayeeName = (org != null && org.getUpiPayeeName() != null && !org.getUpiPayeeName().isBlank())
+                ? org.getUpiPayeeName()
+                : (entity.getUpiPayeeName() != null ? entity.getUpiPayeeName() : resolvedRestaurantName);
 
         return ConfigurationDto.builder()
                 .onlinePaymentEnabled(entity.isOnlinePaymentEnabled())
                 .razorpayKeyId(entity.getRazorpayKeyId())
                 .razorpayKeySecret(entity.getRazorpayKeySecret())
+                .upiId(resolvedUpiId)
+                .upiPayeeName(resolvedUpiPayeeName)
+                .upiQrOnBillEnabled(entity.isUpiQrOnBillEnabled())
+                .upiQrOnPosEnabled(entity.isUpiQrOnPosEnabled())
                 .menuImagesEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.MENU_IMAGES, entity.isMenuImagesEnabled()))
                 .creditEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.CREDIT_LEDGER, entity.isCreditEnabled()))
                 .creditAllocationMode(normalizeCreditAllocationMode(entity.getCreditAllocationMode()))
@@ -505,6 +515,10 @@ public class SystemConfigurationService {
         if (dto.getRazorpayKeySecret() != null && !dto.getRazorpayKeySecret().isBlank()) {
             entity.setRazorpayKeySecret(dto.getRazorpayKeySecret().trim());
         }
+        if (dto.getUpiId() != null) entity.setUpiId(dto.getUpiId().trim());
+        if (dto.getUpiPayeeName() != null) entity.setUpiPayeeName(dto.getUpiPayeeName().trim());
+        entity.setUpiQrOnBillEnabled(dto.isUpiQrOnBillEnabled());
+        entity.setUpiQrOnPosEnabled(dto.isUpiQrOnPosEnabled());
         entity.setMenuImagesEnabled(dto.isMenuImagesEnabled());
         entity.setCreditEnabled(dto.isCreditEnabled());
         entity.setCreditAllocationMode(normalizeCreditAllocationMode(dto.getCreditAllocationMode()));

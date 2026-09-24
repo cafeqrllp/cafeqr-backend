@@ -108,6 +108,8 @@ public class OrganizationService {
         organization.setLatitude(details.getLatitude());
         organization.setLongitude(details.getLongitude());
         organization.setDeliveryRadiusKm(details.getDeliveryRadiusKm());
+        organization.setUpiId(details.getUpiId());
+        organization.setUpiPayeeName(details.getUpiPayeeName());
         organization.setBranchCode(details.getBranchCode());
         organization.setTimezone(details.getTimezone());
         organization.setPosType(details.getPosType());
