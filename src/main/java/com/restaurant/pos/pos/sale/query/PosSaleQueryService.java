@@ -275,6 +275,51 @@ public class PosSaleQueryService {
     }
 
     /**
+     * Lightweight catalog sync check for POS frontend delta-sync.
+     * Compares client-side cache versions against current server versions
+     * without executing any heavy SQL queries — only Redis/in-memory version lookups.
+     *
+     * @param clientConfigVersion  the configurationVersion the frontend currently holds
+     * @return a compact response indicating whether the catalog is stale or fresh
+     */
+    public CatalogSyncCheckResponse checkCatalogSync(Long clientConfigVersion) {
+        TenantOrgContext ctx = resolveTenantOrgContext(null);
+        UUID clientId = ctx.clientId();
+        UUID orgId = ctx.orgId();
+
+        // Gather current server-side namespace versions (O(1) Redis GET per namespace)
+        long serverConfigVersion = versionService.getVersion(PosCacheVersionService.Namespace.CONFIG, clientId, orgId);
+        long serverProductsVersion = versionService.getVersion(PosCacheVersionService.Namespace.PRODUCTS, clientId, orgId);
+        long serverCategoriesVersion = versionService.getVersion(PosCacheVersionService.Namespace.CATEGORIES, clientId, orgId);
+        long serverPaymentModesVersion = versionService.getVersion(PosCacheVersionService.Namespace.PAYMENT_MODES, clientId, orgId);
+        long serverTablesVersion = versionService.getVersion(PosCacheVersionService.Namespace.TABLES, clientId, orgId);
+
+        // Derive a composite version fingerprint from all namespace versions
+        long serverCompositeVersion = serverConfigVersion
+                + serverProductsVersion * 1000
+                + serverCategoriesVersion * 100_000
+                + serverPaymentModesVersion * 10_000_000
+                + serverTablesVersion * 1_000_000_000L;
+
+        boolean isStale = clientConfigVersion == null || !clientConfigVersion.equals(serverCompositeVersion);
+
+        return new CatalogSyncCheckResponse(
+                isStale,
+                serverCompositeVersion,
+                Instant.now()
+        );
+    }
+
+    /**
+     * Compact response for catalog sync check.
+     */
+    public record CatalogSyncCheckResponse(
+            boolean stale,
+            long serverVersion,
+            Instant serverTimestamp
+    ) {}
+
+    /**
      * Lazy product search / category filter for both Counter search and Standard
      * browsing.
      * Uses Redis cache-aside with graceful DB fallback.
@@ -443,10 +488,10 @@ public class PosSaleQueryService {
 
         return singleFlightLoader.loadAndCache(cacheKey, () -> {
             List<PosProductSummaryView> products = projectionRepository.findProductsKeyset(
-                    clientId, orgId, null, null, null, null, 51);
-            boolean hasMore = products.size() > 50;
+                    clientId, orgId, null, null, null, null, 2501);
+            boolean hasMore = products.size() > 2500;
             if (hasMore) {
-                products = products.subList(0, 50);
+                products = products.subList(0, 2500);
             }
             String nextCursor = null;
             if (hasMore && !products.isEmpty()) {

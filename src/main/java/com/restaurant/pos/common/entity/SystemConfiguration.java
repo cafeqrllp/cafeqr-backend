@@ -36,6 +36,16 @@ public class SystemConfiguration {
     private String razorpayKeyId;
     @Column(name = "razorpay_key_secret", length = 100)
     private String razorpayKeySecret;
+    @Column(name = "upi_id", length = 100)
+    private String upiId;
+    @Column(name = "upi_payee_name", length = 150)
+    private String upiPayeeName;
+    @Builder.Default
+    @Column(name = "upi_qr_on_bill_enabled")
+    private boolean upiQrOnBillEnabled = true;
+    @Builder.Default
+    @Column(name = "upi_qr_on_pos_enabled")
+    private boolean upiQrOnPosEnabled = true;
     private boolean menuImagesEnabled;
     private boolean creditEnabled;
     @Column(name = "credit_allocation_mode", length = 30)

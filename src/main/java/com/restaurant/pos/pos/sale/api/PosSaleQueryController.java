@@ -240,6 +240,32 @@ public class PosSaleQueryController {
         }
     }
 
+    /**
+     * Lightweight catalog sync check.
+     * Compares client-side cached version against current server namespace versions
+     * without any heavy SQL. Returns { stale, serverVersion, serverTimestamp }.
+     * Frontend uses this to decide whether to re-download the full bootstrap.
+     */
+    @GetMapping("/sync-check")
+    @Operation(summary = "POS Catalog Sync Check", description = "Lightweight version comparison to determine if the client's cached catalog is stale.")
+    @ApiResponses(value = {
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Sync check completed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Unauthorized", content = @Content)
+    })
+    public ResponseEntity<ApiResponse<PosSaleQueryService.CatalogSyncCheckResponse>> checkCatalogSync(
+            @Parameter(description = "Client's cached composite version") @RequestParam(required = false) Long version) {
+        final long start = System.nanoTime();
+        try {
+            PosSaleQueryService.CatalogSyncCheckResponse result = queryService.checkCatalogSync(version);
+            log.debug("POS catalog sync check completed in {} ms; clientVersion={}, serverVersion={}, stale={}",
+                    elapsedMs(start), version, result.serverVersion(), result.stale());
+            return ResponseEntity.ok(ApiResponse.success(result));
+        } catch (Exception ex) {
+            log.error("POS catalog sync check failed after {} ms", elapsedMs(start), ex);
+            throw ex;
+        }
+    }
+
     private static long elapsedMs(long startNanos) {
         return (System.nanoTime() - startNanos) / 1_000_000L;
     }

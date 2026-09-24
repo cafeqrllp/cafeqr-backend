@@ -19,6 +19,12 @@ public class ConfigurationDto {
     private boolean onlinePaymentEnabled;
     private String razorpayKeyId;
     private String razorpayKeySecret;
+    private String upiId;
+    private String upiPayeeName;
+    @Builder.Default
+    private boolean upiQrOnBillEnabled = true;
+    @Builder.Default
+    private boolean upiQrOnPosEnabled = true;
     private boolean menuImagesEnabled;
     private boolean creditEnabled;
     @Builder.Default
