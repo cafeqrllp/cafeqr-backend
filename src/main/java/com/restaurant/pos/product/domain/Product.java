@@ -4,6 +4,7 @@ import com.restaurant.pos.common.entity.AuditableEntity;
 import com.restaurant.pos.purchasing.domain.PricelistProduct;
 import jakarta.persistence.*;
 import org.hibernate.annotations.BatchSize;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -22,6 +23,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Table(name = "products")
 public class Product extends AuditableEntity {
 

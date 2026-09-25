@@ -6,7 +6,7 @@ import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.util.SecurityUtils;
-import com.restaurant.pos.product.domain.Category;
+import com.restaurant.pos.product.domain.Category; 
 import com.restaurant.pos.product.domain.Product;
 import com.restaurant.pos.product.domain.ProductRecipe;
 import com.restaurant.pos.product.domain.Uom;
@@ -660,7 +660,7 @@ public class ProductService {
     }
 
     @Transactional
-    @CacheEvict(value = "products_list_v3", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    @CacheEvict(value = { "products_list_v4", "products_list_v3", "products_list_v2" }, key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Product createProduct(Product product) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
@@ -824,7 +824,7 @@ public class ProductService {
     }
 
     @Transactional
-    @CacheEvict(value = "products_list_v3", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    @CacheEvict(value = { "products_list_v4", "products_list_v3", "products_list_v2" }, key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public List<Product> bulkCreateProducts(List<Product> products) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
@@ -884,7 +884,7 @@ public class ProductService {
     }
 
     @Transactional
-    @CacheEvict(value = "products_list_v4", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    @CacheEvict(value = { "products_list_v4", "products_list_v3", "products_list_v2" }, key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Product updateProduct(UUID id, Product product) {
         Product existing = productRepository.findById(java.util.Objects.requireNonNull(id))
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
@@ -1046,42 +1046,72 @@ public class ProductService {
         // Update Recipe Lines
         if (existing.getRecipeLines() == null) {
             existing.setRecipeLines(new java.util.ArrayList<>());
-        } else {
-            existing.getRecipeLines().clear();
         }
-        if (product.getRecipeLines() != null) {
-            java.util.Set<UUID> addedIngredientIds = new java.util.HashSet<>();
-            product.getRecipeLines().forEach(recipe -> {
-                recipe.setId(null);
-                if (existing.getId() != null && recipe.getIngredient() != null
-                        && existing.getId().equals(recipe.getIngredient().getId())) {
+
+        if (product.getRecipeLines() == null || product.getRecipeLines().isEmpty()) {
+            existing.getRecipeLines().clear();
+        } else {
+            java.util.Map<UUID, ProductRecipe> existingByIngredient = new java.util.HashMap<>();
+            for (ProductRecipe er : existing.getRecipeLines()) {
+                if (er.getIngredient() != null && er.getIngredient().getId() != null) {
+                    existingByIngredient.put(er.getIngredient().getId(), er);
+                }
+            }
+
+            java.util.Set<UUID> payloadIngredientIds = new java.util.HashSet<>();
+            java.util.List<ProductRecipe> toAdd = new java.util.ArrayList<>();
+
+            for (ProductRecipe recipe : product.getRecipeLines()) {
+                if (recipe.getIngredient() == null || recipe.getIngredient().getId() == null) {
+                    continue;
+                }
+                UUID ingId = recipe.getIngredient().getId();
+                if (existing.getId() != null && existing.getId().equals(ingId)) {
                     throw new BusinessException("A product cannot be an ingredient of itself");
                 }
-                if (recipe.getIngredient() != null && recipe.getIngredient().getId() != null) {
-                    UUID ingId = recipe.getIngredient().getId();
-                    if (addedIngredientIds.contains(ingId)) {
-                        return; // Prevent duplicate ingredient entries in recipe lines
-                    }
-                    addedIngredientIds.add(ingId);
+                if (payloadIngredientIds.contains(ingId)) {
+                    continue;
+                }
+                payloadIngredientIds.add(ingId);
 
-                    Product ingredientProduct = productRepository.findById(ingId)
-                            .orElseThrow(() -> new ResourceNotFoundException("Ingredient product not found"));
-                    validateOwnership(ingredientProduct.getClientId(), ingredientProduct.getOrgId(),
-                            "Ingredient Product", false);
-                    if (!ingredientProduct.isIngredient()) {
-                        ingredientProduct.setIngredient(true);
-                        productRepository.save(ingredientProduct);
-                    }
+                java.math.BigDecimal qty = (recipe.getQuantity() == null || recipe.getQuantity().compareTo(java.math.BigDecimal.ZERO) <= 0)
+                        ? java.math.BigDecimal.ONE
+                        : recipe.getQuantity();
+
+                Product ingredientProduct = productRepository.findById(ingId)
+                        .orElseThrow(() -> new ResourceNotFoundException("Ingredient product not found"));
+                validateOwnership(ingredientProduct.getClientId(), ingredientProduct.getOrgId(),
+                        "Ingredient Product", false);
+                if (!ingredientProduct.isIngredient()) {
+                    ingredientProduct.setIngredient(true);
+                    productRepository.save(ingredientProduct);
+                }
+
+                ProductRecipe existingLine = existingByIngredient.get(ingId);
+                if (existingLine != null) {
+                    // Update in-place on managed persistent entity so Hibernate updates rather than inserting duplicates
+                    existingLine.setIngredient(ingredientProduct);
+                    existingLine.setQuantity(qty);
+                    existingLine.setActive(recipe.isActive());
+                } else {
+                    // Brand new ingredient line
+                    recipe.setId(null);
                     recipe.setIngredient(ingredientProduct);
+                    recipe.setQuantity(qty);
+                    recipe.setProduct(existing);
+                    recipe.setClientId(clientId);
+                    recipe.setOrgId(orgId);
+                    toAdd.add(recipe);
                 }
-                if (recipe.getQuantity() == null || recipe.getQuantity().compareTo(java.math.BigDecimal.ZERO) <= 0) {
-                    recipe.setQuantity(java.math.BigDecimal.ONE);
-                }
-                recipe.setProduct(existing);
-                recipe.setClientId(clientId);
-                recipe.setOrgId(orgId);
-                existing.getRecipeLines().add(recipe);
-            });
+            }
+
+            // Remove ingredients that were deleted in the UI
+            existing.getRecipeLines().removeIf(er ->
+                er.getIngredient() == null || !payloadIngredientIds.contains(er.getIngredient().getId())
+            );
+
+            // Add new ingredient lines
+            existing.getRecipeLines().addAll(toAdd);
         }
 
 
@@ -1181,7 +1211,7 @@ public class ProductService {
     }
 
     @Transactional
-    @CacheEvict(value = "products_list_v2", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    @CacheEvict(value = { "products_list_v4", "products_list_v3", "products_list_v2" }, key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public Product updateProductStatus(UUID id, boolean active) {
         Product existing = productRepository.findById(java.util.Objects.requireNonNull(id))
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
@@ -1196,7 +1226,7 @@ public class ProductService {
     }
 
     @Transactional
-    @CacheEvict(value = "products_list_v3", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
+    @CacheEvict(value = { "products_list_v4", "products_list_v3", "products_list_v2" }, key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg()")
     public void deleteProduct(UUID id) {
         Product existing = productRepository.findById(java.util.Objects.requireNonNull(id))
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));

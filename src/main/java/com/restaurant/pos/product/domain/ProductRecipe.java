@@ -20,6 +20,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Table(name = "product_recipes", uniqueConstraints = {
         @UniqueConstraint(columnNames = {"product_id", "ingredient_id"})
 })
@@ -35,9 +36,9 @@ public class ProductRecipe extends AuditableEntity {
     @JsonIgnore
     private Product product;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "ingredient_id", nullable = false)
-    @JsonIgnoreProperties({ "category", "uom", "variantMappings", "variantPricings", "upsells" })
+    @JsonIgnoreProperties({ "hibernateLazyInitializer", "handler", "category", "uom", "variantMappings", "variantPricings", "upsells", "recipeLines" })
     private Product ingredient;
 
     @Column(nullable = false, precision = 15, scale = 3)
@@ -55,11 +56,19 @@ public class ProductRecipe extends AuditableEntity {
     
     @JsonProperty("ingredientId")
     public UUID getIngredientId() {
-        return ingredient != null ? ingredient.getId() : null;
+        try {
+            return ingredient != null ? ingredient.getId() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @JsonProperty("ingredientName")
     public String getIngredientName() {
-        return ingredient != null ? ingredient.getName() : null;
+        try {
+            return ingredient != null ? ingredient.getName() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
