@@ -79,16 +79,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -2001,6 +1992,9 @@ public class OrderService {
             diagnosticPhase = "validate_gst_fields";
             validateGstFields(order);
 
+            diagnosticPhase = "validate_non_stock_sales";
+            validateNonStockSalesPolicy(order);
+
             diagnosticPhase = "save_order";
             Order saved = orderRepository.save(order);
 
@@ -2421,6 +2415,11 @@ public class OrderService {
         }
 
         // 1. Create a deep copy of the old order as a VOID record
+        boolean oldWasSettledSale = isSaleOrder(oldOrder)
+                && ("COMPLETED".equalsIgnoreCase(oldOrder.getOrderStatus()) || "PAID".equalsIgnoreCase(oldOrder.getPaymentStatus()));
+        boolean oldWasCompletedPurchase = oldOrder.getOrderType() == OrderType.PURCHASE
+                && "COMPLETED".equalsIgnoreCase(oldOrder.getOrderStatus());
+
         String originalOrderNo = oldOrder.getOrderNo();
         UUID oldTableId = oldOrder.getTableId();
         oldOrder.setOrderNo(
@@ -2435,6 +2434,13 @@ public class OrderService {
         oldOrder.setTableId(null);
         oldOrder.setTableNumber(null);
         orderRepository.saveAndFlush(oldOrder);
+
+        // Reverse stock of old order if it was settled/completed
+        if (oldWasSettledSale) {
+            restoreStockForSale(oldOrder);
+        } else if (oldWasCompletedPurchase) {
+            reverseStockIntakeForPurchase(oldOrder);
+        }
 
         // 2. VOID the linked invoice
         List<UUID> oldInvoiceIdList = new java.util.ArrayList<>();
@@ -2656,15 +2662,7 @@ public class OrderService {
             if (!"DRAFT".equalsIgnoreCase(saved.getOrderStatus()) && !isCredit) {
                 generatePayment(saved, paymentMethod, originalPaymentNo);
             }
-            if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
-                processInventoryForOrder(saved);
-            }
         } else {
-            // SALE: deduct stock when COMPLETED+PAID
-            if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())
-                    && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
-                deductStockForSale(saved);
-            }
             // Sales
             if ("PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
                 String salePaymentMethod = saved.getReference() != null ? saved.getReference() : "CASH";
@@ -3238,6 +3236,11 @@ public class OrderService {
         ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(order.getClientId(),
                 order.getOrgId());
 
+        boolean wasSettledSale = isSaleOrder(order)
+                && ("COMPLETED".equalsIgnoreCase(order.getOrderStatus()) || "PAID".equalsIgnoreCase(order.getPaymentStatus()));
+        boolean wasCompletedPurchase = order.getOrderType() == OrderType.PURCHASE
+                && "COMPLETED".equalsIgnoreCase(order.getOrderStatus());
+
         String reason = request != null ? request.getReason() : null;
         order.setOrderStatus("CANCELLED");
         if (isSaleOrder(order)) {
@@ -3252,12 +3255,18 @@ public class OrderService {
             voidLinkedInvoices(saved, "Order cancelled");
             voidLinkedPayments(saved, "Order cancelled");
             accountingPostingService.reverseSaleCogs(saved, "Order cancelled");
+            if (wasSettledSale) {
+                restoreStockForSale(saved);
+            }
             // ── Publish loyalty reversal event (only if loyalty is enabled) ───
             if (config != null && config.isLoyaltyEnabled()) {
                 eventPublisher.publishEvent(new LoyaltyOrderCancelledEvent(this, saved));
             }
         } else {
             voidUnpaidLinkedInvoices(saved, "Order cancelled");
+            if (wasCompletedPurchase) {
+                reverseStockIntakeForPurchase(saved);
+            }
         }
 
         handleTableStatus(saved);
@@ -3836,121 +3845,368 @@ public class OrderService {
         }
     }
 
-    /**
-     * Deducts ingredient (or product) stock when a SALE order is completed/settled.
-     *
-     * <p>
-     * Logic:
-     * <ol>
-     * <li>Resolve the warehouse: use {@code order.warehouseId} when set; otherwise
-     * fall back to
-     * the org's default warehouse. If neither is available, log a warning and skip.
-     * <li>For each order line that references a product, look up the product's
-     * recipe lines.
-     * <ul>
-     * <li>If recipe lines exist: deduct each ingredient by
-     * {@code quantity_sold × ingredient_qty_per_unit} using transaction type
-     * {@code SALE_DEDUCTION}.
-     * <li>If no recipe: deduct the product itself directly (for raw/tracked items).
-     * </ul>
-     * </ol>
-     *
-     * <p>
-     * All stock updates go through
-     * {@link com.restaurant.pos.inventory.service.InventoryService#updateStock},
-     * which writes both a {@code StockLedger} entry and updates
-     * {@code StockSnapshot}.
-     */
+    private void validateNonStockSalesPolicy(Order order) {
+        if (order.getOrderType() != null && order.getOrderType() != OrderType.SALE) {
+            return;
+        }
+        if (order.getLines() == null || order.getLines().isEmpty()) {
+            return;
+        }
+        UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+        UUID orgId = order.getOrgId();
+        ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(clientId, orgId);
+        if (config == null || !config.isInventoryEnabled()) {
+            return;
+        }
+        String policy = config.getNonStockSalesPolicy() != null
+                ? config.getNonStockSalesPolicy()
+                : "NONE";
+
+        if (!"BLOCK".equalsIgnoreCase(policy)) {
+            return;
+        }
+
+        UUID warehouseId = order.getWarehouseId();
+        if (warehouseId == null && orgId != null) {
+            warehouseId = inventoryService.findDefaultWarehouse(clientId, orgId)
+                    .map(com.restaurant.pos.warehouse.domain.Warehouse::getId)
+                    .orElse(null);
+        }
+        if (warehouseId == null) {
+            return;
+        }
+
+        for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+            if (line.getProductId() == null) continue;
+            BigDecimal reqQty = line.getQuantity() != null ? line.getQuantity() : BigDecimal.ONE;
+            if (reqQty.signum() <= 0) continue;
+
+            Product product = productRepository.findById(line.getProductId()).orElse(null);
+            List<com.restaurant.pos.product.domain.ProductRecipe> recipes =
+                    product != null ? getActiveRecipes(product) : Collections.emptyList();
+
+            if (recipes.isEmpty()) {
+                com.restaurant.pos.inventory.domain.StockSnapshot snapshot = inventoryService.findStockSnapshot(warehouseId, line.getProductId(), line.getVariantId())
+                        .orElse(null);
+                if (snapshot == null && line.getVariantId() != null) {
+                    snapshot = inventoryService.findStockSnapshot(warehouseId, line.getProductId(), null).orElse(null);
+                }
+                BigDecimal available = snapshot != null && snapshot.getCurrentQuantity() != null ? snapshot.getCurrentQuantity() : BigDecimal.ZERO;
+                if (available.compareTo(BigDecimal.ZERO) <= 0 || available.compareTo(reqQty) < 0) {
+                    String prodName = line.getProductName() != null ? line.getProductName() : (product != null ? product.getName() : "Item");
+                    throw new BusinessException(
+                            "Cannot sell '" + prodName + "' - out of stock (Available: " + available + ", Required: " + reqQty + ")."
+                    );
+                }
+            } else {
+                for (com.restaurant.pos.product.domain.ProductRecipe recipe : recipes) {
+                    if (!isValidRecipe(recipe)) continue;
+                    UUID ingId = recipe.getIngredient().getId();
+                    BigDecimal needed = reqQty.multiply(recipe.getQuantity());
+                    com.restaurant.pos.inventory.domain.StockSnapshot snapshot = inventoryService.findStockSnapshot(warehouseId, ingId, null).orElse(null);
+                    BigDecimal available = snapshot != null && snapshot.getCurrentQuantity() != null ? snapshot.getCurrentQuantity() : BigDecimal.ZERO;
+                    if (available.compareTo(BigDecimal.ZERO) <= 0 || available.compareTo(needed) < 0) {
+                        String ingName = recipe.getIngredient().getName() != null ? recipe.getIngredient().getName() : "Ingredient";
+                        String prodName = line.getProductName() != null ? line.getProductName() : (product != null ? product.getName() : "Item");
+                        throw new BusinessException(
+                                "Cannot sell '" + prodName + "' - ingredient '" + ingName + "' is out of stock (Available: " + available + ", Required: " + needed + ")."
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     private void deductStockForSale(Order order) {
         if (order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
 
-        UUID clientId = order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+        UUID clientId = order.getClientId() != null
+                ? order.getClientId()
+                : TenantContext.getCurrentTenant();
         UUID orgId = order.getOrgId();
-
-        // Resolve warehouse: use order's explicit warehouseId, else fall back to org
-        // default
         UUID warehouseId = order.getWarehouseId();
+
         if (warehouseId == null) {
-            java.util.Optional<com.restaurant.pos.warehouse.domain.Warehouse> defaultWh = inventoryService
-                    .findDefaultWarehouse(clientId, orgId);
-            if (defaultWh.isEmpty()) {
-                log.info(
-                        "deductStockForSale: skipping order {} — no warehouseId set and no default warehouse configured for org {}",
-                        order.getId(), orgId);
-                return;
-            }
-            warehouseId = defaultWh.get().getId();
+            warehouseId = inventoryService.findDefaultWarehouse(clientId, orgId)
+                    .map(com.restaurant.pos.warehouse.domain.Warehouse::getId)
+                    .orElse(null);
         }
 
-        final UUID resolvedWarehouseId = warehouseId;
+        if (warehouseId == null) {
+            log.info("Skipping stock deduction for order {} - no warehouse found",
+                    order.getId());
+            return;
+        }
 
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
             if (line.getProductId() == null) {
                 continue;
             }
-            BigDecimal qtySold = line.getQuantity() != null ? line.getQuantity() : BigDecimal.ONE;
-            if (qtySold.compareTo(BigDecimal.ZERO) <= 0) {
+
+            BigDecimal soldQty = line.getQuantity() != null
+                    ? line.getQuantity()
+                    : BigDecimal.ONE;
+
+            if (soldQty.signum() <= 0) {
                 continue;
             }
 
-            // Fetch product to check recipe lines
             Product product = productRepository.findById(line.getProductId()).orElse(null);
+            List<com.restaurant.pos.product.domain.ProductRecipe> recipes =
+                    product != null ? getActiveRecipes(product) : Collections.emptyList();
 
-            boolean hasRecipe = product != null
-                    && product.getRecipeLines() != null
-                    && product.getRecipeLines().stream()
-                            .anyMatch(com.restaurant.pos.product.domain.ProductRecipe::isActive);
+            if (recipes.isEmpty()) {
+                deductStock(warehouseId, line.getProductId(), line.getVariantId(),
+                        soldQty, order, orgId);
+                continue;
+            }
 
-            if (hasRecipe) {
-                // Deduct each ingredient proportionally
-                for (com.restaurant.pos.product.domain.ProductRecipe recipe : product.getRecipeLines()) {
-                    if (!recipe.isActive()) {
-                        continue;
-                    }
-                    if (recipe.getIngredient() == null || recipe.getQuantity() == null
-                            || recipe.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                        continue;
-                    }
-                    BigDecimal ingredientDeduction = qtySold.multiply(recipe.getQuantity()).negate();
-                    try {
-                        inventoryService.updateStock(
-                                resolvedWarehouseId,
-                                recipe.getIngredient().getId(),
-                                null, // ingredients do not have variants
-                                ingredientDeduction,
-                                "SALE_DEDUCTION",
-                                order.getId(),
-                                BigDecimal.ZERO,
-                                orgId);
-                        log.debug("deductStockForSale: deducted {} of ingredient {} for order {}",
-                                ingredientDeduction.abs(), recipe.getIngredient().getId(), order.getId());
-                    } catch (Exception e) {
-                        log.error("deductStockForSale: failed to deduct ingredient {} for order {} — {}",
-                                recipe.getIngredient().getId(), order.getId(), e.getMessage(), e);
-                    }
+            UUID variantId = line.getVariantId();
+
+            List<com.restaurant.pos.product.domain.ProductRecipe> variantRecipes = recipes.stream()
+                    .filter(r -> r.getVariantOption() != null
+                            && variantId != null
+                            && variantId.equals(r.getVariantOption().getId()))
+                    .toList();
+
+            Set<UUID> overriddenIngredients = variantRecipes.stream()
+                    .filter(r -> r.getIngredient() != null)
+                    .map(r -> r.getIngredient().getId())
+                    .collect(Collectors.toSet());
+
+            for (com.restaurant.pos.product.domain.ProductRecipe recipe : recipes) {
+                if (!isValidRecipe(recipe)) {
+                    continue;
                 }
-            } else {
-                // No recipe — deduct product stock directly (for tracked raw/ingredient
-                // products)
-                BigDecimal deduction = qtySold.negate();
-                try {
-                    inventoryService.updateStock(
-                            resolvedWarehouseId,
-                            line.getProductId(),
-                            line.getVariantId(),
-                            deduction,
-                            "SALE_DEDUCTION",
-                            order.getId(),
-                            BigDecimal.ZERO,
-                            orgId);
-                    log.debug("deductStockForSale: deducted {} of product {} for order {}",
-                            qtySold, line.getProductId(), order.getId());
-                } catch (Exception e) {
-                    log.error("deductStockForSale: failed to deduct product {} for order {} — {}",
-                            line.getProductId(), order.getId(), e.getMessage(), e);
+
+                boolean isVariantRecipe = recipe.getVariantOption() != null;
+                boolean isSelectedVariant = isVariantRecipe
+                        && Objects.equals(variantId, recipe.getVariantOption().getId());
+
+                if (isVariantRecipe && !isSelectedVariant) {
+                    continue;
                 }
+
+                UUID ingredientId = recipe.getIngredient().getId();
+
+                if (!isVariantRecipe && overriddenIngredients.contains(ingredientId)) {
+                    continue;
+                }
+
+                deductStock(
+                        warehouseId,
+                        ingredientId,
+                        null,
+                        soldQty.multiply(recipe.getQuantity()),
+                        order,
+                        orgId);
+            }
+        }
+    }
+
+    private List<com.restaurant.pos.product.domain.ProductRecipe> getActiveRecipes(Product product) {
+        return product.getRecipeLines().stream()
+                .filter(com.restaurant.pos.product.domain.ProductRecipe::isActive)
+                .collect(Collectors.toList());
+    }
+
+    private boolean isValidRecipe(com.restaurant.pos.product.domain.ProductRecipe recipe) {
+        return recipe.getIngredient() != null
+                && recipe.getQuantity() != null
+                && recipe.getQuantity().signum() > 0;
+    }
+
+    private void deductStock(
+            UUID warehouseId,
+            UUID stockItemId,
+            UUID variantId,
+            BigDecimal quantity,
+            Order order,
+            UUID orgId) {
+
+        try {
+            inventoryService.updateStock(
+                    warehouseId,
+                    stockItemId,
+                    variantId,
+                    quantity.negate(),
+                    "SALE_DEDUCTION",
+                    order.getId(),
+                    BigDecimal.ZERO,
+                    orgId);
+
+            log.debug("Deducted {} of stock item {} for order {}",
+                    quantity, stockItemId, order.getId());
+
+        } catch (Exception e) {
+            log.error("Failed to deduct stock item {} for order {}",
+                    stockItemId, order.getId(), e);
+        }
+    }
+
+    private void restoreStockForSale(Order order) {
+        if (order.getLines() == null || order.getLines().isEmpty()) {
+            return;
+        }
+
+        UUID clientId = order.getClientId() != null
+                ? order.getClientId()
+                : TenantContext.getCurrentTenant();
+        UUID orgId = order.getOrgId();
+        UUID warehouseId = order.getWarehouseId();
+
+        if (warehouseId == null) {
+            warehouseId = inventoryService.findDefaultWarehouse(clientId, orgId)
+                    .map(com.restaurant.pos.warehouse.domain.Warehouse::getId)
+                    .orElse(null);
+        }
+
+        if (warehouseId == null) {
+            log.info("Skipping stock restoration for order {} - no warehouse found",
+                    order.getId());
+            return;
+        }
+
+        for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+            if (line.getProductId() == null) {
+                continue;
+            }
+
+            BigDecimal returnQty = line.getQuantity() != null
+                    ? line.getQuantity()
+                    : BigDecimal.ONE;
+
+            if (returnQty.signum() <= 0) {
+                continue;
+            }
+
+            Product product = productRepository.findById(line.getProductId()).orElse(null);
+            List<com.restaurant.pos.product.domain.ProductRecipe> recipes =
+                    product != null ? getActiveRecipes(product) : Collections.emptyList();
+
+            if (recipes.isEmpty()) {
+                restoreStock(warehouseId, line.getProductId(), line.getVariantId(),
+                        returnQty, order, orgId);
+                continue;
+            }
+
+            UUID variantId = line.getVariantId();
+
+            List<com.restaurant.pos.product.domain.ProductRecipe> variantRecipes = recipes.stream()
+                    .filter(r -> r.getVariantOption() != null
+                            && variantId != null
+                            && variantId.equals(r.getVariantOption().getId()))
+                    .toList();
+
+            Set<UUID> overriddenIngredients = variantRecipes.stream()
+                    .filter(r -> r.getIngredient() != null)
+                    .map(r -> r.getIngredient().getId())
+                    .collect(Collectors.toSet());
+
+            for (com.restaurant.pos.product.domain.ProductRecipe recipe : recipes) {
+                if (!isValidRecipe(recipe)) {
+                    continue;
+                }
+
+                boolean isVariantRecipe = recipe.getVariantOption() != null;
+                boolean isSelectedVariant = isVariantRecipe
+                        && Objects.equals(variantId, recipe.getVariantOption().getId());
+
+                if (isVariantRecipe && !isSelectedVariant) {
+                    continue;
+                }
+
+                UUID ingredientId = recipe.getIngredient().getId();
+
+                if (!isVariantRecipe && overriddenIngredients.contains(ingredientId)) {
+                    continue;
+                }
+
+                restoreStock(
+                        warehouseId,
+                        ingredientId,
+                        null,
+                        returnQty.multiply(recipe.getQuantity()),
+                        order,
+                        orgId);
+            }
+        }
+    }
+
+    private void restoreStock(
+            UUID warehouseId,
+            UUID stockItemId,
+            UUID variantId,
+            BigDecimal quantity,
+            Order order,
+            UUID orgId) {
+
+        try {
+            inventoryService.updateStock(
+                    warehouseId,
+                    stockItemId,
+                    variantId,
+                    quantity,
+                    "SALE_VOID_RESTORE",
+                    order.getId(),
+                    BigDecimal.ZERO,
+                    orgId);
+
+            log.info("Restored {} of stock item {} for voided order {}",
+                    quantity, stockItemId, order.getId());
+
+        } catch (Exception e) {
+            log.error("Failed to restore stock item {} for order {}",
+                    stockItemId, order.getId(), e);
+        }
+    }
+
+    private void reverseStockIntakeForPurchase(Order order) {
+        if (order.getLines() == null || order.getLines().isEmpty()) {
+            return;
+        }
+
+        UUID clientId = order.getClientId() != null
+                ? order.getClientId()
+                : TenantContext.getCurrentTenant();
+        UUID orgId = order.getOrgId();
+        UUID warehouseId = order.getWarehouseId();
+
+        if (warehouseId == null) {
+            warehouseId = inventoryService.findDefaultWarehouse(clientId, orgId)
+                    .map(com.restaurant.pos.warehouse.domain.Warehouse::getId)
+                    .orElse(null);
+        }
+
+        if (warehouseId == null) {
+            log.warn("Cannot reverse stock intake for PO {} - no warehouse found", order.getOrderNo());
+            return;
+        }
+
+        for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
+            if (line.getProductId() == null) {
+                continue;
+            }
+            BigDecimal qty = line.getQuantity() != null ? line.getQuantity() : BigDecimal.ONE;
+            if (qty.signum() <= 0) {
+                continue;
+            }
+            try {
+                inventoryService.updateStock(
+                        warehouseId,
+                        line.getProductId(),
+                        line.getVariantId(),
+                        qty.negate(),
+                        "PURCHASE_VOID",
+                        order.getId(),
+                        line.getUnitPrice() != null ? line.getUnitPrice() : BigDecimal.ZERO,
+                        orgId);
+                log.info("Reversed purchase stock intake {} for item {} in PO {}", qty, line.getProductId(), order.getOrderNo());
+            } catch (Exception e) {
+                log.error("Failed to reverse purchase stock intake for item {} in PO {}: {}",
+                        line.getProductId(), order.getOrderNo(), e.getMessage(), e);
             }
         }
     }

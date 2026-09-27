@@ -73,6 +73,58 @@ public class PurchaseOrderQueryController {
         return ResponseEntity.ok(ApiResponse.success(drafts));
     }
 
+    @GetMapping("/reports/summary")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get Purchase Report Summary", description = "Retrieves executive financial KPIs and order counts for purchases within date range.")
+    public ResponseEntity<ApiResponse<com.restaurant.pos.purchase.dto.PurchaseReportSummaryDto>> getPurchaseReportSummary(
+            @RequestParam(required = false) java.time.Instant from,
+            @RequestParam(required = false) java.time.Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID vendorId,
+            @RequestParam(required = false) UUID warehouseId) {
+        log.info("Fetching Purchase Report Summary | from={} | to={} | orgId={} | vendorId={}", from, to, orgId, vendorId);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getPurchaseSummary(from, to, orgId, vendorId, warehouseId)));
+    }
+
+    @GetMapping("/reports/item-wise")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get Purchase Item Report", description = "Retrieves item-wise aggregated procurement metrics.")
+    public ResponseEntity<ApiResponse<List<com.restaurant.pos.purchase.dto.PurchaseItemReportDto>>> getPurchaseItemReport(
+            @RequestParam(required = false) java.time.Instant from,
+            @RequestParam(required = false) java.time.Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID vendorId,
+            @RequestParam(required = false) UUID warehouseId) {
+        log.info("Fetching Purchase Item Report | from={} | to={}", from, to);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getPurchaseItemReport(from, to, orgId, vendorId, warehouseId)));
+    }
+
+    @GetMapping("/reports/vendor-wise")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get Purchase Vendor Report", description = "Retrieves vendor spend and ledger breakdown.")
+    public ResponseEntity<ApiResponse<List<com.restaurant.pos.purchase.dto.PurchaseVendorReportDto>>> getPurchaseVendorReport(
+            @RequestParam(required = false) java.time.Instant from,
+            @RequestParam(required = false) java.time.Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID vendorId,
+            @RequestParam(required = false) UUID warehouseId) {
+        log.info("Fetching Purchase Vendor Report | from={} | to={}", from, to);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getPurchaseVendorReport(from, to, orgId, vendorId, warehouseId)));
+    }
+
+    @GetMapping("/reports/payment-breakdown")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get Purchase Payment Breakdown", description = "Retrieves breakdown of purchase outflows by payment method.")
+    public ResponseEntity<ApiResponse<List<com.restaurant.pos.order.dto.report.PaymentBreakdownDto>>> getPurchasePaymentBreakdown(
+            @RequestParam(required = false) java.time.Instant from,
+            @RequestParam(required = false) java.time.Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID vendorId,
+            @RequestParam(required = false) UUID warehouseId) {
+        log.info("Fetching Purchase Payment Breakdown | from={} | to={}", from, to);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getPurchasePaymentBreakdown(from, to, orgId, vendorId, warehouseId)));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     @Operation(summary = "Get Purchase Order by ID", description = "Returns a single Purchase Order with detailed line items.")

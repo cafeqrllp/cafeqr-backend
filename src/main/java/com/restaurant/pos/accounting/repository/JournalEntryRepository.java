@@ -120,28 +120,48 @@ public interface JournalEntryRepository extends JpaRepository<JournalEntry, UUID
             @Param("to") LocalDateTime to,
             @Param("status") JournalStatus status);
 
-    @Query("""
-            SELECT j.sourceType AS sourceType,
-                   j.sourceId AS sourceId
-            FROM JournalEntry j
-            WHERE j.clientId = :clientId
-              AND (:orgId IS NULL OR j.orgId = :orgId)
-              AND (:terminalId IS NULL OR j.terminalId = :terminalId)
-              AND (CAST(:from AS timestamp) IS NULL OR j.entryDate >= :from)
-              AND (CAST(:to AS timestamp) IS NULL OR j.entryDate <= :to)
-              AND j.status = :status
-              AND COALESCE(UPPER(j.isactive), 'Y') <> 'N'
-              AND j.sourceId IS NOT NULL
-              AND j.sourceType IN (:sourceTypes)
-            """)
-    List<PostedSourceProjection> findPostedSources(
-            @Param("clientId") UUID clientId,
-            @Param("orgId") UUID orgId,
-            @Param("terminalId") UUID terminalId,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("status") JournalStatus status,
-            @Param("sourceTypes") Set<String> sourceTypes);
+    default List<PostedSourceProjection> findPostedSources(
+            UUID clientId,
+            UUID orgId,
+            UUID terminalId,
+            LocalDateTime from,
+            LocalDateTime to,
+            JournalStatus status,
+            Set<String> sourceTypes) {
+        List<JournalEntry> entries = findAll((root, query, cb) -> {
+            var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), orgId));
+            }
+            if (terminalId != null) {
+                predicates.add(cb.equal(root.get("terminalId"), terminalId));
+            }
+            if (from != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("entryDate"), from));
+            }
+            if (to != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("entryDate"), to));
+            }
+            if (status != null) {
+                predicates.add(cb.equal(root.get("status"), status));
+            }
+            predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("isactive"), "Y")), "N"));
+            predicates.add(cb.isNotNull(root.get("sourceId")));
+            if (sourceTypes != null && !sourceTypes.isEmpty()) {
+                predicates.add(root.get("sourceType").in(sourceTypes));
+            }
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+        return entries.stream()
+                .map(e -> (PostedSourceProjection) new PostedSourceProjection() {
+                    @Override
+                    public String getSourceType() { return e.getSourceType(); }
+                    @Override
+                    public UUID getSourceId() { return e.getSourceId(); }
+                })
+                .toList();
+    }
 
     @Modifying
     @Query(value = "DELETE FROM journal_lines WHERE journal_entry_id IN (SELECT id FROM journal_entries WHERE client_id = :clientId AND org_id = :orgId)", nativeQuery = true)

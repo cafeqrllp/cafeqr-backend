@@ -188,7 +188,7 @@ public class PaymentBalanceReportService {
 
         if (expensesList != null) {
             for (Expense e : expensesList) {
-                if (e != null && e.isActive() && "COMPLETED".equalsIgnoreCase(e.getDocStatus())) {
+                if (e != null && e.isActive() && !"VOID".equalsIgnoreCase(e.getDocStatus())) {
                     String method = normalizeKey(e.getPaymentMethod());
                     if (isMixedOrComposite(method)) {
                         BigDecimal half = safe(e.getAmount()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);

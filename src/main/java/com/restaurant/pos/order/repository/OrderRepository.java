@@ -11,6 +11,7 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -166,5 +167,6 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
             @Param("orgId") UUID orgId,
             @Param("tableId") UUID tableId,
             @Param("tableNumber") String tableNumber);
+
 }
 

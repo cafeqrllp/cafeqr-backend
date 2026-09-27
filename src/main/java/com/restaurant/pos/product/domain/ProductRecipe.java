@@ -21,9 +21,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-@Table(name = "product_recipes", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"product_id", "ingredient_id"})
-})
+@Table(name = "product_recipes")
 public class ProductRecipe extends AuditableEntity {
 
     @Id
@@ -40,6 +38,16 @@ public class ProductRecipe extends AuditableEntity {
     @JoinColumn(name = "ingredient_id", nullable = false)
     @JsonIgnoreProperties({ "hibernateLazyInitializer", "handler", "category", "uom", "variantMappings", "variantPricings", "upsells", "recipeLines" })
     private Product ingredient;
+
+    /**
+     * Optional variant option association.
+     * NULL = base/common ingredient (applies to all variants).
+     * Non-null = variant-specific ingredient (applies only when this variant is ordered).
+     */
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "variant_option_id")
+    @JsonIgnoreProperties({ "hibernateLazyInitializer", "handler", "group" })
+    private VariantOption variantOption;
 
     @Column(nullable = false, precision = 15, scale = 3)
     private BigDecimal quantity;
@@ -67,6 +75,24 @@ public class ProductRecipe extends AuditableEntity {
     public String getIngredientName() {
         try {
             return ingredient != null ? ingredient.getName() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @JsonProperty("variantOptionId")
+    public UUID getVariantOptionId() {
+        try {
+            return variantOption != null ? variantOption.getId() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @JsonProperty("variantOptionName")
+    public String getVariantOptionName() {
+        try {
+            return variantOption != null ? variantOption.getName() : null;
         } catch (Exception e) {
             return null;
         }

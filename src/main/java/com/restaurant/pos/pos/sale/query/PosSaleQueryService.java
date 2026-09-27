@@ -486,28 +486,33 @@ public class PosSaleQueryService {
             return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(items, dto.getNextCursor(), dto.isHasMore());
         }
 
-        return singleFlightLoader.loadAndCache(cacheKey, () -> {
-            List<PosProductSummaryView> products = projectionRepository.findProductsKeyset(
-                    clientId, orgId, null, null, null, null, 2501);
-            boolean hasMore = products.size() > 2500;
-            if (hasMore) {
-                products = products.subList(0, 2500);
-            }
-            String nextCursor = null;
-            if (hasMore && !products.isEmpty()) {
-                PosProductSummaryView last = products.get(products.size() - 1);
-                nextCursor = com.restaurant.pos.pos.sale.dto.ProductCursor.of(last).encode();
-            }
-            List<PosProductSummaryDto> dtoItems = products.stream()
-                    .map(p -> PosProductSummaryDto.from(p, includeImages))
-                    .toList();
-            return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(new java.util.ArrayList<>(dtoItems), nextCursor, hasMore);
-        }, (k, v) -> {
-            List<PosProductSummaryDto> dtoItems = v.items().stream()
-                    .map(p -> (p instanceof PosProductSummaryDto dto) ? dto : PosProductSummaryDto.from(p, includeImages))
-                    .toList();
-            redisCacheService.put(k, new PosProductPageDto(dtoItems, v.nextCursor(), v.hasMore()), PosCacheKeys.jittered(PosCacheKeys.TTL_INITIAL_PRODUCTS));
-        });
+        try {
+            return singleFlightLoader.loadAndCache(cacheKey, () -> {
+                List<PosProductSummaryView> products = projectionRepository.findProductsKeyset(
+                        clientId, orgId, null, null, null, null, 10001);
+                boolean hasMore = products.size() > 10000;
+                if (hasMore) {
+                    products = products.subList(0, 10000);
+                }
+                String nextCursor = null;
+                if (hasMore && !products.isEmpty()) {
+                    PosProductSummaryView last = products.get(products.size() - 1);
+                    nextCursor = com.restaurant.pos.pos.sale.dto.ProductCursor.of(last).encode();
+                }
+                List<PosProductSummaryDto> dtoItems = products.stream()
+                        .map(p -> PosProductSummaryDto.from(p, includeImages))
+                        .toList();
+                return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(new java.util.ArrayList<>(dtoItems), nextCursor, hasMore);
+            }, (k, v) -> {
+                List<PosProductSummaryDto> dtoItems = v.items().stream()
+                        .map(p -> (p instanceof PosProductSummaryDto dto) ? dto : PosProductSummaryDto.from(p, includeImages))
+                        .toList();
+                redisCacheService.put(k, new PosProductPageDto(dtoItems, v.nextCursor(), v.hasMore()), PosCacheKeys.jittered(PosCacheKeys.TTL_INITIAL_PRODUCTS));
+            });
+        } catch (Exception ex) {
+            log.error("Failed to load initial products for sales screen, falling back to empty list", ex);
+            return new com.restaurant.pos.pos.sale.dto.PosProductPageResponse(Collections.emptyList(), null, false);
+        }
     }
 
     private List<TableBean> getTableBeans(UUID clientId, UUID orgId) {
@@ -673,7 +678,8 @@ public class PosSaleQueryService {
         String normalizedSearch = (search != null && !search.isBlank()) ? search.trim() : null;
         boolean includeImages = getConfigurations().isMenuImagesEnabled();
 
-        String cacheKey = PosCacheKeys.productPage(ctx.clientId(), ctx.orgId(), categoryId, normalizedSearch, limit, cursor) + (includeImages ? "" : ":noimg");
+        long version = versionService.getVersion(PosCacheVersionService.Namespace.PRODUCTS, ctx.clientId(), ctx.orgId());
+        String cacheKey = PosCacheKeys.productPage(ctx.clientId(), ctx.orgId(), version, categoryId, normalizedSearch, limit, cursor) + (includeImages ? "" : ":noimg");
 
         Optional<PosProductPageDto> cached = redisCacheService.get(cacheKey, PosProductPageDto.class);
         if (cached.isPresent()) {
