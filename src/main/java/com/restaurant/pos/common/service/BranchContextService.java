@@ -62,21 +62,12 @@ public class BranchContextService {
      * @throws BusinessException if no branch context is available
      */
     public UUID requireWriteOrgId(@Nullable UUID explicitOrgId) {
-        UUID currentOrgId = TenantContext.getCurrentOrg();
-        if (currentOrgId != null) {
-            // JWT context has a branch selected — always use it.
-            // Do NOT compare with explicitOrgId to avoid false mismatches
-            // (e.g. different UUID string representations, test vs. local envs).
-            return currentOrgId;
-        }
         if (explicitOrgId != null && SecurityUtils.isSuperAdmin()) {
             return explicitOrgId;
         }
-        if (!SecurityUtils.isSuperAdmin()) {
-            throw new BusinessException(
-                "A branch must be selected before performing this operation. " +
-                "Use the branch picker in the header to select an active branch."
-            );
+        UUID currentOrgId = TenantContext.getCurrentOrg();
+        if (currentOrgId != null) {
+            return currentOrgId;
         }
         throw new BusinessException(
             "A branch must be selected before performing this operation. " +

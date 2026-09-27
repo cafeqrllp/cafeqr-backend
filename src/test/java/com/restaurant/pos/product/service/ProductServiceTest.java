@@ -111,6 +111,55 @@ class ProductServiceTest {
         assertThat(saved.getName()).isEqualTo("Updated");
     }
 
+    @Test
+    void createProductDefaultsToBranchWiseWhenIsClientWiseNotSpecified() {
+        TenantContext.setCurrentOrg(branchId);
+        com.restaurant.pos.product.domain.Category category = com.restaurant.pos.product.domain.Category.builder()
+                .id(UUID.randomUUID())
+                .name("Snacks")
+                .build();
+        category.setClientId(clientId);
+        when(categoryRepository.findById(category.getId())).thenReturn(Optional.of(category));
+        when(productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(any(), any(), any(), any())).thenReturn(false);
+        when(productRepository.save(any(Product.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product input = Product.builder()
+                .name("Samosa")
+                .price(new BigDecimal("15.00"))
+                .category(category)
+                .build();
+
+        Product created = productService.createProduct(input);
+
+        assertThat(created.getOrgId()).isEqualTo(branchId);
+        assertThat(created.getIsClientWise()).isFalse();
+    }
+
+    @Test
+    void createProductSetsOrgIdToNullWhenIsClientWiseIsTrue() {
+        TenantContext.setCurrentOrg(branchId);
+        com.restaurant.pos.product.domain.Category category = com.restaurant.pos.product.domain.Category.builder()
+                .id(UUID.randomUUID())
+                .name("Snacks")
+                .build();
+        category.setClientId(clientId);
+        when(categoryRepository.findById(category.getId())).thenReturn(Optional.of(category));
+        when(productRepository.existsByNameAndClientIdAndOrgIdOrGlobalAndIdNot(any(), any(), any(), any())).thenReturn(false);
+        when(productRepository.save(any(Product.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product input = Product.builder()
+                .name("Chai")
+                .price(new BigDecimal("10.00"))
+                .category(category)
+                .isClientWise(true)
+                .build();
+
+        Product created = productService.createProduct(input);
+
+        assertThat(created.getOrgId()).isNull();
+        assertThat(created.getIsClientWise()).isTrue();
+    }
+
     private Product branchProduct(UUID productId, UUID ownerBranchId) {
         com.restaurant.pos.product.domain.Category category = com.restaurant.pos.product.domain.Category.builder()
                 .id(UUID.randomUUID())

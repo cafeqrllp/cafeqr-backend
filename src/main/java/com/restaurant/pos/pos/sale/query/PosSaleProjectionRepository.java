@@ -259,10 +259,10 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
         FROM products p
         LEFT JOIN categories c ON c.id = p.category_id
         WHERE (p.client_id = :clientId OR p.client_id IS NULL)
-          AND (:orgId IS NULL OR p.org_id = CAST(:orgId AS uuid) OR p.org_id IS NULL)
+          AND (CAST(:orgId AS uuid) IS NULL OR p.org_id = CAST(:orgId AS uuid) OR p.org_id IS NULL OR p.org_id = CAST('00000000-0000-0000-0000-000000000000' AS uuid))
           AND p.is_active = true
           AND (p.is_ingredient IS FALSE OR p.is_ingredient IS NULL)
-          AND (:categoryId IS NULL OR p.category_id = CAST(:categoryId AS uuid))
+          AND (CAST(:categoryId AS uuid) IS NULL OR p.category_id = CAST(:categoryId AS uuid))
           AND (
               :search IS NULL
               OR p.name ILIKE '%' || :search || '%'
@@ -272,7 +272,7 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
           AND (
               :cursorName IS NULL
               OR p.name > :cursorName
-              OR (p.name = :cursorName AND p.id > CAST(:cursorId AS uuid))
+              OR (p.name = :cursorName AND (CAST(:cursorId AS uuid) IS NULL OR p.id > CAST(:cursorId AS uuid)))
           )
         ORDER BY p.name ASC, p.id ASC
         LIMIT :limit

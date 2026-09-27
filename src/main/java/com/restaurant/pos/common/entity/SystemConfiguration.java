@@ -84,6 +84,14 @@ public class SystemConfiguration {
     @Builder.Default
     private boolean posV2Enabled = false;
 
+    @Column(name = "non_stock_sales_policy", length = 20)
+    @Builder.Default
+    private String nonStockSalesPolicy = "NONE";
+
+    @Column(name = "non_stock_transfer_policy", length = 20)
+    @Builder.Default
+    private String nonStockTransferPolicy = "NONE";
+
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;
     private Integer offlineSyncInterval;

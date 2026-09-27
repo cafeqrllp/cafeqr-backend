@@ -31,20 +31,19 @@ public class WarehouseQueryService {
      * Result is cached in Redis under 'warehouses_v1' for 6 hours.
      */
     @Transactional(readOnly = true)
-    @Cacheable(value = "warehouses_v1", key = "T(com.restaurant.pos.common.tenant.TenantContext).getCurrentTenant() + ':' + (T(com.restaurant.pos.common.util.SecurityUtils).isSuperAdmin() ? 'all' : (T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg() != null ? T(com.restaurant.pos.common.tenant.TenantContext).getCurrentOrg() : 'all'))")
-    public List<Warehouse> getWarehouses(UUID orgId) {
+    public List<Warehouse> getWarehouses(UUID orgId, boolean all) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID effectiveOrgId = orgId != null ? orgId : TenantContext.getCurrentOrg();
 
         List<Warehouse> list;
-        if (SecurityUtils.isSuperAdmin() && orgId == null) {
+        if (all || (SecurityUtils.isSuperAdmin() && orgId == null)) {
             list = warehouseRepository.findByClientIdOrderByCreatedAtDesc(clientId);
         } else {
             list = warehouseRepository.findByClientIdAndOrgIdOrGlobalOrderByCreatedAtDesc(clientId, effectiveOrgId);
         }
 
         // Auto-promote the sole org warehouse to default when it is not yet flagged
-        if (effectiveOrgId != null) {
+        if (effectiveOrgId != null && !all) {
             List<Warehouse> orgWhs = list.stream()
                     .filter(w -> effectiveOrgId.equals(w.getOrgId()))
                     .toList();
@@ -56,6 +55,10 @@ public class WarehouseQueryService {
         }
 
         return list;
+    }
+
+    public List<Warehouse> getWarehouses(UUID orgId) {
+        return getWarehouses(orgId, false);
     }
 
     /** Convenience overload — uses the branch from the current security context. */

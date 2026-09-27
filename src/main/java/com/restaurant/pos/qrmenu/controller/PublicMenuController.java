@@ -224,7 +224,7 @@ public class PublicMenuController {
             int qty = ((Number) cartItem.get("quantity")).intValue();
             Optional<Product> productOpt = productRepository.findWithCategoryById(productId)
                     .filter(product -> clientId.equals(product.getClientId()))
-                    .filter(product -> orgUuid == null || product.getOrgId() == null || orgUuid.equals(product.getOrgId()))
+                    .filter(product -> orgUuid == null || product.getOrgId() == null || new UUID(0L, 0L).equals(product.getOrgId()) || orgUuid.equals(product.getOrgId()))
                     .filter(Product::isActive)
                     .filter(Product::isAvailable);
 

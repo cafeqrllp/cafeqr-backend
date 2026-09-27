@@ -90,4 +90,9 @@ public class InventoryService {
     public List<StockSnapshot> getConsolidatedStockOverview(UUID orgId, UUID warehouseId) {
         return queryService.getConsolidatedStockOverview(orgId, warehouseId);
     }
+
+    @Transactional(readOnly = true)
+    public Optional<StockSnapshot> findStockSnapshot(UUID warehouseId, UUID productId, UUID variantId) {
+        return commandService.findStockSnapshot(warehouseId, productId, variantId);
+    }
 }

@@ -20,6 +20,9 @@ import com.restaurant.pos.purchasing.domain.PricelistProduct;
 @AllArgsConstructor
 public class ProductListDto {
     private UUID id;
+    private UUID orgId;
+    @JsonProperty("isClientWise")
+    private boolean isClientWise;
     private String name;
     private String description;
     private BigDecimal price;

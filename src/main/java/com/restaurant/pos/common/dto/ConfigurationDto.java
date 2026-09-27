@@ -55,6 +55,10 @@ public class ConfigurationDto {
     private String salesVersion = "v1";
     @Builder.Default
     private boolean posV2Enabled = false;
+    @Builder.Default
+    private String nonStockSalesPolicy = "NONE";
+    @Builder.Default
+    private String nonStockTransferPolicy = "NONE";
 
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;

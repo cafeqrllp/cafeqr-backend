@@ -24,14 +24,23 @@ public interface ExpenseRepository extends JpaRepository<Expense, UUID>, JpaSpec
      * A null 'orgId' acts as a wildcard (cross-org backfill), returning expenses
      * across all branches (both global orgId=null and branch-specific orgId=UUID).
      */
-    @Query("""
-            SELECT e FROM Expense e
-            WHERE e.clientId = :clientId
-              AND (:orgId IS NULL OR e.orgId = :orgId)
-              AND e.expenseDate BETWEEN :from AND :to
-            ORDER BY e.expenseDate ASC
-            """)
-    List<Expense> findByClientIdAndOrgIdAndExpenseDateBetweenOrderByExpenseDateAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("from") Instant from, @Param("to") Instant to);
+    default List<Expense> findByClientIdAndOrgIdAndExpenseDateBetweenOrderByExpenseDateAsc(UUID clientId, UUID orgId, Instant from, Instant to) {
+        return findAll((root, query, cb) -> {
+            var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), orgId));
+            }
+            if (from != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("expenseDate"), from));
+            }
+            if (to != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("expenseDate"), to));
+            }
+            query.orderBy(cb.asc(root.get("expenseDate")));
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+    }
 
     /**
      * Checks if an expense record exists with a given document number.

@@ -39,14 +39,16 @@ public class WarehouseQueryController {
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     @Operation(
         summary = "List Warehouses",
-        description = "Returns all warehouses visible to the current tenant/branch. Super-admins see all client warehouses when no orgId is provided."
+        description = "Returns all warehouses visible to the current tenant/branch. Super-admins see all client warehouses when no orgId is provided. Set all=true to list all warehouses for cross-branch stock transfers."
     )
     public ResponseEntity<ApiResponse<List<Warehouse>>> getWarehouses(
             @Parameter(description = "Filter by branch (orgId). Omit to use the branch from the security context.")
-            @RequestParam(required = false) UUID orgId) {
+            @RequestParam(required = false) UUID orgId,
+            @Parameter(description = "If true, returns all client warehouses across all branches (useful for stock transfers).")
+            @RequestParam(required = false, defaultValue = "false") boolean all) {
 
-        log.info("Listing warehouses | orgId={}", orgId);
-        return ResponseEntity.ok(ApiResponse.success(queryService.getWarehouses(orgId)));
+        log.info("Listing warehouses | orgId={}, all={}", orgId, all);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getWarehouses(orgId, all)));
     }
 
     @GetMapping("/{id}")

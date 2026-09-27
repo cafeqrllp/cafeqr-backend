@@ -17,6 +17,12 @@ import java.util.UUID;
 @AllArgsConstructor
 public class ProductDetailDto {
     private UUID id;
+    private UUID clientId;
+    private UUID orgId;
+
+    @JsonProperty("isClientWise")
+    private boolean isClientWise;
+
     private String name;
     private String description;
     private BigDecimal price;
@@ -77,6 +83,8 @@ public class ProductDetailDto {
         private UUID id;
         private UUID ingredientId;
         private String ingredientName;
+        private UUID variantOptionId;
+        private String variantOptionName;
         private BigDecimal quantity;
         private String uomName;
         @JsonProperty("isActive")

@@ -298,7 +298,7 @@ public class ReportService {
     // ─── Payment Breakdown ──────────────────────────────────────────────────
 
     public List<PaymentBreakdownDto> getPaymentBreakdown(Instant from, Instant to, UUID orgId, UUID terminalId) {
-        List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
+        List<Order> orders = fetchSaleOrdersLightweight(from, to, orgId, terminalId);
         return getPaymentBreakdown(orders);
     }
 
@@ -417,7 +417,7 @@ public class ReportService {
     // ─── Hourly Sales ───────────────────────────────────────────────────────
 
     public List<HourlySalesDto> getHourlySales(Instant from, Instant to, UUID orgId, UUID terminalId) {
-        List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
+        List<Order> orders = fetchSaleOrdersLightweight(from, to, orgId, terminalId);
 
         Map<Integer, BigDecimal[]> hourlyMap = new TreeMap<>();
         UUID clientId = TenantContext.getCurrentTenant();
@@ -454,12 +454,15 @@ public class ReportService {
             resolvedOrgId = TenantContext.getCurrentOrg();
         }
 
-        // invoiceDate is LocalDateTime — convert Instant to LocalDateTime for comparison
-        ZoneId zoneId = ZoneOffset.UTC;
+        // invoiceDate is LocalDateTime — convert Instant to LocalDateTime for comparison using branch timezone
+        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
         LocalDateTime ldFrom = from != null ? LocalDateTime.ofInstant(from, zoneId) : null;
         LocalDateTime ldTo = to != null ? LocalDateTime.ofInstant(to, zoneId) : null;
 
-        List<Invoice> allInvoices = invoiceRepository.findAll((root, query, cb) -> {
+        // Push filtering to database via Specification — avoids loading all invoices into memory
+        String ft = filterType != null ? filterType.toUpperCase() : "ALL";
+
+        List<Invoice> filtered = invoiceRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
             if (resolvedOrgId != null) {
@@ -474,30 +477,33 @@ public class ReportService {
             if (ldTo != null) {
                 predicates.add(cb.lessThanOrEqualTo(root.get("invoiceDate"), ldTo));
             }
+
+            // Apply filter at database level instead of in-memory
+            if ("PAID".equals(ft)) {
+                predicates.add(cb.equal(cb.upper(root.get("status")), "PAID"));
+                predicates.add(cb.or(cb.isNull(root.get("isCredit")), cb.equal(root.get("isCredit"), false)));
+                predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("isactive"), cb.literal("Y"))), "N"));
+            } else if ("CREDIT".equals(ft)) {
+                predicates.add(cb.or(
+                    cb.equal(root.get("isCredit"), true),
+                    cb.equal(cb.upper(root.get("status")), "UNPAID")
+                ));
+                predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("status"), cb.literal("ACTIVE"))), "VOID"));
+                predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("isactive"), cb.literal("Y"))), "N"));
+            } else if ("VOIDED".equals(ft)) {
+                predicates.add(cb.or(
+                    cb.equal(cb.upper(root.get("status")), "VOID"),
+                    cb.equal(cb.upper(cb.coalesce(root.get("isactive"), cb.literal("Y"))), "N")
+                ));
+            } else {
+                // ALL — exclude voided
+                predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("status"), cb.literal("ACTIVE"))), "VOID"));
+                predicates.add(cb.notEqual(cb.upper(cb.coalesce(root.get("isactive"), cb.literal("Y"))), "N"));
+            }
+
+            query.orderBy(cb.desc(root.get("invoiceDate")));
             return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
         });
-
-        // Apply filter
-        List<Invoice> filtered;
-        String ft = filterType != null ? filterType.toUpperCase() : "ALL";
-        if ("PAID".equals(ft)) {
-            filtered = allInvoices.stream()
-                    .filter(i -> "PAID".equalsIgnoreCase(i.getStatus()) && !Boolean.TRUE.equals(i.getIsCredit()) && !"VOID".equalsIgnoreCase(i.getStatus()) && !"N".equalsIgnoreCase(i.getIsactive()))
-                    .collect(Collectors.toList());
-        } else if ("CREDIT".equals(ft)) {
-            filtered = allInvoices.stream()
-                    .filter(i -> Boolean.TRUE.equals(i.getIsCredit()) || "UNPAID".equalsIgnoreCase(i.getStatus()))
-                    .filter(i -> !"VOID".equalsIgnoreCase(i.getStatus()) && !"N".equalsIgnoreCase(i.getIsactive()))
-                    .collect(Collectors.toList());
-        } else if ("VOIDED".equals(ft)) {
-            filtered = allInvoices.stream()
-                    .filter(i -> "VOID".equalsIgnoreCase(i.getStatus()) || "N".equalsIgnoreCase(i.getIsactive()))
-                    .collect(Collectors.toList());
-        } else {
-            filtered = allInvoices.stream()
-                    .filter(i -> !"VOID".equalsIgnoreCase(i.getStatus()) && !"N".equalsIgnoreCase(i.getIsactive()))
-                    .collect(Collectors.toList());
-        }
 
         Set<UUID> orderIds = filtered.stream()
                 .map(Invoice::getOrderId)
@@ -620,7 +626,7 @@ public class ReportService {
                 clientId, resolvedOrgId, from, to);
 
         BigDecimal operatingExpenses = expensesList.stream()
-                .filter(e -> e != null && e.isActive() && "COMPLETED".equalsIgnoreCase(e.getDocStatus()))
+                .filter(e -> e != null && e.isActive() && !"VOID".equalsIgnoreCase(e.getDocStatus()))
                 .map(Expense::getAmount)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -1155,7 +1161,7 @@ public class ReportService {
         } else {
             resolvedOrgId = TenantContext.getCurrentOrg();
         }
-        ZoneId zoneId = ZoneOffset.UTC;
+        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
         LocalDateTime ldFrom = from != null ? LocalDateTime.ofInstant(from, zoneId) : null;
         LocalDateTime ldTo = to != null ? LocalDateTime.ofInstant(to, zoneId) : null;
 
@@ -1182,12 +1188,7 @@ public class ReportService {
 
     private List<Order> fetchSaleOrders(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId;
-        if (SecurityUtils.isSuperAdmin()) {
-            resolvedOrgId = orgId;
-        } else {
-            resolvedOrgId = TenantContext.getCurrentOrg();
-        }
+        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
 
         return orderRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
@@ -1201,7 +1202,41 @@ public class ReportService {
             predicates.add(cb.equal(root.get("orderType"), OrderType.SALE));
             predicates.add(cb.equal(root.get("orderStatus"), "COMPLETED"));
             predicates.add(cb.equal(root.get("isactive"), "Y"));
-            // orderDate is Instant — compare directly with Instant params
+            if (from != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("orderDate"), from));
+            }
+            if (to != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("orderDate"), to));
+            }
+            if (Long.class != query.getResultType() && long.class != query.getResultType()) {
+                root.fetch("lines", jakarta.persistence.criteria.JoinType.LEFT);
+                query.distinct(true);
+            }
+            query.orderBy(cb.desc(root.get("orderDate")));
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+    }
+
+    /**
+     * Lightweight version that does NOT fetch order lines — used by reports that only need
+     * order-level aggregation (e.g., payment breakdown, payment balances).
+     */
+    private List<Order> fetchSaleOrdersLightweight(Instant from, Instant to, UUID orgId, UUID terminalId) {
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+
+        return orderRepository.findAll((root, query, cb) -> {
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (resolvedOrgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), resolvedOrgId));
+            }
+            if (terminalId != null) {
+                predicates.add(cb.equal(root.get("terminalId"), terminalId));
+            }
+            predicates.add(cb.equal(root.get("orderType"), OrderType.SALE));
+            predicates.add(cb.equal(root.get("orderStatus"), "COMPLETED"));
+            predicates.add(cb.equal(root.get("isactive"), "Y"));
             if (from != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("orderDate"), from));
             }
@@ -1250,7 +1285,7 @@ public class ReportService {
 
         UUID clientId = TenantContext.getCurrentTenant();
         UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
-        ZoneId zoneId = ZoneOffset.UTC;
+        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
 
         Map<UUID, List<Customer>> customerEntitiesMap = batchLinkedCustomerEntities(orders, clientId);
 

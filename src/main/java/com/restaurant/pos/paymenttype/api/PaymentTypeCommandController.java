@@ -5,8 +5,6 @@ import com.restaurant.pos.common.security.StaffAccess;
 import com.restaurant.pos.paymenttype.command.PaymentTypeCommand;
 import com.restaurant.pos.paymenttype.command.PaymentTypeCommandService;
 import com.restaurant.pos.paymenttype.domain.PaymentType;
-import com.restaurant.pos.subscription.annotation.RequireModule;
-import com.restaurant.pos.subscription.domain.ModuleName;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,7 +28,6 @@ import java.util.UUID;
 @RequestMapping("/api/v1/payment-types")
 @RequiredArgsConstructor
 @Validated
-@RequireModule(ModuleName.INVENTORY)
 @Tag(name = "Payment Type Commands", description = "Endpoints for creating, updating, and deleting Payment Types.")
 public class PaymentTypeCommandController {
 

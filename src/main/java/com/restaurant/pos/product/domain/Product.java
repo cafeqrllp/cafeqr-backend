@@ -56,6 +56,25 @@ public class Product extends AuditableEntity {
     @Column(name = "org_id")
     private UUID orgId;
 
+    @Transient
+    @JsonProperty("isClientWise")
+    private Boolean isClientWise;
+
+    public Boolean getIsClientWise() {
+        return isClientWise;
+    }
+
+    public void setIsClientWise(Boolean isClientWise) {
+        this.isClientWise = isClientWise;
+    }
+
+    @PostLoad
+    public void postLoad() {
+        if (this.isClientWise == null) {
+            this.isClientWise = (this.orgId == null || new UUID(0L, 0L).equals(this.orgId));
+        }
+    }
+
     // ERP Specific Fields
     private String productType;
     @JsonProperty("isVariant")
