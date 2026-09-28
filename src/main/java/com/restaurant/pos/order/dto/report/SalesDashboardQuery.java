@@ -17,10 +17,8 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class SalesDashboardQuery {
-    @NotNull
     private Instant from;
 
-    @NotNull
     private Instant to;
 
     @Size(max = 100)
