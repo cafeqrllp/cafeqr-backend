@@ -567,13 +567,20 @@ public class QrOrderQueryService {
     private void validateSubscription(UUID clientId, UUID orgId) {
         if (clientId != null) {
             Client client = clientRepository.findById(clientId).orElse(null);
-            if (client == null || !client.isSubscriptionActive()) {
+            com.restaurant.pos.client.domain.Organization org = orgId != null ? organizationRepository.findById(orgId).orElse(null) : null;
+
+            boolean clientActive = client != null && client.isSubscriptionActive();
+            boolean orgActive = org != null && org.isSubscriptionActive();
+
+            if (!clientActive && !orgActive) {
                 throw new BusinessException("The restaurant's subscription has expired. Online menu and ordering are currently unavailable.");
             }
 
             boolean tableQrActive = false;
-            String status = client.getSubscriptionStatus();
-            if (status != null && "TRIAL".equalsIgnoreCase(status.trim()) && client.getSubscriptionExpiryDate() != null && client.getSubscriptionExpiryDate().isAfter(java.time.LocalDateTime.now())) {
+            String status = orgActive ? org.getSubscriptionStatus() : (client != null ? client.getSubscriptionStatus() : null);
+            java.time.LocalDateTime expiry = orgActive ? org.getSubscriptionExpiryDate() : (client != null ? client.getSubscriptionExpiryDate() : null);
+
+            if (status != null && "TRIAL".equalsIgnoreCase(status.trim()) && expiry != null && expiry.isAfter(java.time.LocalDateTime.now())) {
                 tableQrActive = true;
             } else {
                 tableQrActive = systemConfigurationService.isModuleActive(clientId, orgId, ModuleName.TABLE_QR);

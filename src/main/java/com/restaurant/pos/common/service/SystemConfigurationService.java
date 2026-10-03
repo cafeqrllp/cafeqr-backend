@@ -682,8 +682,18 @@ public class SystemConfigurationService {
             if (clientId == null) {
                 return true;
             }
+            boolean baseActive = false;
             Optional<Client> clientOpt = clientRepository.findById(clientId);
             if (clientOpt.isPresent() && clientOpt.get().isSubscriptionActive()) {
+                baseActive = true;
+            }
+            if (!baseActive && orgId != null) {
+                var orgOpt = organizationRepository.findById(orgId);
+                if (orgOpt.isPresent() && orgOpt.get().isSubscriptionActive()) {
+                    baseActive = true;
+                }
+            }
+            if (baseActive) {
                 return true;
             }
         }
