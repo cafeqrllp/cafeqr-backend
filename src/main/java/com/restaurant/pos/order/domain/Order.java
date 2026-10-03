@@ -181,8 +181,7 @@ public class Order extends BaseEntity {
     private UUID warehouseId;
 
     @Column(name = "order_date")
-    @Builder.Default
-    private Instant orderDate = Instant.now();
+    private Instant orderDate;
 
     @Builder.Default
     @Column(name = "total_tax_amount", precision = 15, scale = 2)
@@ -270,10 +269,10 @@ public class Order extends BaseEntity {
     @Column(name = "version", nullable = false)
     private long version;
 
-    @Formula("(SELECT i.invoice_no FROM invoices i WHERE i.order_id = id LIMIT 1)")
+    @Formula("(SELECT i.invoice_no FROM invoices i WHERE i.order_id = id ORDER BY (CASE WHEN UPPER(COALESCE(i.status, '')) != 'VOID' THEN 0 ELSE 1 END), i.created_at DESC LIMIT 1)")
     private String invoiceNo;
 
-    @Formula("(SELECT i.daily_bill_no FROM invoices i WHERE i.order_id = id LIMIT 1)")
+    @Formula("(SELECT i.daily_bill_no FROM invoices i WHERE i.order_id = id ORDER BY (CASE WHEN UPPER(COALESCE(i.status, '')) != 'VOID' AND i.daily_bill_no IS NOT NULL THEN 0 WHEN i.daily_bill_no IS NOT NULL THEN 1 ELSE 2 END), i.created_at DESC LIMIT 1)")
     @JsonProperty("dailyBillNo")
     private Integer dailyBillNo;
 
@@ -293,6 +292,20 @@ public class Order extends BaseEntity {
     @Builder.Default
     @Column(name = "item_count", nullable = false)
     private Integer itemCount = 0;
+
+    @Builder.Default
+    @JsonProperty("isStockDeducted")
+    @Column(name = "is_stock_deducted")
+    private Boolean isStockDeducted = false;
+
+    @Transient
+    @Builder.Default
+    private List<String> warnings = new ArrayList<>();
+
+    @Transient
+    @Builder.Default
+    @JsonProperty("confirmStockWarning")
+    private Boolean confirmStockWarning = false;
 
     @Builder.Default
     @JsonProperty("isActive")
@@ -322,5 +335,16 @@ public class Order extends BaseEntity {
      */
     public void deactivate() {
         this.isactive = "N";
+    }
+
+    @PrePersist
+    @Override
+    protected void onCreate() {
+        super.onCreate();
+        if (this.orderDate == null) {
+            this.orderDate = this.getCreatedAt() != null
+                    ? this.getCreatedAt().toInstant(java.time.ZoneOffset.UTC)
+                    : java.time.Instant.now();
+        }
     }
 }

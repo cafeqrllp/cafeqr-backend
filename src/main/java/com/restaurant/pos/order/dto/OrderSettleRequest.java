@@ -56,6 +56,9 @@ public class OrderSettleRequest {
     @Schema(description = "Customer phone to attach during settlement")
     private String customerPhone;
 
+    @Schema(description = "User confirmation to proceed despite stock shortage warning")
+    private Boolean confirmStockWarning = false;
+
     @Data
     @Schema(description = "Split payment item details")
     public static class PaymentSplitRequest {

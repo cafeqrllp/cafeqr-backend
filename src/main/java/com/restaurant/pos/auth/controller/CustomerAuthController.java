@@ -95,7 +95,7 @@ public class CustomerAuthController {
 
         com.restaurant.pos.purchasing.domain.Customer customer = null;
         if (clientId != null) {
-            var existing = customerRepository.findByEmailAndClientId(normalizedEmail, clientId);
+            var existing = customerRepository.findFirstByEmailIgnoreCaseAndClientId(normalizedEmail, clientId);
             if (existing.isPresent()) {
                 customer = existing.get();
                 boolean changed = false;

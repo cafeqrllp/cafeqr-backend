@@ -60,4 +60,22 @@ public class PurchaseOrderSearchRequest {
 
     @Schema(description = "Generic search query matching order number or external reference")
     private String searchTerm;
+
+    public void setFrom(Instant from) {
+        if (from != null) {
+            this.fromDate = from;
+        }
+    }
+
+    public void setTo(Instant to) {
+        if (to != null) {
+            this.toDate = to;
+        }
+    }
+
+    public void setOrgId(UUID orgId) {
+        if (orgId != null) {
+            this.branchId = orgId;
+        }
+    }
 }

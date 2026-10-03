@@ -28,8 +28,12 @@ public abstract class AuditableEntity {
 
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        if (this.createdAt == null) {
+            this.createdAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        }
+        if (this.updatedAt == null) {
+            this.updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        }
         
         String currentUser = resolveCurrentUser();
         
@@ -44,8 +48,18 @@ public abstract class AuditableEntity {
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-        this.updatedBy = resolveCurrentUser();
+        this.updatedAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        String currentUser = resolveCurrentUser();
+        if (!"SYSTEM".equals(currentUser)) {
+            // Preserve customer user if customer was the creator or last editor
+            boolean isUpdatedByCustomer = this.updatedBy != null && (this.updatedBy.endsWith("(customer)") || this.updatedBy.contains("(customer)"));
+            boolean isCreatedByCustomer = this.createdBy != null && (this.createdBy.endsWith("(customer)") || this.createdBy.contains("(customer)"));
+            if (!isUpdatedByCustomer && !isCreatedByCustomer) {
+                this.updatedBy = currentUser;
+            }
+        } else if (this.updatedBy == null) {
+            this.updatedBy = "SYSTEM";
+        }
     }
 
     private String resolveCurrentUser() {

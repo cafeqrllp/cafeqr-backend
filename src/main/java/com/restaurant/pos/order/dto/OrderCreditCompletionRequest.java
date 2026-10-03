@@ -14,4 +14,5 @@ public class OrderCreditCompletionRequest {
     private String roundOffMode;
     private String description;
     private List<String> skipAutoPrintKinds;
+    private Boolean confirmStockWarning = false;
 }

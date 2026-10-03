@@ -471,11 +471,11 @@ public class PrintJobService {
     private String buildDedupeKey(Order order, PrintJobKind kind, String reason) {
         String revision = String.valueOf(order.getRevisionNumber() == null ? 0 : order.getRevisionNumber());
         String base = order.getId() + ":" + kind.name() + ":" + revision;
+        if (reason != null && (reason.toLowerCase().contains("edit") || reason.toLowerCase().contains("append"))) {
+            return base + ":edit:" + UUID.randomUUID();
+        }
         if ("manual".equalsIgnoreCase(reason)) {
             return base + ":manual:" + UUID.randomUUID();
-        }
-        if ("edit".equalsIgnoreCase(reason)) {
-            return base + ":edit:" + UUID.randomUUID();
         }
         return base + ":auto";
     }

@@ -17,9 +17,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import com.restaurant.pos.order.repository.OrderRepository;
+import com.restaurant.pos.order.domain.Order;
 
 /**
  * Command Service for Loyalty Module (CQRS pattern matching purchase.command).
@@ -36,6 +42,7 @@ public class LoyaltyCommandService {
     private final CustomerRepository customerRepository;
     private final SystemConfigurationService configService;
     private final LoyaltyDtoMapper mapper;
+    private final OrderRepository orderRepository;
 
     @Transactional
     public LoyaltyProgramDto createProgram(CreateLoyaltyProgramCommand cmd) {
@@ -199,6 +206,7 @@ public class LoyaltyCommandService {
                 .points(points)
                 .balanceAfter(account.getCurrentPoints())
                 .remarks("Earned on order completion")
+                .createdAt(resolveTransactionTime(orderId))
                 .build();
 
         LoyaltyTransaction saved = transactionRepository.save(txn);
@@ -268,6 +276,7 @@ public class LoyaltyCommandService {
                 .points(-pointsToUse)
                 .balanceAfter(account.getCurrentPoints())
                 .remarks("Redeemed for ₹" + discount + " discount")
+                .createdAt(resolveTransactionTime(orderId))
                 .build());
 
         log.info("Loyalty REDEEM: customer={} order={} points=-{} discount={}", customerId, orderId, pointsToUse, discount);
@@ -276,21 +285,49 @@ public class LoyaltyCommandService {
 
     @Transactional
     public void reverseOrderTransactions(UUID orderId) {
-        UUID clientId = TenantContext.getCurrentTenant();
-        UUID orgId    = TenantContext.getCurrentOrg();
+        reverseOrderTransactions(orderId, null, null);
+    }
 
-        if (!isLoyaltyEnabled(clientId, orgId)) {
+    @Transactional
+    public void reverseOrderTransactions(UUID orderId, UUID explicitClientId, UUID explicitOrgId) {
+        if (orderId == null) {
             return;
         }
 
-        List<LoyaltyTransaction> originals = transactionRepository.findByOrderIdAndClientId(orderId, clientId);
-        if (originals.isEmpty()) return;
+        UUID clientId = explicitClientId != null ? explicitClientId : TenantContext.getCurrentTenant();
+        UUID orgId    = explicitOrgId != null ? explicitOrgId : TenantContext.getCurrentOrg();
+
+        List<LoyaltyTransaction> originals = clientId != null
+                ? transactionRepository.findByOrderIdAndClientId(orderId, clientId)
+                : transactionRepository.findByOrderId(orderId);
+        if (originals == null || originals.isEmpty()) {
+            log.info("No loyalty transactions found to reverse for orderId={}", orderId);
+            return;
+        }
+
+        // Avoid double-reversal by collecting already reversed references
+        Set<UUID> alreadyReversedIds = originals.stream()
+                .filter(t -> t.getTransactionType() == LoyaltyTransactionType.REVERSAL)
+                .map(LoyaltyTransaction::getReferenceTransactionId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
 
         for (LoyaltyTransaction original : originals) {
-            if (original.getTransactionType() == LoyaltyTransactionType.REVERSAL) continue;
+            if (original.getTransactionType() == LoyaltyTransactionType.REVERSAL) {
+                continue;
+            }
+            if (alreadyReversedIds.contains(original.getId())) {
+                log.info("Loyalty transaction {} already reversed, skipping", original.getId());
+                continue;
+            }
 
             CustomerLoyalty account = accountRepository.findById(original.getCustomerLoyaltyId())
-                    .orElseThrow(() -> new BusinessException("Loyalty account not found for reversal."));
+                    .orElse(null);
+            if (account == null) {
+                log.warn("Loyalty account not found for transaction id={}, customerLoyaltyId={}",
+                        original.getId(), original.getCustomerLoyaltyId());
+                continue;
+            }
 
             int reversalPoints = -original.getPoints();
             if (original.getTransactionType() == LoyaltyTransactionType.EARN) {
@@ -310,8 +347,8 @@ public class LoyaltyCommandService {
             transactionRepository.save(LoyaltyTransaction.builder()
                     .customerLoyaltyId(account.getId())
                     .customerId(original.getCustomerId())
-                    .clientId(clientId)
-                    .orgId(original.getOrgId())
+                    .clientId(clientId != null ? clientId : original.getClientId())
+                    .orgId(orgId != null ? orgId : original.getOrgId())
                     .programId(original.getProgramId())
                     .orderId(orderId)
                     .transactionType(LoyaltyTransactionType.REVERSAL)
@@ -319,9 +356,31 @@ public class LoyaltyCommandService {
                     .balanceAfter(account.getCurrentPoints())
                     .referenceTransactionId(original.getId())
                     .remarks("Reversal of " + original.getTransactionType() + " on order cancellation/refund")
+                    .createdAt(resolveTransactionTime(orderId))
                     .build());
 
             log.info("Loyalty REVERSAL: original={} order={} points={}", original.getId(), orderId, reversalPoints);
+        }
+    }
+
+    private Instant resolveTransactionTime(UUID orderId) {
+        if (orderId == null || orderRepository == null) {
+            return Instant.now();
+        }
+        try {
+            return orderRepository.findById(orderId)
+                    .map(o -> {
+                        if (o.getOrderDate() != null) {
+                            return o.getOrderDate();
+                        }
+                        if (o.getCreatedAt() != null) {
+                            return o.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant();
+                        }
+                        return Instant.now();
+                    })
+                    .orElseGet(Instant::now);
+        } catch (Exception ex) {
+            return Instant.now();
         }
     }
 

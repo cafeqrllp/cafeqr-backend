@@ -18,6 +18,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table(name = "stock_transfers")
+@com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
 public class StockTransfer extends AuditableEntity {
 
     @Id
@@ -60,6 +61,15 @@ public class StockTransfer extends AuditableEntity {
 
     @Transient
     private String updatedByName;
+
+    @Transient
+    @Builder.Default
+    private List<String> warnings = new ArrayList<>();
+
+    @Transient
+    @Builder.Default
+    @JsonProperty("confirmStockWarning")
+    private Boolean confirmStockWarning = false;
 
     @Builder.Default
     @JsonProperty("isActive")

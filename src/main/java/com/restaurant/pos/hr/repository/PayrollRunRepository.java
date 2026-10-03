@@ -18,4 +18,7 @@ public interface PayrollRunRepository extends JpaRepository<PayrollRun, UUID> {
 
     @Query("SELECT p FROM PayrollRun p WHERE p.id = :id AND p.clientId = :clientId AND (:orgId IS NULL OR p.orgId = :orgId)")
     Optional<PayrollRun> findByIdAndClientIdAndOrgId(@Param("id") UUID id, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    @Query("SELECT COUNT(p) > 0 FROM PayrollRun p WHERE p.clientId = :clientId AND (:orgId IS NULL OR p.orgId = :orgId) AND LOWER(TRIM(p.name)) = LOWER(TRIM(:name))")
+    boolean existsByNameAndClientIdAndOrgId(@Param("name") String name, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
 }

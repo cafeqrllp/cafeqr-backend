@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.util.UUID;
+
 /**
  * Event listener for order cancellation — reverses loyalty points after order commit.
  * Lives in feature package 'loyalty.listener'.
@@ -23,14 +25,21 @@ public class LoyaltyOrderCancelledListener {
     public void onOrderCancelled(LoyaltyOrderCancelledEvent event) {
         log.info("Processing LoyaltyOrderCancelledEvent for order={}", event.getOrderId());
 
-        TenantContext.setCurrentTenant(event.getClientId());
-        TenantContext.setCurrentOrg(event.getOrgId());
+        UUID prevTenant = TenantContext.getCurrentTenant();
+        UUID prevOrg = TenantContext.getCurrentOrg();
         try {
-            commandService.reverseOrderTransactions(event.getOrderId());
+            if (event.getClientId() != null) {
+                TenantContext.setCurrentTenant(event.getClientId());
+            }
+            if (event.getOrgId() != null) {
+                TenantContext.setCurrentOrg(event.getOrgId());
+            }
+            commandService.reverseOrderTransactions(event.getOrderId(), event.getClientId(), event.getOrgId());
         } catch (Exception ex) {
             log.error("Loyalty reversal failed for orderId={} — swallowing to protect committed order", event.getOrderId(), ex);
         } finally {
-            TenantContext.clear();
+            TenantContext.setCurrentTenant(prevTenant);
+            TenantContext.setCurrentOrg(prevOrg);
         }
     }
 }

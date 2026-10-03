@@ -166,6 +166,7 @@ class OrderWorkflowParityTest {
                 mock(com.restaurant.pos.accounting.repository.PaymentAllocationRepository.class),
                 accountingPostingService,
                 mock(InventoryService.class),
+                mock(com.restaurant.pos.inventory.repository.StockLedgerRepository.class),
                 mock(RestaurantTableRepository.class),
                 sequenceService,
                 mock(OfflineSequenceLeaseService.class),

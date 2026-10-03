@@ -78,6 +78,7 @@ public class EmailService {
                 isGmailApiConfigured());
     }
 
+    @Async
     public void sendOtpEmail(String toEmail, String otp) {
         String body = """
                 Welcome to CafeQR!
@@ -93,11 +94,12 @@ public class EmailService {
         } catch (Exception e) {
             log.warn("SMTP email delivery failed for {}: {}. OTP code logged for verification.", toEmail, e.getMessage());
             if (!logOtpCode) {
-                throw e;
+                log.error("Failed to deliver OTP email to {}", toEmail, e);
             }
         }
     }
 
+    @Async
     public void sendWelcomeCredentialsEmail(String toEmail, String name, String planName, String password) {
         String body = String.format("""
                 Dear %s,

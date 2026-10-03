@@ -54,7 +54,10 @@ public class PurchasingService {
         // Customers are GLOBAL (client-scoped, not branch-scoped)
         customer.setOrgId(null);
         customer.setPhone(normalizePhone(customer.getPhone()));
+        String normalizedEmail = normalizeEmail(customer.getEmail());
+        customer.setEmail(normalizedEmail);
         ensureUniqueCustomerPhone(customer.getClientId(), customer.getPhone(), null);
+        ensureUniqueCustomerEmail(customer.getClientId(), customer.getEmail(), null);
         return customerRepository.save(customer);
     }
 
@@ -63,9 +66,11 @@ public class PurchasingService {
         Customer existing = getCustomer(id);
         existing.setName(updates.getName());
         String normalizedPhone = normalizePhone(updates.getPhone());
+        String normalizedEmail = normalizeEmail(updates.getEmail());
         ensureUniqueCustomerPhone(existing.getClientId(), normalizedPhone, existing.getId());
+        ensureUniqueCustomerEmail(existing.getClientId(), normalizedEmail, existing.getId());
         existing.setPhone(normalizedPhone);
-        existing.setEmail(updates.getEmail());
+        existing.setEmail(normalizedEmail);
         existing.setAddress(updates.getAddress());
         existing.setGstNumber(updates.getGstNumber());
         existing.setCustomerCategory(updates.getCustomerCategory());
@@ -89,6 +94,14 @@ public class PurchasingService {
         return normalized.isBlank() ? null : normalized;
     }
 
+    private String normalizeEmail(String email) {
+        if (email == null) {
+            return null;
+        }
+        String trimmed = email.trim().toLowerCase();
+        return trimmed.isBlank() ? null : trimmed;
+    }
+
     private void ensureUniqueCustomerPhone(UUID clientId, String phone, UUID existingCustomerId) {
         if (clientId == null || phone == null || phone.isBlank()) {
             return;
@@ -98,6 +111,18 @@ public class PurchasingService {
                 : customerRepository.existsByClientIdAndPhoneAndIdNot(clientId, phone, existingCustomerId);
         if (duplicate) {
             throw new BusinessException("A customer with this phone number already exists");
+        }
+    }
+
+    private void ensureUniqueCustomerEmail(UUID clientId, String email, UUID existingCustomerId) {
+        if (clientId == null || email == null || email.isBlank()) {
+            return;
+        }
+        boolean duplicate = existingCustomerId == null
+                ? customerRepository.existsByClientIdAndEmailIgnoreCase(clientId, email.trim())
+                : customerRepository.existsByClientIdAndEmailIgnoreCaseAndIdNot(clientId, email.trim(), existingCustomerId);
+        if (duplicate) {
+            throw new BusinessException("A customer with this email already exists");
         }
     }
 

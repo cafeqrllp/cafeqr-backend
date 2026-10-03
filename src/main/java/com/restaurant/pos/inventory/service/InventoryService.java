@@ -66,7 +66,14 @@ public class InventoryService {
     public void updateStock(UUID warehouseId, UUID productId, UUID variantId,
                              BigDecimal quantityChange, String transactionType,
                              UUID referenceId, BigDecimal unitCost, UUID explicitOrgId) {
-        commandService.updateStock(warehouseId, productId, variantId, quantityChange, transactionType, referenceId, unitCost, explicitOrgId);
+        commandService.updateStock(warehouseId, productId, variantId, quantityChange, transactionType, referenceId, unitCost, explicitOrgId, null);
+    }
+
+    @Transactional
+    public void updateStock(UUID warehouseId, UUID productId, UUID variantId,
+                             BigDecimal quantityChange, String transactionType,
+                             UUID referenceId, BigDecimal unitCost, UUID explicitOrgId, UUID explicitClientId) {
+        commandService.updateStock(warehouseId, productId, variantId, quantityChange, transactionType, referenceId, unitCost, explicitOrgId, explicitClientId);
     }
 
     @Transactional

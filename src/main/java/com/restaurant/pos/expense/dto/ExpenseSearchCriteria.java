@@ -42,4 +42,22 @@ public class ExpenseSearchCriteria {
 
     @Schema(description = "Filter results by status (ACTIVE/VOID)", example = "ACTIVE")
     private String status;
+
+    public void setFrom(Instant from) {
+        if (from != null) {
+            this.fromDate = from;
+        }
+    }
+
+    public void setTo(Instant to) {
+        if (to != null) {
+            this.toDate = to;
+        }
+    }
+
+    public void setOrgId(UUID orgId) {
+        if (orgId != null) {
+            this.branchId = orgId;
+        }
+    }
 }

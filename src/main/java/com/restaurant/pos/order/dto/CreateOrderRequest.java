@@ -94,6 +94,8 @@ public class CreateOrderRequest {
     private String paymentMethod;
 
     @Schema(description = "Order date/time (ISO-8601 UTC Instant)", example = "2026-05-26T10:00:00Z")
+    @JsonProperty("orderDate")
+    @com.fasterxml.jackson.annotation.JsonAlias({"order_date", "orderDate"})
     private Instant orderDate;
 
     @Schema(description = "Initial order status (DRAFT, CONFIRMED). Defaults to DRAFT if omitted.", example = "DRAFT")
@@ -143,6 +145,9 @@ public class CreateOrderRequest {
 
     @Schema(description = "Transient print kinds that this terminal will print locally, e.g. KOT or BILL")
     private List<String> skipAutoPrintKinds;
+
+    @Schema(description = "Whether to bypass warning-level stock shortage checks if confirmed by cashier")
+    private Boolean confirmStockWarning = false;
 
     @NotEmpty(message = "Order lines must not be empty")
     @Valid

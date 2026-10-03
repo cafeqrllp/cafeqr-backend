@@ -363,7 +363,7 @@ public class PurchaseOrderQueryService {
 
             java.time.Instant dt = o.getOrderDate() != null
                     ? o.getOrderDate()
-                    : (o.getCreatedAt() != null ? o.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant() : null);
+                    : (o.getCreatedAt() != null ? o.getCreatedAt().toInstant(java.time.ZoneOffset.UTC) : null);
             if (dt != null && (acc.lastOrderDate == null || dt.isAfter(acc.lastOrderDate))) {
                 acc.lastOrderDate = dt;
             }

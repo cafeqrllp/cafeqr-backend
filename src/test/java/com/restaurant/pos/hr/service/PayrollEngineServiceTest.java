@@ -1,7 +1,9 @@
 package com.restaurant.pos.hr.service;
 
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.expense.repository.ExpenseRepository;
+import com.restaurant.pos.hr.dto.HrSettingsDto;
 import com.restaurant.pos.hr.dto.PayrollRunDto;
 import com.restaurant.pos.hr.dto.SalarySlipDto;
 import com.restaurant.pos.hr.entity.*;
@@ -14,9 +16,12 @@ import org.mockito.ArgumentCaptor;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -32,6 +37,7 @@ class PayrollEngineServiceTest {
     private SalaryAdvanceRepository salaryAdvanceRepository;
     private HrSettingsService hrSettingsService;
     private ExpenseRepository expenseRepository;
+    private com.restaurant.pos.common.service.AuditLogService auditLogService;
 
     private PayrollEngineService payrollEngineService;
 
@@ -49,6 +55,7 @@ class PayrollEngineServiceTest {
         salaryAdvanceRepository = mock(SalaryAdvanceRepository.class);
         hrSettingsService = mock(HrSettingsService.class);
         expenseRepository = mock(ExpenseRepository.class);
+        auditLogService = mock(com.restaurant.pos.common.service.AuditLogService.class);
 
         payrollEngineService = new PayrollEngineService(
                 payrollRunRepository,
@@ -59,8 +66,10 @@ class PayrollEngineServiceTest {
                 leaveRequestRepository,
                 salaryAdvanceRepository,
                 hrSettingsService,
-                expenseRepository
+                expenseRepository,
+                auditLogService
         );
+
 
         clientId = UUID.randomUUID();
         orgId = UUID.randomUUID();
@@ -114,8 +123,8 @@ class PayrollEngineServiceTest {
         SalarySlip savedSlip = slipCaptor.getValue();
 
         // Base 3000 / 30 = 100 daily rate. 2 unpaid days = 200 deduction.
-        assertThat(savedSlip.getGrossPay()).isEqualByComparingTo("2800.00");
-        assertThat(savedSlip.getTotalDeductions()).isEqualByComparingTo("0.00");
+        assertThat(savedSlip.getGrossPay()).isEqualByComparingTo("3000.00");
+        assertThat(savedSlip.getTotalDeductions()).isEqualByComparingTo("200.00");
         assertThat(savedSlip.getNetPay()).isEqualByComparingTo("2800.00");
         assertThat(savedSlip.getTotalUnpaidLeaveDays()).isEqualTo(2);
     }
@@ -439,4 +448,192 @@ class PayrollEngineServiceTest {
         // 61 days at $40/day = $2440.00 gross pay (full 2-month period)
         assertThat(savedSlip.getGrossPay()).isEqualByComparingTo("2440.00");
     }
+
+    /**
+     * CQR-135: Monthly-salaried employees must receive overtime pay when their
+     * timecards accumulate overtime hours beyond the standard daily threshold.
+     *
+     * Setup:
+     *   - Employee base salary: $3,000/month
+     *   - Period: 30-day month (Sep 2026)
+     *   - Timecard: 5 hours of overtime accumulated across the period
+     *   - HR settings: standardHoursPerDay = 8, overtimeMultiplier = 1.5
+     *
+     * Expected calculation:
+     *   - Daily rate       = $3000 / 30 = $100.00
+     *   - Base pay         = $100 * 30   = $3000.00
+     *   - Effective hourly = $100 / 8    = $12.50/hr
+     *   - OT pay           = $12.50 * 1.5 * 5 = $93.75
+     *   - Gross pay        = $3000.00 + $93.75 = $3093.75
+     */
+    @Test
+    void initiatePayrollRun_MonthlySalariedEmployee_IncludesOvertimePay_CQR135() {
+        Employee emp = new Employee();
+        emp.setFirstName("Sara");
+        emp.setLastName("Monthly");
+        emp.setEmploymentType("SALARIED");
+        emp.setBaseSalary(new BigDecimal("3000.00"));
+        emp.setActive(true);
+
+        // Timecard: 13 total hours on one day — 8 normal, 5 OT
+        Attendance att = new Attendance();
+        att.setTotalHoursWorked(new BigDecimal("13.00"));
+        att.setOvertimeHours(new BigDecimal("5.00"));
+
+        PayrollRunDto runDto = PayrollRunDto.builder()
+                .name("Monthly OT Test Run")
+                .startDate(LocalDate.of(2026, 9, 1))
+                .endDate(LocalDate.of(2026, 9, 30))
+                .build();
+
+        HrSettingsDto settings = HrSettingsDto.builder()
+                .standardHoursPerDay(new BigDecimal("8.00"))
+                .overtimeMultiplier(new BigDecimal("1.50"))
+                .build();
+
+        when(hrSettingsService.getSettings()).thenReturn(settings);
+        when(employeeRepository.findByClientIdAndOrgId(clientId, orgId)).thenReturn(List.of(emp));
+        when(attendanceRepository.findByEmployeeIdAndDateRangeAndClientIdAndOrgId(eq(emp.getId()), any(), any(), eq(clientId), eq(orgId)))
+                .thenReturn(List.of(att));
+        when(leaveRequestRepository.findApprovedByEmployeeIdAndDateRange(eq(emp.getId()), any(), any(), eq(clientId), eq(orgId)))
+                .thenReturn(List.of());
+        when(employeeSalaryComponentRepository.findActiveByEmployeeId(emp.getId())).thenReturn(List.of());
+        when(salaryAdvanceRepository.findActiveAdvancesByEmployeeId(emp.getId(), clientId, orgId)).thenReturn(List.of());
+
+        payrollEngineService.initiatePayrollRun(runDto);
+
+        ArgumentCaptor<SalarySlip> slipCaptor = ArgumentCaptor.forClass(SalarySlip.class);
+        verify(salarySlipRepository).save(slipCaptor.capture());
+        SalarySlip savedSlip = slipCaptor.getValue();
+
+        // Base pay: $3000/30 * 30 = $3000.00
+        // Effective hourly: $100 / 8hrs = $12.50
+        // OT pay: $12.50 * 1.5 * 5hrs = $93.75
+        // Gross pay: $3000.00 + $93.75 = $3093.75
+        assertThat(savedSlip.getTotalWorkedHours()).isEqualByComparingTo("13.00");
+        assertThat(savedSlip.getGrossPay()).isEqualByComparingTo("3093.75");
+        assertThat(savedSlip.getNetPay()).isEqualByComparingTo("3093.75");
+    }
+
+    @Test
+    void initiatePayrollRun_DuplicateRunName_ThrowsBusinessException_CQR123() {
+        PayrollRunDto runDto = PayrollRunDto.builder()
+                .name("September 2026 Payroll")
+                .startDate(LocalDate.of(2026, 9, 1))
+                .endDate(LocalDate.of(2026, 9, 30))
+                .build();
+
+        when(payrollRunRepository.existsByNameAndClientIdAndOrgId(eq("September 2026 Payroll"), eq(clientId), eq(orgId)))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> payrollEngineService.initiatePayrollRun(runDto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("A payroll run with the name 'September 2026 Payroll' already exists.");
+    }
+
+    @Test
+    void initiatePayrollRun_EmptyName_ThrowsBusinessException_CQR123() {
+        PayrollRunDto runDto = PayrollRunDto.builder()
+                .name("   ")
+                .startDate(LocalDate.of(2026, 9, 1))
+                .endDate(LocalDate.of(2026, 9, 30))
+                .build();
+
+        assertThatThrownBy(() -> payrollEngineService.initiatePayrollRun(runDto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Payroll run name cannot be empty.");
+    }
+
+    @Test
+    void initiatePayrollRun_StartDateAfterEndDate_ThrowsBusinessException_CQR125() {
+        PayrollRunDto runDto = PayrollRunDto.builder()
+                .name("Invalid Date Run")
+                .startDate(LocalDate.of(2026, 10, 15))
+                .endDate(LocalDate.of(2026, 10, 1))
+                .build();
+
+        assertThatThrownBy(() -> payrollEngineService.initiatePayrollRun(runDto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Start date cannot be after end date.");
+    }
+
+    @Test
+    void initiatePayrollRun_InvalidYearRange_ThrowsBusinessException_CQR125() {
+        PayrollRunDto runDto = PayrollRunDto.builder()
+                .name("Ancient Date Run")
+                .startDate(LocalDate.of(1111, 4, 11))
+                .endDate(LocalDate.of(2026, 10, 1))
+                .build();
+
+        assertThatThrownBy(() -> payrollEngineService.initiatePayrollRun(runDto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Invalid date range: Year must be between 2000 and 2100.");
+    }
+
+    @Test
+    void deletePayrollRun_RecordsAuditLog_CQR135_SubItem4() {
+        UUID runId = UUID.randomUUID();
+        PayrollRun run = new PayrollRun();
+        run.setId(runId);
+
+        when(payrollRunRepository.findByIdAndClientIdAndOrgId(eq(runId), eq(clientId), eq(orgId)))
+                .thenReturn(Optional.of(run));
+        when(salarySlipRepository.findByPayrollRunIdAndClientIdAndOrgId(eq(runId), eq(clientId), eq(orgId)))
+                .thenReturn(List.of());
+        when(expenseRepository.findByClientIdAndOrgIdAndExpenseNo(any(), any(), any()))
+                .thenReturn(List.of());
+
+        payrollEngineService.deletePayrollRun(runId);
+
+        verify(payrollRunRepository).delete(run);
+        verify(auditLogService).logAction("DELETE_PAYROLL_RUN", "PayrollRun", runId.toString());
+    }
+
+    @Test
+    void calculateOvertimeHours_BothMode_TakesHigherOfDailyOrWeekly_CQR135_SubItem6() {
+        // Mon 10h (2h daily OT), Tue 10h (2h daily OT), Wed 10h (2h daily OT) -> 30h total worked
+        // Daily OT sum = 6h. Weekly OT (threshold 40h) = 0h.
+        // BOTH mode should return Max(6, 0) = 6h.
+        Attendance a1 = new Attendance();
+        a1.setAttendanceDate(LocalDate.of(2026, 9, 7)); // Monday
+        a1.setTotalHoursWorked(new BigDecimal("10.00"));
+        a1.setOvertimeHours(new BigDecimal("2.00"));
+
+        Attendance a2 = new Attendance();
+        a2.setAttendanceDate(LocalDate.of(2026, 9, 8)); // Tuesday
+        a2.setTotalHoursWorked(new BigDecimal("10.00"));
+        a2.setOvertimeHours(new BigDecimal("2.00"));
+
+        Attendance a3 = new Attendance();
+        a3.setAttendanceDate(LocalDate.of(2026, 9, 9)); // Wednesday
+        a3.setTotalHoursWorked(new BigDecimal("10.00"));
+        a3.setOvertimeHours(new BigDecimal("2.00"));
+
+        com.restaurant.pos.hr.dto.HrSettingsDto settings = com.restaurant.pos.hr.dto.HrSettingsDto.builder()
+                .overtimeMode("BOTH")
+                .weeklyOvertimeThreshold(new BigDecimal("40.00"))
+                .build();
+
+        BigDecimal otBoth = payrollEngineService.calculateOvertimeHours(List.of(a1, a2, a3), settings);
+        assertThat(otBoth).isEqualByComparingTo("6.00");
+
+        // Now test 7 days of 8h (0h daily OT) = 56h total worked.
+        // Daily OT sum = 0h. Weekly OT (56 - 40) = 16h.
+        // BOTH mode should return Max(0, 16) = 16h.
+        List<Attendance> sevenDays = new java.util.ArrayList<>();
+        for (int day = 7; day <= 13; day++) {
+            Attendance a = new Attendance();
+            a.setAttendanceDate(LocalDate.of(2026, 9, day));
+            a.setTotalHoursWorked(new BigDecimal("8.00"));
+            a.setOvertimeHours(BigDecimal.ZERO);
+            sevenDays.add(a);
+        }
+
+        BigDecimal otWeeklyHigher = payrollEngineService.calculateOvertimeHours(sevenDays, settings);
+        assertThat(otWeeklyHigher).isEqualByComparingTo("16.00");
+    }
 }
+
+
+
+

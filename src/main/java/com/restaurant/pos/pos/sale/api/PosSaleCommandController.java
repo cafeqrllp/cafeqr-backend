@@ -66,7 +66,8 @@ public class PosSaleCommandController {
                 commandService.createSaleOrder(request, idempotencyKey);
 
         HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
-        return ResponseEntity.status(status).body(ApiResponse.success(result.order()));
+        java.util.List<String> warnings = result.order() != null ? result.order().getWarnings() : null;
+        return ResponseEntity.status(status).body(ApiResponse.successWithWarnings(result.order(), warnings));
     }
 
 }
