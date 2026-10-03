@@ -55,7 +55,11 @@ public class SubscriptionCheckFilter extends OncePerRequestFilter {
             UUID orgId = user.getOrgId();
             if (orgId != null) {
                 Organization organization = organizationRepository.findById(orgId).orElse(null);
-                if (organization == null || !organization.isSubscriptionActive()) {
+                Client client = clientRepository.findById(clientId).orElse(null);
+                boolean orgActive = organization != null && organization.isSubscriptionActive();
+                boolean clientActive = client != null && client.isSubscriptionActive();
+                
+                if (!orgActive && !clientActive) {
                     sendErrorResponse(request, response, "Subscription for this branch has expired. Access is restricted. Please renew your subscription to continue.", HttpServletResponse.SC_FORBIDDEN);
                     return;
                 }
