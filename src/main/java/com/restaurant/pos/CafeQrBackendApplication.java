@@ -14,9 +14,12 @@ import org.springframework.retry.annotation.EnableRetry;
 })
 public class CafeQrBackendApplication {
 
+    @jakarta.annotation.PostConstruct
+    public void init() {
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
+    }
+
     public static void main(String[] args) {
         SpringApplication.run(CafeQrBackendApplication.class, args);
     }
-
 }
-

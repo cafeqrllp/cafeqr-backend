@@ -1,5 +1,6 @@
 package com.restaurant.pos.hr.service;
 
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.expense.domain.Expense;
 import com.restaurant.pos.expense.repository.ExpenseRepository;
@@ -33,13 +34,13 @@ public class PayrollAccountingService {
         UUID orgId = TenantContext.getCurrentOrg();
         
         PayrollRun run = payrollRunRepository.findByIdAndClientIdAndOrgId(payrollRunId, clientId, orgId)
-                .orElseThrow(() -> new RuntimeException("PayrollRun not found"));
+                .orElseThrow(() -> new BusinessException("Payroll run not found."));
 
         if ("PAID".equals(run.getStatus())) {
-            throw new RuntimeException("This payroll run has already been synced to accounting.");
+            throw new BusinessException("This payroll run has already been synced with Accounting.");
         }
         if (!"COMPLETED".equals(run.getStatus())) {
-            throw new RuntimeException("Payroll Run must be completed before accounting sync");
+            throw new BusinessException("Payroll Run must be completed before accounting sync.");
         }
 
         List<SalarySlip> slips = salarySlipRepository.findByPayrollRunIdAndClientIdAndOrgId(payrollRunId, clientId, orgId);

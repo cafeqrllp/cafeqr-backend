@@ -1,6 +1,7 @@
 package com.restaurant.pos.hr.service;
 
 import com.restaurant.pos.common.context.TimezoneResolver;
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.hr.dto.AttendanceDto;
 import com.restaurant.pos.hr.dto.HrSettingsDto;
@@ -214,6 +215,9 @@ public class AttendanceService {
 
     @Transactional(readOnly = true)
     public List<AttendanceDto> getAllAttendanceRecords(LocalDate startDate, LocalDate endDate) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            throw new BusinessException("Start date (From Date) cannot be after End date (To Date).");
+        }
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, orgId);
@@ -229,6 +233,9 @@ public class AttendanceService {
 
     @Transactional(readOnly = true)
     public List<AttendanceDto> getAttendanceByEmployeeAndDateRange(UUID employeeId, LocalDate startDate, LocalDate endDate) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            throw new BusinessException("Start date (From Date) cannot be after End date (To Date).");
+        }
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
         

@@ -1,6 +1,7 @@
 package com.restaurant.pos.hr.service;
 
 import com.restaurant.pos.common.context.TimezoneResolver;
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.hr.dto.AttendanceDto;
 import com.restaurant.pos.hr.dto.HrSettingsDto;
@@ -300,5 +301,26 @@ class AttendanceServiceTest {
         assertThat(result.getClockOutTime()).isEqualTo(LocalDateTime.of(2026, 9, 12, 2, 30));
         assertThat(result.getTotalHoursWorked()).isEqualByComparingTo("10.00");
         assertThat(result.getOvertimeHours()).isEqualByComparingTo("2.00");
+    }
+
+    @Test
+    void getAllAttendanceRecords_StartDateAfterEndDate_ThrowsBusinessException_CQR133() {
+        LocalDate startDate = LocalDate.of(2029, 9, 12);
+        LocalDate endDate = LocalDate.of(2026, 9, 11);
+
+        assertThatThrownBy(() -> attendanceService.getAllAttendanceRecords(startDate, endDate))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Start date (From Date) cannot be after End date (To Date).");
+    }
+
+    @Test
+    void getAttendanceByEmployeeAndDateRange_StartDateAfterEndDate_ThrowsBusinessException_CQR133() {
+        UUID employeeId = UUID.randomUUID();
+        LocalDate startDate = LocalDate.of(2029, 9, 12);
+        LocalDate endDate = LocalDate.of(2026, 9, 11);
+
+        assertThatThrownBy(() -> attendanceService.getAttendanceByEmployeeAndDateRange(employeeId, startDate, endDate))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Start date (From Date) cannot be after End date (To Date).");
     }
 }

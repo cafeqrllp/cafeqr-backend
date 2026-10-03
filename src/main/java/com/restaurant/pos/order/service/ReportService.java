@@ -59,6 +59,8 @@ public class ReportService {
     private final ProductRepository productRepository;
     private final ExpenseRepository expenseRepository;
     private final CreditQueryService creditService;
+    private final OrderService orderService;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
 
     // ─── Sales Summary ──────────────────────────────────────────────────────
@@ -1087,6 +1089,28 @@ public class ReportService {
         });
 
         accountingPostingService.reverseSaleCogs(order, "Invoice voided");
+
+        // ── Restore inventory and reverse loyalty ───
+        boolean wasStockDeducted = isSaleOrder(order) && (
+                Boolean.TRUE.equals(order.getIsStockDeducted())
+                || (orderService != null && orderService.hasStockDeductionLedger(order.getId()))
+        );
+        if (wasStockDeducted && orderService != null) {
+            try {
+                orderService.restoreStockForSale(order);
+                order.setIsStockDeducted(false);
+                orderRepository.save(order);
+            } catch (Exception ex) {
+                log.warn("Failed to restore stock when voiding invoice for order {}: {}", order.getId(), ex.getMessage());
+            }
+        }
+        if (eventPublisher != null) {
+            try {
+                eventPublisher.publishEvent(new com.restaurant.pos.loyalty.event.LoyaltyOrderCancelledEvent(this, order));
+            } catch (Exception ex) {
+                log.warn("Failed to publish LoyaltyOrderCancelledEvent when voiding invoice for order {}: {}", order.getId(), ex.getMessage());
+            }
+        }
     }
 
     private void markInvoiceVoided(Invoice invoice, String reason) {

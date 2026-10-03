@@ -36,6 +36,23 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     boolean existsByClientIdAndPhoneAndIdNot(UUID clientId, String phone, UUID id);
     Optional<Customer> findByEmailAndClientId(String email, UUID clientId);
 
+    @Query("SELECT c FROM Customer c WHERE LOWER(TRIM(c.email)) = LOWER(TRIM(:email)) AND c.clientId = :clientId ORDER BY c.createdAt ASC")
+    List<Customer> findByEmailIgnoreCaseAndClientIdOrderByCreatedAtAsc(@Param("email") String email, @Param("clientId") UUID clientId);
+
+    default Optional<Customer> findFirstByEmailIgnoreCaseAndClientId(String email, UUID clientId) {
+        if (email == null || email.isBlank() || clientId == null) {
+            return Optional.empty();
+        }
+        List<Customer> list = findByEmailIgnoreCaseAndClientIdOrderByCreatedAtAsc(email.trim(), clientId);
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    @Query("SELECT COUNT(c) > 0 FROM Customer c WHERE c.clientId = :clientId AND LOWER(TRIM(c.email)) = LOWER(TRIM(:email))")
+    boolean existsByClientIdAndEmailIgnoreCase(@Param("clientId") UUID clientId, @Param("email") String email);
+
+    @Query("SELECT COUNT(c) > 0 FROM Customer c WHERE c.clientId = :clientId AND LOWER(TRIM(c.email)) = LOWER(TRIM(:email)) AND c.id != :id")
+    boolean existsByClientIdAndEmailIgnoreCaseAndIdNot(@Param("clientId") UUID clientId, @Param("email") String email, @Param("id") UUID id);
+
     @Query("""
             SELECT c.id
             FROM Customer c

@@ -9,7 +9,10 @@ import com.restaurant.pos.hr.entity.Employee;
 import com.restaurant.pos.hr.repository.DepartmentRepository;
 import com.restaurant.pos.hr.repository.DesignationRepository;
 import com.restaurant.pos.hr.repository.EmployeeRepository;
+import com.restaurant.pos.hr.event.HrEmployeeDeletedEvent;
+import com.restaurant.pos.hr.event.HrEmployeeSavedEvent;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +28,7 @@ public class EmployeeService {
     private final EmployeeRepository employeeRepository;
     private final DepartmentRepository departmentRepository;
     private final DesignationRepository designationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<EmployeeDto> getAllEmployees() {
@@ -51,7 +55,16 @@ public class EmployeeService {
         validateEmployeeDto(dto);
         Employee employee = new Employee();
         mapToEntity(dto, employee);
-        return mapToDto(employeeRepository.save(employee));
+        Employee saved = employeeRepository.save(employee);
+        EmployeeDto resultDto = mapToDto(saved);
+        
+        if (eventPublisher != null) {
+            UUID clientId = TenantContext.getCurrentTenant();
+            UUID orgId = TenantContext.getCurrentOrg();
+            eventPublisher.publishEvent(new HrEmployeeSavedEvent(this, resultDto, clientId, orgId, "CREATED"));
+        }
+        
+        return resultDto;
     }
 
     @Transactional
@@ -64,12 +77,26 @@ public class EmployeeService {
                 .orElseThrow(() -> new BusinessException("Employee not found"));
 
         mapToEntity(dto, employee);
-        return mapToDto(employeeRepository.save(employee));
+        Employee saved = employeeRepository.save(employee);
+        EmployeeDto resultDto = mapToDto(saved);
+        
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new HrEmployeeSavedEvent(this, resultDto, clientId, orgId, "UPDATED"));
+        }
+        
+        return resultDto;
     }
 
     private void validateEmployeeDto(EmployeeDto dto) {
         if (dto.getFirstName() == null || dto.getFirstName().trim().isEmpty()) {
             throw new BusinessException("First name is required.");
+        }
+
+        if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
+            String email = dto.getEmail().trim();
+            if (!email.matches("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) {
+                throw new BusinessException("Invalid email format.");
+            }
         }
 
         if (dto.getPinCode() != null && !dto.getPinCode().isBlank()) {
@@ -86,6 +113,18 @@ public class EmployeeService {
         if (dto.getHourlyRate() != null && dto.getHourlyRate().compareTo(java.math.BigDecimal.ZERO) < 0) {
             throw new BusinessException("Hourly rate cannot be negative.");
         }
+
+        if (dto.getBankAccountNumber() != null && !dto.getBankAccountNumber().isBlank()) {
+            if (!dto.getBankAccountNumber().trim().matches("^\\d+$")) {
+                throw new BusinessException("Bank Account Number must contain only digits.");
+            }
+        }
+
+        if (dto.getBankRoutingNumber() != null && !dto.getBankRoutingNumber().isBlank()) {
+            if (!dto.getBankRoutingNumber().trim().matches("^\\d{9}$")) {
+                throw new BusinessException("Bank Routing Number must be exactly 9 digits.");
+            }
+        }
     }
 
     @Transactional
@@ -99,6 +138,9 @@ public class EmployeeService {
         try {
             employeeRepository.delete(employee);
             employeeRepository.flush();
+            if (eventPublisher != null) {
+                eventPublisher.publishEvent(new HrEmployeeDeletedEvent(this, employee.getId(), employee.getUserId(), employee.getEmail(), clientId, orgId));
+            }
         } catch (DataIntegrityViolationException e) {
             String name = (employee.getFirstName() + " " + (employee.getLastName() != null ? employee.getLastName() : "")).trim();
             throw new BusinessException("Cannot delete employee '" + name + "' because they have linked attendance, leave, or payroll history. You can edit the employee and set their status to Inactive instead.");
@@ -125,7 +167,7 @@ public class EmployeeService {
 
         if (dto.getDepartmentId() != null) {
             Department department = departmentRepository.findById(dto.getDepartmentId())
-                    .orElseThrow(() -> new RuntimeException("Department not found"));
+                    .orElseThrow(() -> new BusinessException("Department not found"));
             employee.setDepartment(department);
         } else {
             employee.setDepartment(null);
@@ -133,7 +175,7 @@ public class EmployeeService {
 
         if (dto.getDesignationId() != null) {
             Designation designation = designationRepository.findById(dto.getDesignationId())
-                    .orElseThrow(() -> new RuntimeException("Designation not found"));
+                    .orElseThrow(() -> new BusinessException("Designation not found"));
             employee.setDesignation(designation);
         } else {
             employee.setDesignation(null);

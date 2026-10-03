@@ -190,8 +190,8 @@ public class PurchaseOrderDtoMapper {
                 .updatedBy(updatedByName)
                 .revisionNumber(order.getRevisionNumber())
                 .originalOrderId(order.getOriginalOrderId())
-                .createdAt(order.getCreatedAt() != null ? order.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant() : null)
-                .updatedAt(order.getUpdatedAt() != null ? order.getUpdatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant() : null);
+                .createdAt(order.getCreatedAt() != null ? order.getCreatedAt().toInstant(java.time.ZoneOffset.UTC) : null)
+                .updatedAt(order.getUpdatedAt() != null ? order.getUpdatedAt().toInstant(java.time.ZoneOffset.UTC) : null);
 
         if (order.getLines() != null) {
             List<OrderResponseDto.OrderLineResponseDto> lineDtos = order.getLines().stream()
@@ -275,7 +275,7 @@ public class PurchaseOrderDtoMapper {
                 .totalTaxAmount(order.getTotalTaxAmount())
                 .totalDiscountAmount(order.getTotalDiscountAmount())
                 .totalAmount(order.getTotalAmount())
-                .createdAt(order.getCreatedAt() != null ? order.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant() : null)
+                .createdAt(order.getCreatedAt() != null ? order.getCreatedAt().toInstant(java.time.ZoneOffset.UTC) : null)
                 .reference(order.getReference())
                 .revisionNumber(order.getRevisionNumber())
                 .originalOrderId(order.getOriginalOrderId())

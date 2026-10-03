@@ -22,6 +22,8 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     /** Finds all ledger entries for an order (used to create reversals). */
     List<LoyaltyTransaction> findByOrderIdAndClientId(UUID orderId, UUID clientId);
 
+    List<LoyaltyTransaction> findByOrderId(UUID orderId);
+
     Optional<LoyaltyTransaction> findFirstByOrderIdAndClientIdOrderByCreatedAtDesc(UUID orderId, UUID clientId);
 
     List<LoyaltyTransaction> findByCustomerIdAndClientIdOrderByCreatedAtAsc(UUID customerId, UUID clientId);

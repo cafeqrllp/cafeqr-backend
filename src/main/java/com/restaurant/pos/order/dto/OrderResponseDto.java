@@ -34,6 +34,10 @@ public class OrderResponseDto {
     @Schema(description = "Whether purchase/goods receipt is received")
     private Boolean isReceived;
 
+    @Schema(description = "Whether stock has been deducted for this order")
+    @JsonProperty("isStockDeducted")
+    private Boolean isStockDeducted;
+
     @Schema(description = "Current payment status")
     private String paymentStatus;
 
@@ -187,6 +191,12 @@ public class OrderResponseDto {
 
     @Schema(description = "Date and time the order was last updated")
     private Instant updatedAt;
+
+    @Schema(description = "Warning messages associated with the order (e.g. negative stock warnings)")
+    private List<String> warnings;
+
+    @Schema(description = "Cancellation reason if order was cancelled")
+    private String cancelReason;
 
     @Data
     @Builder

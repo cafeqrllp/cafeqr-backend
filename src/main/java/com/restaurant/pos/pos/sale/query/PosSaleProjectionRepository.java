@@ -69,7 +69,7 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
             SELECT invoice_no, daily_bill_no
             FROM invoices
             WHERE order_id = o.id
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY (CASE WHEN UPPER(COALESCE(status, '')) != 'VOID' AND daily_bill_no IS NOT NULL THEN 0 WHEN daily_bill_no IS NOT NULL THEN 1 ELSE 2 END), created_at DESC LIMIT 1
         ) i ON true
         WHERE o.client_id = :clientId
           AND o.order_type = 'SALE'

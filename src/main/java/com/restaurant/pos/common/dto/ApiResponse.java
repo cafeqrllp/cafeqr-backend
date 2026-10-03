@@ -17,12 +17,23 @@ public class ApiResponse<T> {
     private T data;
     private String timestamp;
     private String errorReference;
+    private java.util.List<String> warnings;
 
     public static <T> ApiResponse<T> success(T data) {
         return ApiResponse.<T>builder()
                 .success(true)
                 .message("Success")
                 .data(data)
+                .timestamp(LocalDateTime.now().toString())
+                .build();
+    }
+
+    public static <T> ApiResponse<T> successWithWarnings(T data, java.util.List<String> warnings) {
+        return ApiResponse.<T>builder()
+                .success(true)
+                .message(warnings != null && !warnings.isEmpty() ? "Warning: " + String.join("; ", warnings) : "Success")
+                .data(data)
+                .warnings(warnings)
                 .timestamp(LocalDateTime.now().toString())
                 .build();
     }

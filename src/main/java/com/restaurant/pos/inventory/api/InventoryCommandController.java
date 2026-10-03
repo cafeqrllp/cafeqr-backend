@@ -53,7 +53,11 @@ public class InventoryCommandController {
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER')")
     @Operation(summary = "Create Stock Transfer", description = "Creates a new stock transfer between warehouses and executes inventory movement if completed.")
     public ResponseEntity<ApiResponse<StockTransfer>> createTransfer(@RequestBody StockTransfer transfer) {
-        return ResponseEntity.ok(ApiResponse.success(commandService.saveTransfer(transfer)));
+        StockTransfer saved = commandService.saveTransfer(transfer);
+        if (saved != null && saved.getWarnings() != null && !saved.getWarnings().isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.successWithWarnings(saved, saved.getWarnings()));
+        }
+        return ResponseEntity.ok(ApiResponse.success(saved));
     }
 
     @PutMapping("/transfers/{id}")
@@ -61,6 +65,10 @@ public class InventoryCommandController {
     @Operation(summary = "Update Stock Transfer", description = "Updates an existing stock transfer record.")
     public ResponseEntity<ApiResponse<StockTransfer>> updateTransfer(@PathVariable UUID id, @RequestBody StockTransfer transfer) {
         transfer.setId(id);
-        return ResponseEntity.ok(ApiResponse.success(commandService.saveTransfer(transfer)));
+        StockTransfer saved = commandService.saveTransfer(transfer);
+        if (saved != null && saved.getWarnings() != null && !saved.getWarnings().isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.successWithWarnings(saved, saved.getWarnings()));
+        }
+        return ResponseEntity.ok(ApiResponse.success(saved));
     }
 }

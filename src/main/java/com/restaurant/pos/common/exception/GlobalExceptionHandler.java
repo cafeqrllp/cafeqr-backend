@@ -33,6 +33,15 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ex.getMessage()));
     }
 
+    @ExceptionHandler(StockWarningException.class)
+    public ResponseEntity<ApiResponse<Void>> handleStockWarningException(StockWarningException ex) {
+        log.warn("Stock warning challenge required: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage());
+        response.setWarnings(ex.getWarnings());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(response);
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException ex) {
         log.warn("Business rule violation: {}", ex.getMessage());

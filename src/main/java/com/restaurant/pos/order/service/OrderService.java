@@ -114,6 +114,7 @@ public class OrderService {
     private final PaymentAllocationRepository paymentAllocationRepository;
     private final AccountingPostingService accountingPostingService;
     private final InventoryService inventoryService;
+    private final com.restaurant.pos.inventory.repository.StockLedgerRepository stockLedgerRepository;
     private final RestaurantTableRepository tableRepository;
     private final DocumentSequenceService sequenceService;
     private final OfflineSequenceLeaseService offlineSequenceLeaseService;
@@ -2007,6 +2008,8 @@ public class OrderService {
             saved.setPaymentSplits(order.getPaymentSplits());
             saved.setRedeemPoints(order.getRedeemPoints());
             saved.setLoyaltyAmount(order.getLoyaltyAmount());
+            saved.setWarnings(order.getWarnings());
+            saved.setConfirmStockWarning(order.getConfirmStockWarning());
 
             diagnosticPhase = "generate_invoice";
             if (shouldGenerateInvoice(saved)) {
@@ -2032,9 +2035,9 @@ public class OrderService {
                     processInventoryForOrder(saved);
                 }
             } else {
-                // SALE: deduct stock when the order reaches COMPLETED+PAID state
-                if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())
-                        && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+                // SALE: deduct stock immediately on order creation (kitchen orders, counter orders)
+                // The idempotency guard in deductStockForSale prevents duplicate deductions
+                if (!"CANCELLED".equalsIgnoreCase(saved.getOrderStatus())) {
                     deductStockForSale(saved);
                 }
                 // Sales
@@ -2193,7 +2196,7 @@ public class OrderService {
      * Returns all revisions (current + all VOID predecessors) for the given order,
      * ordered from oldest to newest by revisionNumber.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public java.util.List<Order> getOrderRevisions(UUID id) {
         UUID clientId = TenantContext.getCurrentTenant();
         Order current = orderRepository.findByIdAndClientId(id, clientId)
@@ -2204,8 +2207,147 @@ public class OrderService {
             baseOrderNo = baseOrderNo.substring(0, baseOrderNo.indexOf("_VOID_"));
         }
         String voidPrefix = baseOrderNo + "_VOID_%";
-        return orderRepository.findAllRevisionsByOrderNo(clientId, baseOrderNo, voidPrefix)
-                .stream().map(this::hydrateOrder).toList();
+        List<Order> revisions = new java.util.ArrayList<>(orderRepository.findAllRevisionsByOrderNo(clientId, baseOrderNo, voidPrefix));
+
+        // If revisions count is less than expected from revisionNumber (e.g. earlier revisions were created before snapshotting was added),
+        // backfill and persist the missing predecessor snapshots so order history reflects full timeline.
+        if (revisions.size() <= 1 && current.getRevisionNumber() != null && current.getRevisionNumber() > 0) {
+            try {
+                Order fullCurrent = orderRepository.findByIdWithLines(current.getId()).orElse(current);
+                List<OrderLine> activeLines = fullCurrent.getLines() != null
+                        ? fullCurrent.getLines().stream().filter(l -> l.getIsactive() == null || "Y".equalsIgnoreCase(l.getIsactive())).toList()
+                        : List.of();
+
+                // Group lines by createdAt to identify addition batches
+                Map<LocalDateTime, List<OrderLine>> linesByTimestamp = new java.util.LinkedHashMap<>();
+                for (OrderLine l : activeLines) {
+                    LocalDateTime dt = l.getCreatedAt() != null ? l.getCreatedAt() : LocalDateTime.MIN;
+                    linesByTimestamp.computeIfAbsent(dt, k -> new java.util.ArrayList<>()).add(l);
+                }
+                List<LocalDateTime> sortedTimes = new java.util.ArrayList<>(linesByTimestamp.keySet());
+                sortedTimes.sort(java.util.Comparator.naturalOrder());
+
+                int targetRevs = current.getRevisionNumber();
+                for (int revIdx = 0; revIdx < targetRevs; revIdx++) {
+                    String snapOrderNo = baseOrderNo + "_VOID_" + revIdx;
+                    boolean exists = revisions.stream().anyMatch(r -> snapOrderNo.equalsIgnoreCase(r.getOrderNo()));
+                    if (exists) {
+                        continue;
+                    }
+                    Optional<Order> inDb = orderRepository.findByOrderNoAndClientId(snapOrderNo, clientId);
+                    if (inDb.isPresent()) {
+                        revisions.add(inDb.get());
+                        continue;
+                    }
+
+                    Order snapshot = new Order();
+                    snapshot.setId(UUID.randomUUID());
+                    snapshot.setOrderNo(snapOrderNo);
+                    snapshot.setOrderType(current.getOrderType() != null ? current.getOrderType() : OrderType.SALE);
+                    snapshot.setOrderStatus("VOID");
+                    snapshot.setDocStatus("VOID");
+                    snapshot.setIsactive("N");
+                    snapshot.setPaymentStatus(current.getPaymentStatus());
+                    snapshot.setOrderSource(current.getOrderSource());
+                    snapshot.setTerminalId(current.getTerminalId());
+                    snapshot.setClientId(clientId);
+                    snapshot.setOrgId(current.getOrgId());
+                    snapshot.setOrderDate(current.getOrderDate());
+                    snapshot.setCurrencyId(current.getCurrencyId());
+                    snapshot.setCustomerId(current.getCustomerId());
+                    snapshot.setCustomerName(current.getCustomerName());
+                    snapshot.setCustomerPhone(current.getCustomerPhone());
+                    snapshot.setDescription(current.getDescription());
+                    snapshot.setRemarks(current.getRemarks());
+                    snapshot.setReference(current.getReference());
+                    snapshot.setFulfillmentType(current.getFulfillmentType());
+                    snapshot.setIsStockDeducted(current.getIsStockDeducted());
+                    snapshot.setRevisionNumber(revIdx);
+                    snapshot.setOriginalOrderId(current.getOriginalOrderId() != null ? current.getOriginalOrderId() : current.getId());
+                    snapshot.setCreatedBy(current.getCreatedBy());
+                    snapshot.setUpdatedBy(current.getCreatedBy());
+
+                    LocalDateTime snapTime = (revIdx < sortedTimes.size()) ? sortedTimes.get(revIdx) : current.getCreatedAt();
+                    snapshot.setCreatedAt(snapTime != null ? snapTime : LocalDateTime.now());
+                    snapshot.setUpdatedAt(snapTime != null ? snapTime : LocalDateTime.now());
+
+                    // Determine the lines that belonged to this revision
+                    List<OrderLine> revLines = new java.util.ArrayList<>();
+                    if (sortedTimes.size() > 1) {
+                        LocalDateTime cutoff = (revIdx < sortedTimes.size()) ? sortedTimes.get(revIdx) : sortedTimes.get(sortedTimes.size() - 1);
+                        for (OrderLine l : activeLines) {
+                            if (l.getCreatedAt() == null || !l.getCreatedAt().isAfter(cutoff)) {
+                                revLines.add(l);
+                            }
+                        }
+                    } else {
+                        int count = Math.max(1, (revIdx + 1) * activeLines.size() / (targetRevs + 1));
+                        revLines = activeLines.subList(0, Math.min(count, activeLines.size()));
+                    }
+
+                    BigDecimal revGross = BigDecimal.ZERO;
+                    BigDecimal revTax = BigDecimal.ZERO;
+                    BigDecimal revTotal = BigDecimal.ZERO;
+
+                    for (OrderLine line : revLines) {
+                        OrderLine snapLine = OrderLine.builder()
+                                .id(UUID.randomUUID())
+                                .order(snapshot)
+                                .productId(line.getProductId())
+                                .variantId(line.getVariantId())
+                                .productName(line.getProductName())
+                                .categoryName(line.getCategoryName())
+                                .isPackagedGood(line.getIsPackagedGood())
+                                .quantity(line.getQuantity())
+                                .unitOfMeasure(line.getUnitOfMeasure())
+                                .uomPrecision(line.getUomPrecision())
+                                .unitPrice(line.getUnitPrice())
+                                .taxRate(line.getTaxRate())
+                                .taxAmount(line.getTaxAmount())
+                                .discountAmount(line.getDiscountAmount())
+                                .lineTotal(line.getLineTotal())
+                                .grossLineAmount(line.getGrossLineAmount())
+                                .unitPriceExTax(line.getUnitPriceExTax())
+                                .taxableAmount(line.getTaxableAmount())
+                                .taxType(line.getTaxType())
+                                .taxName(line.getTaxName())
+                                .taxCode(line.getTaxCode())
+                                .description(line.getDescription())
+                                .isactive("Y")
+                                .createdAt(line.getCreatedAt())
+                                .updatedAt(line.getUpdatedAt())
+                                .build();
+                        snapshot.addLine(snapLine);
+
+                        if (snapLine.getGrossLineAmount() != null) revGross = revGross.add(snapLine.getGrossLineAmount());
+                        else if (snapLine.getLineTotal() != null) revGross = revGross.add(snapLine.getLineTotal());
+
+                        if (snapLine.getTaxAmount() != null) revTax = revTax.add(snapLine.getTaxAmount());
+                        if (snapLine.getLineTotal() != null) revTotal = revTotal.add(snapLine.getLineTotal());
+                    }
+
+                    snapshot.setGrossAmount(revGross);
+                    snapshot.setTotalTaxAmount(revTax);
+                    snapshot.setTotalAmount(revTotal);
+                    snapshot.setGrandTotal(revTotal);
+
+                    try {
+                        orderRepository.saveAndFlush(snapshot);
+                    } catch (Exception ex) {
+                        log.warn("Could not persist synthesized revision snapshot {}: {}", snapOrderNo, ex.getMessage());
+                    }
+                    revisions.add(snapshot);
+                }
+
+                revisions.sort(java.util.Comparator.comparing(
+                        (Order o) -> o.getRevisionNumber() != null ? o.getRevisionNumber() : 0)
+                        .thenComparing(o -> o.getCreatedAt() != null ? o.getCreatedAt() : LocalDateTime.MIN));
+            } catch (Exception e) {
+                log.warn("Failed to backfill missing order revisions for {}: {}", baseOrderNo, e.getMessage());
+            }
+        }
+
+        return revisions.stream().map(this::hydrateOrder).toList();
     }
 
     private boolean isDiscountOnlyUpdate(Order oldOrder, Order updates) {
@@ -2295,6 +2437,8 @@ public class OrderService {
                 oldOrder.setRoundOffAmount(updates.getRoundOffAmount());
             if (updates.getRoundOffMode() != null)
                 oldOrder.setRoundOffMode(updates.getRoundOffMode());
+            if (updates.getOrderDate() != null)
+                oldOrder.setOrderDate(updates.getOrderDate());
 
             if (updates.getLines() != null) {
                 for (OrderLine upLine : updates.getLines()) {
@@ -2445,16 +2589,37 @@ public class OrderService {
         // 2. VOID the linked invoice
         List<UUID> oldInvoiceIdList = new java.util.ArrayList<>();
         String originalInvoiceNo = null;
+        Integer originalDailyBillNo = null;
         for (Invoice inv : invoiceRepository.findByOrderId(id)) {
             oldInvoiceIdList.add(inv.getId());
-            if (originalInvoiceNo == null) {
-                originalInvoiceNo = inv.getInvoiceNo();
+            if (originalInvoiceNo == null && inv.getInvoiceNo() != null) {
+                String rawNo = inv.getInvoiceNo();
+                originalInvoiceNo = rawNo.contains("_VOID_") ? rawNo.substring(0, rawNo.indexOf("_VOID_")) : rawNo;
+            }
+            if (originalDailyBillNo == null && inv.getDailyBillNo() != null && inv.getDailyBillNo() > 0) {
+                originalDailyBillNo = inv.getDailyBillNo();
             }
             accountingPostingService.reverseInvoice(inv, "Order revised");
             inv.setInvoiceNo(inv.getInvoiceNo() + "_VOID_"
                     + (oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0));
             inv.setStatus("VOID");
             invoiceRepository.saveAndFlush(inv);
+        }
+
+        if (originalDailyBillNo == null && oldOrder.getDailyBillNo() != null && oldOrder.getDailyBillNo() > 0) {
+            originalDailyBillNo = oldOrder.getDailyBillNo();
+        }
+        if (originalDailyBillNo == null && updates.getDailyBillNo() != null && updates.getDailyBillNo() > 0) {
+            originalDailyBillNo = updates.getDailyBillNo();
+        }
+        if (originalDailyBillNo == null && oldOrder.getOriginalOrderId() != null) {
+            List<Invoice> prevInvs = invoiceRepository.findByOrderId(oldOrder.getOriginalOrderId());
+            for (Invoice prevInv : prevInvs) {
+                if (prevInv.getDailyBillNo() != null && prevInv.getDailyBillNo() > 0) {
+                    originalDailyBillNo = prevInv.getDailyBillNo();
+                    break;
+                }
+            }
         }
 
         List<Payment> oldPayments = new java.util.ArrayList<>();
@@ -2492,6 +2657,8 @@ public class OrderService {
         newOrder.setOrderSource(oldOrder.getOrderSource());
         newOrder.setOriginalOrderId(oldOrder.getId());
         newOrder.setRevisionNumber((oldOrder.getRevisionNumber() != null ? oldOrder.getRevisionNumber() : 0) + 1);
+        newOrder.setDailyBillNo(originalDailyBillNo);
+        newOrder.setInvoiceNo(originalInvoiceNo);
 
         newOrder.setSourceDeviceId(oldOrder.getSourceDeviceId());
         newOrder.setSourceTerminalId(oldOrder.getSourceTerminalId());
@@ -2561,6 +2728,9 @@ public class OrderService {
         newOrder.setDescription(
                 updates.getDescription() != null ? updates.getDescription() : oldOrder.getDescription());
         newOrder.setSkipAutoPrintKinds(updates.getSkipAutoPrintKinds());
+        if (updates.getConfirmStockWarning() != null) {
+            newOrder.setConfirmStockWarning(updates.getConfirmStockWarning());
+        }
 
         // Tenant fields
         newOrder.setClientId(oldOrder.getClientId());
@@ -2610,6 +2780,8 @@ public class OrderService {
         recalculateOrderTotals(newOrder);
         prepareCreditCustomer(newOrder, Boolean.TRUE.equals(newOrder.getIsCredit()));
         prepareCustomerFields(newOrder);
+        validateGstFields(newOrder);
+        validateNonStockSalesPolicy(newOrder);
 
         // SNAPSHOT the old order's lines BEFORE saving the new order,
         // because saveAndFlush will merge and mutate the OrderLine entities in the DB,
@@ -2646,7 +2818,7 @@ public class OrderService {
         // 4. Generate new ERP documents (Invoice/Payment)
         UUID oldInvId = oldInvoiceIdList.isEmpty() ? null : oldInvoiceIdList.get(0);
         if (shouldGenerateInvoice(saved)) {
-            generateInvoice(saved, oldInvId, originalInvoiceNo);
+            generateInvoice(saved, oldInvId, originalInvoiceNo, originalDailyBillNo);
         }
         // Resolve payment method safely
         String paymentMethod = newOrder.getPaymentMethod();
@@ -2711,12 +2883,11 @@ public class OrderService {
         }
         handleTableStatus(saved);
 
-        // Inventory Hook: PURCHASE=add stock, SALE=deduct stock
+        // Inventory Hook: PURCHASE=add stock, SALE=deduct stock on creation
         if (saved.getOrderType() == OrderType.PURCHASE && "COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
             processInventoryForOrder(saved);
-        } else if (saved.getOrderType() == OrderType.SALE
-                && "COMPLETED".equalsIgnoreCase(saved.getOrderStatus())
-                && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+        } else if (isSaleOrder(saved)
+                && !"CANCELLED".equalsIgnoreCase(saved.getOrderStatus())) {
             deductStockForSale(saved);
         }
 
@@ -2817,9 +2988,8 @@ public class OrderService {
 
         if (result.getOrderType() == OrderType.PURCHASE && "COMPLETED".equalsIgnoreCase(result.getOrderStatus())) {
             processInventoryForOrder(result);
-        } else if (result.getOrderType() == OrderType.SALE
-                && "COMPLETED".equalsIgnoreCase(result.getOrderStatus())
-                && "PAID".equalsIgnoreCase(result.getPaymentStatus())) {
+        } else if (isSaleOrder(result)
+                && !"CANCELLED".equalsIgnoreCase(result.getOrderStatus())) {
             deductStockForSale(result);
         }
         Order hydrated = hydrateOrder(result);
@@ -2954,6 +3124,9 @@ public class OrderService {
                 order.getOrgId());
 
         OrderSettleRequest safeRequest = request == null ? new OrderSettleRequest() : request;
+        if (safeRequest.getConfirmStockWarning() != null) {
+            order.setConfirmStockWarning(safeRequest.getConfirmStockWarning());
+        }
         String paymentMethod = normalizePaymentMethod(safeRequest.getPaymentMethod());
         if (hasExplicitPaymentSplits(safeRequest)) {
             paymentMethod = "MIXED";
@@ -3101,13 +3274,16 @@ public class OrderService {
 
         if (saved.getOrderType() == OrderType.PURCHASE && "COMPLETED".equalsIgnoreCase(saved.getOrderStatus())) {
             processInventoryForOrder(saved);
-        } else if (saved.getOrderType() == OrderType.SALE
-                && "COMPLETED".equalsIgnoreCase(saved.getOrderStatus())
-                && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
+        } else if (isSaleOrder(saved)
+                && !"CANCELLED".equalsIgnoreCase(saved.getOrderStatus())) {
+            if (!Boolean.TRUE.equals(saved.getIsStockDeducted())) {
+                validateNonStockSalesPolicy(saved);
+            }
             deductStockForSale(saved);
         }
 
         Order hydrated = hydrateOrder(saved);
+        hydrated.setWarnings(saved.getWarnings());
         hydrated.setSkipAutoPrintKinds(safeRequest.getSkipAutoPrintKinds());
         enqueueCloudPrintJobs(hydrated);
 
@@ -3134,6 +3310,9 @@ public class OrderService {
         }
 
         OrderCreditCompletionRequest safeRequest = request == null ? new OrderCreditCompletionRequest() : request;
+        if (safeRequest.getConfirmStockWarning() != null) {
+            order.setConfirmStockWarning(safeRequest.getConfirmStockWarning());
+        }
         order.setCreditCustomerId(safeRequest.getCreditCustomerId() != null ? safeRequest.getCreditCustomerId()
                 : order.getCreditCustomerId());
         prepareCreditCustomer(order, true);
@@ -3194,8 +3373,19 @@ public class OrderService {
             }
         }
         accountingPostingService.postSaleCogs(saved);
+
+        // Deduct stock on credit completion (idempotency guard prevents duplicates)
+        if (isSaleOrder(saved)
+                && !"CANCELLED".equalsIgnoreCase(saved.getOrderStatus())) {
+            if (!Boolean.TRUE.equals(saved.getIsStockDeducted())) {
+                validateNonStockSalesPolicy(saved);
+            }
+            deductStockForSale(saved);
+        }
+
         handleTableStatus(saved);
         Order hydrated = hydrateOrder(saved);
+        hydrated.setWarnings(saved.getWarnings());
         hydrated.setSkipAutoPrintKinds(safeRequest.getSkipAutoPrintKinds());
         enqueueCloudPrintJobs(hydrated);
         return hydrated;
@@ -3236,8 +3426,10 @@ public class OrderService {
         ConfigurationDto config = configurationService.getConfigurationForClientAndBranch(order.getClientId(),
                 order.getOrgId());
 
-        boolean wasSettledSale = isSaleOrder(order)
-                && ("COMPLETED".equalsIgnoreCase(order.getOrderStatus()) || "PAID".equalsIgnoreCase(order.getPaymentStatus()));
+        boolean wasStockDeducted = isSaleOrder(order) && (
+                Boolean.TRUE.equals(order.getIsStockDeducted())
+                || hasStockDeductionLedger(order.getId())
+        );
         boolean wasCompletedPurchase = order.getOrderType() == OrderType.PURCHASE
                 && "COMPLETED".equalsIgnoreCase(order.getOrderStatus());
 
@@ -3247,7 +3439,9 @@ public class OrderService {
             order.setPaymentStatus("VOID");
         }
         if (reason != null && !reason.isBlank()) {
-            order.setDescription(appendDescription(order.getDescription(), "Cancel reason: " + reason.trim()));
+            String cancelNote = "Cancel reason: " + reason.trim();
+            order.setDescription(appendDescription(order.getDescription(), cancelNote));
+            order.setRemarks(appendDescription(order.getRemarks(), cancelNote));
         }
 
         Order saved = orderRepository.save(order);
@@ -3255,13 +3449,15 @@ public class OrderService {
             voidLinkedInvoices(saved, "Order cancelled");
             voidLinkedPayments(saved, "Order cancelled");
             accountingPostingService.reverseSaleCogs(saved, "Order cancelled");
-            if (wasSettledSale) {
+            if (wasStockDeducted) {
                 restoreStockForSale(saved);
+                saved.setIsStockDeducted(false);
+                orderRepository.save(saved);
             }
-            // ── Publish loyalty reversal event (only if loyalty is enabled) ───
-            if (config != null && config.isLoyaltyEnabled()) {
-                eventPublisher.publishEvent(new LoyaltyOrderCancelledEvent(this, saved));
-            }
+            // ── Publish loyalty reversal event ───
+            // Always publish when cancelling a sale order: the listener/command service
+            // checks whether actual transactions exist for this order and reverses them.
+            eventPublisher.publishEvent(new LoyaltyOrderCancelledEvent(this, saved));
         } else {
             voidUnpaidLinkedInvoices(saved, "Order cancelled");
             if (wasCompletedPurchase) {
@@ -3286,6 +3482,11 @@ public class OrderService {
 
     @Transactional
     public Invoice generateInvoice(Order order, UUID originalInvoiceId, String requestedInvoiceNo) {
+        return generateInvoice(order, originalInvoiceId, requestedInvoiceNo, null);
+    }
+
+    @Transactional
+    public Invoice generateInvoice(Order order, UUID originalInvoiceId, String requestedInvoiceNo, Integer requestedDailyBillNo) {
         if (!invoiceRepository.findByOrderId(order.getId()).isEmpty())
             return null;
 
@@ -3309,11 +3510,38 @@ public class OrderService {
             default -> InvoiceType.CUSTOMER_INVOICE;
         };
 
+        Integer dailyBillNo = (requestedDailyBillNo != null && requestedDailyBillNo > 0)
+                ? requestedDailyBillNo
+                : null;
+
+        if (dailyBillNo == null && originalInvoiceId != null) {
+            dailyBillNo = invoiceRepository.findById(originalInvoiceId)
+                    .map(Invoice::getDailyBillNo)
+                    .filter(n -> n != null && n > 0)
+                    .orElse(null);
+        }
+
+        if (dailyBillNo == null && order.getDailyBillNo() != null && order.getDailyBillNo() > 0) {
+            dailyBillNo = order.getDailyBillNo();
+        }
+
+        if (dailyBillNo == null && order.getOriginalOrderId() != null) {
+            List<Invoice> prevInvoices = invoiceRepository.findByOrderId(order.getOriginalOrderId());
+            for (Invoice prevInv : prevInvoices) {
+                if (prevInv.getDailyBillNo() != null && prevInv.getDailyBillNo() > 0) {
+                    dailyBillNo = prevInv.getDailyBillNo();
+                    break;
+                }
+            }
+        }
+
         LocalDateTime invoiceDate = sourceBusinessDateTime(order);
-        LocalDateTime start = invoiceDate.toLocalDate().atStartOfDay();
-        LocalDateTime end = invoiceDate.toLocalDate().atTime(23, 59, 59, 999999999);
-        int maxNo = invoiceRepository.findMaxDailyBillNo(clientId, orgId, start, end);
-        int dailyBillNo = maxNo + 1;
+        if (dailyBillNo == null) {
+            LocalDateTime start = invoiceDate.toLocalDate().atStartOfDay();
+            LocalDateTime end = invoiceDate.toLocalDate().atTime(23, 59, 59, 999999999);
+            int maxNo = invoiceRepository.findMaxDailyBillNo(clientId, orgId, start, end);
+            dailyBillNo = maxNo + 1;
+        }
 
         Invoice invoice = Invoice.builder()
                 .invoiceType(invoiceType)
@@ -3859,10 +4087,13 @@ public class OrderService {
             return;
         }
         String policy = config.getNonStockSalesPolicy() != null
-                ? config.getNonStockSalesPolicy()
+                ? config.getNonStockSalesPolicy().trim().toUpperCase()
                 : "NONE";
 
-        if (!"BLOCK".equalsIgnoreCase(policy)) {
+        boolean isBlock = "BLOCK".equalsIgnoreCase(policy);
+        boolean isWarn = "WARNING".equalsIgnoreCase(policy) || "WARN".equalsIgnoreCase(policy);
+
+        if (!isBlock && !isWarn) {
             return;
         }
 
@@ -3875,6 +4106,8 @@ public class OrderService {
         if (warehouseId == null) {
             return;
         }
+
+        List<String> warnings = new ArrayList<>();
 
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
             if (line.getProductId() == null) continue;
@@ -3894,9 +4127,12 @@ public class OrderService {
                 BigDecimal available = snapshot != null && snapshot.getCurrentQuantity() != null ? snapshot.getCurrentQuantity() : BigDecimal.ZERO;
                 if (available.compareTo(BigDecimal.ZERO) <= 0 || available.compareTo(reqQty) < 0) {
                     String prodName = line.getProductName() != null ? line.getProductName() : (product != null ? product.getName() : "Item");
-                    throw new BusinessException(
-                            "Cannot sell '" + prodName + "' - out of stock (Available: " + available + ", Required: " + reqQty + ")."
-                    );
+                    String msg = "Cannot sell '" + prodName + "' - out of stock (Available: " + available + ", Required: " + reqQty + ").";
+                    if (isBlock) {
+                        throw new BusinessException(msg);
+                    } else {
+                        warnings.add("'" + prodName + "' is out of stock (Available: " + available + ", Required: " + reqQty + ")");
+                    }
                 }
             } else {
                 for (com.restaurant.pos.product.domain.ProductRecipe recipe : recipes) {
@@ -3908,16 +4144,37 @@ public class OrderService {
                     if (available.compareTo(BigDecimal.ZERO) <= 0 || available.compareTo(needed) < 0) {
                         String ingName = recipe.getIngredient().getName() != null ? recipe.getIngredient().getName() : "Ingredient";
                         String prodName = line.getProductName() != null ? line.getProductName() : (product != null ? product.getName() : "Item");
-                        throw new BusinessException(
-                                "Cannot sell '" + prodName + "' - ingredient '" + ingName + "' is out of stock (Available: " + available + ", Required: " + needed + ")."
-                        );
+                        String msg = "Cannot sell '" + prodName + "' - ingredient '" + ingName + "' is out of stock (Available: " + available + ", Required: " + needed + ").";
+                        if (isBlock) {
+                            throw new BusinessException(msg);
+                        } else {
+                            warnings.add("'" + prodName + "' - ingredient '" + ingName + "' is out of stock (Available: " + available + ", Required: " + needed + ")");
+                        }
                     }
                 }
+            }
+        }
+
+        if (!warnings.isEmpty()) {
+            if (order.getWarnings() == null) {
+                order.setWarnings(new ArrayList<>());
+            }
+            order.getWarnings().addAll(warnings);
+            log.warn("Non-stock sales policy warning for order: {}", warnings);
+
+            if (isWarn && !Boolean.TRUE.equals(order.getConfirmStockWarning())) {
+                throw new com.restaurant.pos.common.exception.StockWarningException(warnings);
             }
         }
     }
 
     private void deductStockForSale(Order order) {
+        // Idempotency guard: skip if stock was already deducted for this order
+        if (Boolean.TRUE.equals(order.getIsStockDeducted())) {
+            log.debug("Stock already deducted for order {} — skipping", order.getId());
+            return;
+        }
+
         if (order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
@@ -3940,6 +4197,10 @@ public class OrderService {
             return;
         }
 
+        if (order.getWarehouseId() == null) {
+            order.setWarehouseId(warehouseId);
+        }
+
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
             if (line.getProductId() == null) {
                 continue;
@@ -3959,7 +4220,7 @@ public class OrderService {
 
             if (recipes.isEmpty()) {
                 deductStock(warehouseId, line.getProductId(), line.getVariantId(),
-                        soldQty, order, orgId);
+                        soldQty, order, orgId, clientId);
                 continue;
             }
 
@@ -4001,9 +4262,15 @@ public class OrderService {
                         null,
                         soldQty.multiply(recipe.getQuantity()),
                         order,
-                        orgId);
+                        orgId,
+                        clientId);
             }
         }
+
+        // Mark stock as deducted and persist
+        order.setIsStockDeducted(true);
+        orderRepository.save(order);
+        log.info("Stock deducted for sale order {}", order.getId());
     }
 
     private List<com.restaurant.pos.product.domain.ProductRecipe> getActiveRecipes(Product product) {
@@ -4024,7 +4291,8 @@ public class OrderService {
             UUID variantId,
             BigDecimal quantity,
             Order order,
-            UUID orgId) {
+            UUID orgId,
+            UUID clientId) {
 
         try {
             inventoryService.updateStock(
@@ -4035,7 +4303,8 @@ public class OrderService {
                     "SALE_DEDUCTION",
                     order.getId(),
                     BigDecimal.ZERO,
-                    orgId);
+                    orgId,
+                    clientId);
 
             log.debug("Deducted {} of stock item {} for order {}",
                     quantity, stockItemId, order.getId());
@@ -4046,21 +4315,78 @@ public class OrderService {
         }
     }
 
-    private void restoreStockForSale(Order order) {
-        if (order.getLines() == null || order.getLines().isEmpty()) {
-            return;
+    boolean hasStockDeductionLedger(UUID orderId) {
+        if (orderId == null || stockLedgerRepository == null) {
+            return false;
         }
+        try {
+            List<com.restaurant.pos.inventory.domain.StockLedger> ledgers = stockLedgerRepository.findByReferenceId(orderId);
+            return ledgers != null && ledgers.stream()
+                    .anyMatch(l -> "SALE_DEDUCTION".equalsIgnoreCase(l.getTransactionType()));
+        } catch (Exception ex) {
+            log.warn("Failed to check stock ledger for orderId={}", orderId, ex);
+            return false;
+        }
+    }
 
+    void restoreStockForSale(Order order) {
         UUID clientId = order.getClientId() != null
                 ? order.getClientId()
                 : TenantContext.getCurrentTenant();
         UUID orgId = order.getOrgId();
-        UUID warehouseId = order.getWarehouseId();
 
+        // 1. Check if we have exact SALE_DEDUCTION ledger entries recorded for this order
+        List<com.restaurant.pos.inventory.domain.StockLedger> ledgers = null;
+        try {
+            ledgers = stockLedgerRepository.findByReferenceId(order.getId());
+        } catch (Exception ex) {
+            log.warn("Could not query stock ledgers for orderId={}", order.getId(), ex);
+        }
+
+        if (ledgers != null && !ledgers.isEmpty()) {
+            boolean alreadyRestored = ledgers.stream()
+                    .anyMatch(l -> "SALE_VOID_RESTORE".equalsIgnoreCase(l.getTransactionType()));
+            if (alreadyRestored) {
+                log.info("Stock for order {} already restored in ledger — skipping duplicate restoration", order.getId());
+                return;
+            }
+
+            List<com.restaurant.pos.inventory.domain.StockLedger> deductions = ledgers.stream()
+                    .filter(l -> "SALE_DEDUCTION".equalsIgnoreCase(l.getTransactionType()))
+                    .toList();
+
+            if (!deductions.isEmpty()) {
+                log.info("Restoring stock for order {} directly from {} stock ledger deduction entries",
+                        order.getId(), deductions.size());
+                for (com.restaurant.pos.inventory.domain.StockLedger deduction : deductions) {
+                    BigDecimal returnQty = deduction.getQuantityChange() != null
+                            ? deduction.getQuantityChange().abs()
+                            : BigDecimal.ZERO;
+                    if (returnQty.signum() <= 0) continue;
+
+                    UUID effectiveOrg = deduction.getOrgId() != null ? deduction.getOrgId() : orgId;
+                    UUID effectiveClient = deduction.getClientId() != null ? deduction.getClientId() : clientId;
+
+                    restoreStock(deduction.getWarehouseId(), deduction.getProductId(), deduction.getVariantId(),
+                            returnQty, order, effectiveOrg, effectiveClient);
+                }
+                return;
+            }
+        }
+
+        // 2. Fallback: line-by-line / recipe BOM restoration if no ledger entries were found
+        if (order.getLines() == null || order.getLines().isEmpty()) {
+            return;
+        }
+
+        UUID warehouseId = order.getWarehouseId();
         if (warehouseId == null) {
             warehouseId = inventoryService.findDefaultWarehouse(clientId, orgId)
                     .map(com.restaurant.pos.warehouse.domain.Warehouse::getId)
                     .orElse(null);
+            if (warehouseId != null) {
+                order.setWarehouseId(warehouseId);
+            }
         }
 
         if (warehouseId == null) {
@@ -4088,7 +4414,7 @@ public class OrderService {
 
             if (recipes.isEmpty()) {
                 restoreStock(warehouseId, line.getProductId(), line.getVariantId(),
-                        returnQty, order, orgId);
+                        returnQty, order, orgId, clientId);
                 continue;
             }
 
@@ -4130,7 +4456,8 @@ public class OrderService {
                         null,
                         returnQty.multiply(recipe.getQuantity()),
                         order,
-                        orgId);
+                        orgId,
+                        clientId);
             }
         }
     }
@@ -4141,7 +4468,8 @@ public class OrderService {
             UUID variantId,
             BigDecimal quantity,
             Order order,
-            UUID orgId) {
+            UUID orgId,
+            UUID clientId) {
 
         try {
             inventoryService.updateStock(
@@ -4152,7 +4480,8 @@ public class OrderService {
                     "SALE_VOID_RESTORE",
                     order.getId(),
                     BigDecimal.ZERO,
-                    orgId);
+                    orgId,
+                    clientId);
 
             log.info("Restored {} of stock item {} for voided order {}",
                     quantity, stockItemId, order.getId());

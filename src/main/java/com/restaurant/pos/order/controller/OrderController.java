@@ -305,7 +305,10 @@ public class OrderController {
 
         com.restaurant.pos.order.dto.IdempotentCreateResult result = orderService.createOrderIdempotently(mappedEntity);
         HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
-        return ResponseEntity.status(status).body(ApiResponse.success(orderDtoMapper.toResponseDto(result.order())));
+        Order savedOrder = result.order();
+        OrderResponseDto responseDto = orderDtoMapper.toResponseDto(savedOrder);
+        java.util.List<String> warnings = savedOrder != null ? savedOrder.getWarnings() : null;
+        return ResponseEntity.status(status).body(ApiResponse.successWithWarnings(responseDto, warnings));
     }
 
     @RequestMapping(value = "/{id}", method = {RequestMethod.PATCH, RequestMethod.PUT})
@@ -418,7 +421,7 @@ public class OrderController {
                 OrderResponseDto.class,
                 () -> orderDtoMapper.toResponseDto(orderService.settleOrder(id, request))
         );
-        return ResponseEntity.ok(ApiResponse.success(responseDto));
+        return ResponseEntity.ok(ApiResponse.successWithWarnings(responseDto, responseDto != null ? responseDto.getWarnings() : null));
     }
 
     @PostMapping("/{id}/complete-credit")
@@ -446,7 +449,7 @@ public class OrderController {
                 OrderResponseDto.class,
                 () -> orderDtoMapper.toResponseDto(orderService.completeCreditOrder(id, request))
         );
-        return ResponseEntity.ok(ApiResponse.success(responseDto));
+        return ResponseEntity.ok(ApiResponse.successWithWarnings(responseDto, responseDto != null ? responseDto.getWarnings() : null));
     }
 
     @PostMapping("/{id}/move-table")

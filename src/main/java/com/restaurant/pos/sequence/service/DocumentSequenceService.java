@@ -57,6 +57,16 @@ public class DocumentSequenceService {
         return generateNextSequence(clientId, resolvedOrgId, type);
     }
 
+    /**
+     * Generates a sequence number using explicit client and org IDs.
+     * Use this for PUBLIC / unauthenticated endpoints (e.g. QR Menu ordering)
+     * where TenantContext is not populated and BranchContextService would throw.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public String generateNextSequenceExplicit(UUID clientId, UUID orgId, DocumentType type) {
+        return generateNextSequence(clientId, orgId, type);
+    }
+
     private String generateNextSequence(UUID clientId, UUID orgId, DocumentType type) {
 
         // 1. Pessimistic lock fetches the row, blocking other threads

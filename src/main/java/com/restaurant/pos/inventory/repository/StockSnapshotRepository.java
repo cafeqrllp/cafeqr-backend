@@ -29,4 +29,7 @@ public interface StockSnapshotRepository extends JpaRepository<StockSnapshot, UU
     List<StockSnapshot> findByClientId(UUID clientId);
 
     List<StockSnapshot> findByClientIdAndOrgId(UUID clientId, UUID orgId);
+
+    @Query("SELECT s FROM StockSnapshot s WHERE s.clientId = :clientId AND (:orgId IS NULL OR s.orgId = :orgId OR s.orgId IS NULL)")
+    List<StockSnapshot> findByClientIdAndOrgIdOrGlobal(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
 }
