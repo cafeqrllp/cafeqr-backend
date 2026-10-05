@@ -53,6 +53,7 @@ public class EmployeeService {
     @Transactional
     public EmployeeDto createEmployee(EmployeeDto dto) {
         validateEmployeeDto(dto);
+        validateDuplicateEmployee(dto, null);
         Employee employee = new Employee();
         mapToEntity(dto, employee);
         Employee saved = employeeRepository.save(employee);
@@ -70,6 +71,7 @@ public class EmployeeService {
     @Transactional
     public EmployeeDto updateEmployee(UUID id, EmployeeDto dto) {
         validateEmployeeDto(dto);
+        validateDuplicateEmployee(dto, id);
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
         
@@ -85,6 +87,27 @@ public class EmployeeService {
         }
         
         return resultDto;
+    }
+
+    private void validateDuplicateEmployee(EmployeeDto dto, UUID excludeId) {
+        UUID clientId = TenantContext.getCurrentTenant();
+        if (clientId == null) return;
+
+        if (dto.getEmail() != null && !dto.getEmail().isBlank()) {
+            String email = dto.getEmail().trim();
+            if (employeeRepository.existsByEmailAndClientId(email, clientId, excludeId)) {
+                throw new BusinessException("An employee with the email address '" + email + "' already exists.");
+            }
+        }
+
+        if (dto.getFirstName() != null && !dto.getFirstName().isBlank()) {
+            String firstName = dto.getFirstName().trim();
+            String lastName = dto.getLastName() != null ? dto.getLastName().trim() : "";
+            if (employeeRepository.existsByFirstNameAndLastNameAndClientId(firstName, lastName, clientId, excludeId)) {
+                String fullName = (firstName + " " + lastName).trim();
+                throw new BusinessException("An employee named '" + fullName + "' already exists in the system.");
+            }
+        }
     }
 
     private void validateEmployeeDto(EmployeeDto dto) {

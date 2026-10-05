@@ -351,6 +351,7 @@ public class SystemConfigurationService {
                 .printAutoCut(source.isPrintAutoCut())
                 .printWinListUrl(source.getPrintWinListUrl())
                 .printWinPostUrl(source.getPrintWinPostUrl())
+                .disableEscMargins(source.isDisableEscMargins())
                 .build();
     }
 
@@ -503,6 +504,7 @@ public class SystemConfigurationService {
                 .printAutoCut(entity.isPrintAutoCut())
                 .printWinListUrl(entity.getPrintWinListUrl())
                 .printWinPostUrl(entity.getPrintWinPostUrl())
+                .disableEscMargins(entity.isDisableEscMargins())
                 .logoUrl(resolvedLogoUrl)
                 .restaurantName(resolvedRestaurantName)
                 .phone(resolvedPhone)
@@ -593,6 +595,7 @@ public class SystemConfigurationService {
         entity.setPrintAutoCut(dto.isPrintAutoCut());
         if (dto.getPrintWinListUrl() != null) entity.setPrintWinListUrl(dto.getPrintWinListUrl());
         if (dto.getPrintWinPostUrl() != null) entity.setPrintWinPostUrl(dto.getPrintWinPostUrl());
+        entity.setDisableEscMargins(dto.isDisableEscMargins());
     }
 
     private List<Object> parseTaxRates(String json) {

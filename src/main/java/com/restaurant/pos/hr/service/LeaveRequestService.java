@@ -46,6 +46,18 @@ public class LeaveRequestService {
 
     @Transactional
     public LeaveRequestDto createLeaveRequest(LeaveRequestDto dto) {
+        if (dto.getStartDate() == null || dto.getEndDate() == null) {
+            throw new IllegalArgumentException("Start date and end date are required.");
+        }
+        if (dto.getStartDate().isAfter(dto.getEndDate())) {
+            throw new IllegalArgumentException("End date cannot be earlier than start date.");
+        }
+        int startYear = dto.getStartDate().getYear();
+        int endYear = dto.getEndDate().getYear();
+        if (startYear < 2000 || startYear > 2100 || endYear < 2000 || endYear > 2100) {
+            throw new IllegalArgumentException("Invalid date range: Year must be between 2000 and 2100.");
+        }
+
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
         
@@ -57,9 +69,11 @@ public class LeaveRequestService {
         leave.setLeaveType(dto.getLeaveType());
         leave.setStartDate(dto.getStartDate());
         leave.setEndDate(dto.getEndDate());
-        leave.setTotalDays(dto.getTotalDays());
+        
+        long calculatedDays = java.time.temporal.ChronoUnit.DAYS.between(dto.getStartDate(), dto.getEndDate()) + 1;
+        leave.setTotalDays((int) calculatedDays);
         leave.setReason(dto.getReason());
-        leave.setStatus("PENDING");
+        leave.setStatus(dto.getStatus() != null ? dto.getStatus() : "PENDING");
         
         LeaveRequest saved = leaveRequestRepository.save(leave);
         return mapToDto(saved);
@@ -109,7 +123,20 @@ public class LeaveRequestService {
         if (dto.getLeaveType() != null) leave.setLeaveType(dto.getLeaveType());
         if (dto.getStartDate() != null) leave.setStartDate(dto.getStartDate());
         if (dto.getEndDate() != null) leave.setEndDate(dto.getEndDate());
-        if (dto.getTotalDays() != null) leave.setTotalDays(dto.getTotalDays());
+
+        if (leave.getStartDate() != null && leave.getEndDate() != null) {
+            if (leave.getStartDate().isAfter(leave.getEndDate())) {
+                throw new IllegalArgumentException("End date cannot be earlier than start date.");
+            }
+            int startYear = leave.getStartDate().getYear();
+            int endYear = leave.getEndDate().getYear();
+            if (startYear < 2000 || startYear > 2100 || endYear < 2000 || endYear > 2100) {
+                throw new IllegalArgumentException("Invalid date range: Year must be between 2000 and 2100.");
+            }
+            long calculatedDays = java.time.temporal.ChronoUnit.DAYS.between(leave.getStartDate(), leave.getEndDate()) + 1;
+            leave.setTotalDays((int) calculatedDays);
+        }
+
         if (dto.getReason() != null) leave.setReason(dto.getReason());
         if (dto.getStatus() != null) leave.setStatus(dto.getStatus());
 

@@ -42,6 +42,9 @@ public class Attendance extends BaseEntity {
     @Column(name = "overtime_hours", precision = 5, scale = 2)
     private BigDecimal overtimeHours = BigDecimal.ZERO;
 
+    @Column(name = "shortfall_hours", precision = 5, scale = 2)
+    private BigDecimal shortfallHours = BigDecimal.ZERO;
+
     @Column(name = "status")
     private String status; // e.g., PRESENT, HALF_DAY, ABSENT
 

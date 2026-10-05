@@ -189,8 +189,14 @@ public class AttendanceService {
         
         if (totalWorked.compareTo(threshold) > 0) {
             attendance.setOvertimeHours(totalWorked.subtract(threshold));
+            attendance.setShortfallHours(BigDecimal.ZERO);
         } else {
             attendance.setOvertimeHours(BigDecimal.ZERO);
+            if (!"ABSENT".equalsIgnoreCase(attendance.getStatus()) && lastOut != null && totalWorked.compareTo(BigDecimal.ZERO) > 0) {
+                attendance.setShortfallHours(threshold.subtract(totalWorked).setScale(2, RoundingMode.HALF_UP));
+            } else {
+                attendance.setShortfallHours(BigDecimal.ZERO);
+            }
         }
     }
 
@@ -432,8 +438,13 @@ public class AttendanceService {
 
         BigDecimal totalWorked = entity.getTotalHoursWorked() != null ? entity.getTotalHoursWorked() : BigDecimal.ZERO;
         BigDecimal computedOt = BigDecimal.ZERO;
-        if (!"ABSENT".equalsIgnoreCase(entity.getStatus()) && totalWorked.compareTo(threshold) > 0) {
-            computedOt = totalWorked.subtract(threshold);
+        BigDecimal computedShortfall = BigDecimal.ZERO;
+        if (!"ABSENT".equalsIgnoreCase(entity.getStatus())) {
+            if (totalWorked.compareTo(threshold) > 0) {
+                computedOt = totalWorked.subtract(threshold);
+            } else if (entity.getClockOutTime() != null && totalWorked.compareTo(BigDecimal.ZERO) > 0 && totalWorked.compareTo(threshold) < 0) {
+                computedShortfall = threshold.subtract(totalWorked);
+            }
         }
 
         return AttendanceDto.builder()
@@ -445,6 +456,7 @@ public class AttendanceService {
                 .clockOutTime(entity.getClockOutTime())
                 .totalHoursWorked(entity.getTotalHoursWorked())
                 .overtimeHours(computedOt)
+                .shortfallHours(computedShortfall.setScale(2, RoundingMode.HALF_UP))
                 .status(entity.getStatus())
                 .punchMethod(entity.getPunchMethod())
                 .totalBreakHours(totalBreak.setScale(2, RoundingMode.HALF_UP))

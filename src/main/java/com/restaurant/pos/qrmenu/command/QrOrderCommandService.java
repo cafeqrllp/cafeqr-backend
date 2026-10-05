@@ -323,8 +323,8 @@ public class QrOrderCommandService {
                     .taxName(lineTaxName)
                     .taxCode(product.getTaxCode())
                     .description(itemNote)
-                    .createdAt(branchNow)
-                    .updatedAt(branchNow)
+                    .createdAt(LocalDateTime.now(java.time.ZoneOffset.UTC))
+                    .updatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC))
                     .isactive("Y")
                     .build();
 
@@ -386,7 +386,7 @@ public class QrOrderCommandService {
             targetOrder.setTotalTaxAmount((targetOrder.getTotalTaxAmount() != null ? targetOrder.getTotalTaxAmount() : BigDecimal.ZERO).add(addedTax));
             targetOrder.setTotalAmount(newGrandTotal);
             targetOrder.setGrandTotal(newGrandTotal);
-            targetOrder.setUpdatedAt(branchNow);
+            targetOrder.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             targetOrder.setUpdatedBy(customerAuditUser);
 
             if (targetOrder.getCreatedBy() == null || targetOrder.getCreatedBy().isBlank()) {
@@ -458,8 +458,6 @@ public class QrOrderCommandService {
                     .isactive("Y")
                     .build();
 
-            order.setCreatedAt(branchNow);
-            order.setUpdatedAt(branchNow);
             order.setCreatedBy(customerAuditUser);
             order.setUpdatedBy(customerAuditUser);
 
@@ -835,7 +833,7 @@ public class QrOrderCommandService {
                 }
             }
 
-            existingLine.setUpdatedAt(branchNow);
+            existingLine.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         } else {
             targetOrder.addLine(newLine);
         }
@@ -991,8 +989,8 @@ public class QrOrderCommandService {
             snapshot.setOriginalOrderId(targetOrder.getOriginalOrderId() != null ? targetOrder.getOriginalOrderId() : targetOrder.getId());
             snapshot.setCreatedBy(targetOrder.getCreatedBy());
             snapshot.setUpdatedBy(targetOrder.getUpdatedBy());
-            snapshot.setCreatedAt(targetOrder.getCreatedAt() != null ? targetOrder.getCreatedAt() : LocalDateTime.now());
-            snapshot.setUpdatedAt(targetOrder.getUpdatedAt() != null ? targetOrder.getUpdatedAt() : LocalDateTime.now());
+            snapshot.setCreatedAt(targetOrder.getCreatedAt() != null ? targetOrder.getCreatedAt() : LocalDateTime.now(java.time.ZoneOffset.UTC));
+            snapshot.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
 
             if (targetOrder.getLines() != null) {
                 for (OrderLine line : targetOrder.getLines()) {

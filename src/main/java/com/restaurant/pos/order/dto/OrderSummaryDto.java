@@ -40,6 +40,7 @@ public class OrderSummaryDto {
     private BigDecimal totalDiscountAmount;
     private BigDecimal grandTotal;
     private BigDecimal grossAmount;
+    private BigDecimal roundOffAmount;
     private String discountCalculationVersion;
     private Instant orderDate;
     private LocalDateTime createdAt;

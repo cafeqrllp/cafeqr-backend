@@ -345,6 +345,14 @@ public class OrderService {
         if (order.getSyncOrigin() == null || order.getSyncOrigin().isBlank()) {
             order.setSyncOrigin(order.getSourceOperationId() == null ? "CLOUD_ONLINE" : "OFFLINE_QUEUE");
         }
+        if (order.getOrderDate() == null) {
+            if (order.getOfflineCreatedAt() != null) {
+                ZoneId zoneId = timezoneResolver.resolveTimezone(order.getClientId(), order.getOrgId());
+                order.setOrderDate(order.getOfflineCreatedAt().atZone(zoneId).toInstant());
+            } else {
+                order.setOrderDate(Instant.now());
+            }
+        }
         if (order.getCurrencyId() == null) {
             UUID orgId = order.getOrgId();
             if (orgId == null) {
@@ -436,6 +444,10 @@ public class OrderService {
         }
         if (order != null && order.getOfflineCreatedAt() != null) {
             return order.getOfflineCreatedAt();
+        }
+        if (order != null && order.getCreatedAt() != null) {
+            ZoneId zoneId = timezoneResolver.resolveTimezone(order.getClientId(), order.getOrgId());
+            return order.getCreatedAt().atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zoneId).toLocalDateTime();
         }
         return LocalDateTime.now();
     }
@@ -1400,6 +1412,16 @@ public class OrderService {
             }
         }
 
+        BigDecimal ro = hydrated.getRoundOffAmount();
+        if (ro == null && hydrated.getGrandTotal() != null && hydrated.getTotalAmount() != null) {
+            ro = hydrated.getGrandTotal().subtract(hydrated.getTotalAmount());
+        }
+        Instant resolvedOrderDate = hydrated.getOrderDate();
+        if (resolvedOrderDate == null && hydrated.getCreatedAt() != null) {
+            ZoneId zoneId = timezoneResolver.resolveTimezone(hydrated.getClientId(), hydrated.getOrgId());
+            resolvedOrderDate = hydrated.getCreatedAt().atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zoneId).toInstant();
+        }
+
         return OrderSummaryDto.builder()
                 .id(hydrated.getId())
                 .orderNo(hydrated.getOrderNo())
@@ -1420,8 +1442,9 @@ public class OrderService {
                 .totalDiscountAmount(hydrated.getTotalDiscountAmount())
                 .grandTotal(hydrated.getGrandTotal())
                 .grossAmount(hydrated.getGrossAmount())
+                .roundOffAmount(ro)
                 .discountCalculationVersion(hydrated.getDiscountCalculationVersion())
-                .orderDate(hydrated.getOrderDate())
+                .orderDate(resolvedOrderDate)
                 .createdAt(hydrated.getCreatedAt())
                 .updatedAt(hydrated.getUpdatedAt())
                 .createdBy(resolveUserDisplayName(hydrated.getCreatedBy()))
@@ -2268,8 +2291,8 @@ public class OrderService {
                     snapshot.setUpdatedBy(current.getCreatedBy());
 
                     LocalDateTime snapTime = (revIdx < sortedTimes.size()) ? sortedTimes.get(revIdx) : current.getCreatedAt();
-                    snapshot.setCreatedAt(snapTime != null ? snapTime : LocalDateTime.now());
-                    snapshot.setUpdatedAt(snapTime != null ? snapTime : LocalDateTime.now());
+                    snapshot.setCreatedAt(snapTime != null ? snapTime : LocalDateTime.now(java.time.ZoneOffset.UTC));
+                    snapshot.setUpdatedAt(snapTime != null ? snapTime : LocalDateTime.now(java.time.ZoneOffset.UTC));
 
                     // Determine the lines that belonged to this revision
                     List<OrderLine> revLines = new java.util.ArrayList<>();

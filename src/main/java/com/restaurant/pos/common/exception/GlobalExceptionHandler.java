@@ -1,25 +1,18 @@
 package com.restaurant.pos.common.exception;
 
 import com.restaurant.pos.common.dto.ApiResponse;
-import com.restaurant.pos.common.diagnostics.RuntimeEndpointLoggingInterceptor;
-import com.restaurant.pos.common.tenant.TenantContext;
-import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.print.exception.PrintConfigurationConflictException;
 import com.restaurant.pos.print.exception.PrintStationAuthenticationException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.AuthenticationException;
-import com.restaurant.pos.print.exception.PrintConfigurationConflictException;
-import com.restaurant.pos.print.exception.PrintStationAuthenticationException;
-
 import java.util.stream.Collectors;
 
 @Slf4j

@@ -132,6 +132,10 @@ public class SystemConfiguration {
     private boolean printAutoCut;
     private String printWinListUrl;
     private String printWinPostUrl;
+    
+    @Builder.Default
+    @Column(name = "disable_esc_margins")
+    private boolean disableEscMargins = false;
 
     // Auditing
     @CreatedDate

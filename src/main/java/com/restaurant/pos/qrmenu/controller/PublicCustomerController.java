@@ -126,14 +126,25 @@ public class PublicCustomerController {
             }
         }
 
-        Optional<Customer> existing = isEmail 
-                ? customerRepository.findFirstByEmailIgnoreCaseAndClientId(sanitized, clientId)
-                : customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(sanitized, clientId);
+        String cleanPhone = normalizePhone(phone);
+        Optional<Customer> existing = Optional.empty();
+        if (isEmail) {
+            existing = customerRepository.findFirstByEmailIgnoreCaseAndClientId(sanitized, clientId);
+            if (existing.isEmpty() && cleanPhone != null && !cleanPhone.isBlank()) {
+                existing = customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(cleanPhone, clientId);
+            }
+        } else {
+            existing = customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(sanitized, clientId);
+        }
                 
         Customer customer;
         if (existing.isPresent()) {
             customer = existing.get();
             boolean updated = false;
+            if (isEmail && (customer.getEmail() == null || customer.getEmail().isBlank())) {
+                customer.setEmail(sanitized);
+                updated = true;
+            }
             // Update name only if current name is missing/Guest, or a valid non-Guest name is supplied on signup
             if (name != null && !name.isBlank() && !name.equalsIgnoreCase("Guest")) {
                 if (customer.getName() == null || customer.getName().isBlank() || "Guest".equalsIgnoreCase(customer.getName())) {
@@ -141,38 +152,61 @@ public class PublicCustomerController {
                     updated = true;
                 }
             }
-            // Update phone only if missing or if a valid phone number is supplied
-            if (phone != null && !phone.isBlank()) {
-                String cleanPhone = normalizePhone(phone);
+            // Update phone only if missing or if a valid phone number is supplied and not already owned by another record
+            if (cleanPhone != null && !cleanPhone.isBlank()) {
                 if (customer.getPhone() == null || customer.getPhone().isBlank()) {
-                    customer.setPhone(cleanPhone);
-                    updated = true;
+                    boolean phoneTaken = customerRepository.existsByClientIdAndPhoneAndIdNot(clientId, cleanPhone, customer.getId());
+                    if (!phoneTaken) {
+                        customer.setPhone(cleanPhone);
+                        updated = true;
+                    }
                 }
             }
             if (updated) {
                 customer = customerRepository.save(customer);
             }
         } else {
-            String initialName = (name != null && !name.isBlank()) 
-                    ? name.trim() 
-                    : (isEmail && sanitized.contains("@") ? sanitized.split("@")[0] : "Guest");
-            customer = Customer.builder()
-                    .name(initialName)
-                    .customerCategory("REGULAR")
-                    .isactive("Y")
-                    .build();
-            if (isEmail) {
-                customer.setEmail(sanitized);
-                if (phone != null && !phone.isBlank()) {
-                    customer.setPhone(normalizePhone(phone));
+            if (cleanPhone != null && !cleanPhone.isBlank()) {
+                Optional<Customer> phoneExisting = customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(cleanPhone, clientId);
+                if (phoneExisting.isPresent()) {
+                    customer = phoneExisting.get();
+                    if (isEmail && (customer.getEmail() == null || customer.getEmail().isBlank())) {
+                        customer.setEmail(sanitized);
+                    }
+                    if (name != null && !name.isBlank() && !name.equalsIgnoreCase("Guest")) {
+                        if (customer.getName() == null || customer.getName().isBlank() || "Guest".equalsIgnoreCase(customer.getName())) {
+                            customer.setName(name.trim());
+                        }
+                    }
+                    customer = customerRepository.save(customer);
+                    existing = Optional.of(customer);
                 }
-            } else {
-                customer.setPhone(sanitized);
             }
-            
-            customer.setClientId(clientId);
-            customer.setOrgId(null);
-            customer = customerRepository.save(customer);
+
+            if (existing.isEmpty()) {
+                String initialName = (name != null && !name.isBlank()) 
+                        ? name.trim() 
+                        : (isEmail && sanitized.contains("@") ? sanitized.split("@")[0] : "Guest");
+                customer = Customer.builder()
+                        .name(initialName)
+                        .customerCategory("REGULAR")
+                        .isactive("Y")
+                        .build();
+                if (isEmail) {
+                    customer.setEmail(sanitized);
+                    if (cleanPhone != null && !cleanPhone.isBlank()) {
+                        customer.setPhone(cleanPhone);
+                    }
+                } else {
+                    customer.setPhone(sanitized);
+                }
+                
+                customer.setClientId(clientId);
+                customer.setOrgId(null);
+                customer = customerRepository.save(customer);
+            } else {
+                customer = existing.get();
+            }
         }
 
         assert customer.getName() != null;

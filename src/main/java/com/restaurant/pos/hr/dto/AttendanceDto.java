@@ -23,6 +23,7 @@ public class AttendanceDto {
     private LocalDateTime clockOutTime;
     private BigDecimal totalHoursWorked;
     private BigDecimal overtimeHours;
+    private BigDecimal shortfallHours;
     private String status;
     private String punchMethod;
     private BigDecimal totalBreakHours;
