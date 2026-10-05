@@ -18,6 +18,9 @@ public class SalarySlipDto {
     private String employeeName;
     private UUID payrollRunId;
     private BigDecimal totalWorkedHours;
+    private BigDecimal regularHours;
+    private BigDecimal overtimeHours;
+    private BigDecimal overtimePay;
     private Integer totalUnpaidLeaveDays;
     private BigDecimal grossPay;
     private BigDecimal totalDeductions;

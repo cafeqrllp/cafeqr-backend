@@ -205,4 +205,33 @@ class EmployeeServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("Designation not found");
     }
+
+    @Test
+    void createEmployee_DuplicateEmail_ThrowsBusinessException() {
+        when(employeeRepository.existsByEmailAndClientId(eq("john@example.com"), any(UUID.class), any())).thenReturn(true);
+
+        EmployeeDto dto = EmployeeDto.builder()
+                .firstName("John")
+                .lastName("Doe")
+                .email("john@example.com")
+                .build();
+
+        assertThatThrownBy(() -> service.createEmployee(dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("An employee with the email address 'john@example.com' already exists.");
+    }
+
+    @Test
+    void createEmployee_DuplicateName_ThrowsBusinessException() {
+        when(employeeRepository.existsByFirstNameAndLastNameAndClientId(eq("John"), eq("Doe"), any(UUID.class), any())).thenReturn(true);
+
+        EmployeeDto dto = EmployeeDto.builder()
+                .firstName("John")
+                .lastName("Doe")
+                .build();
+
+        assertThatThrownBy(() -> service.createEmployee(dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("An employee named 'John Doe' already exists in the system.");
+    }
 }

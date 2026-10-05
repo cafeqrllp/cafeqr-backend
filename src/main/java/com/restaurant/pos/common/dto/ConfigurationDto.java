@@ -105,6 +105,7 @@ public class ConfigurationDto {
     private boolean printAutoCut;
     private String printWinListUrl;
     private String printWinPostUrl;
+    private boolean disableEscMargins;
 
     private String logoUrl;
 

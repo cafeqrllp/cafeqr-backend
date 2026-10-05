@@ -30,6 +30,15 @@ public class SalarySlip extends BaseEntity {
     @Column(name = "total_worked_hours", precision = 5, scale = 2)
     private BigDecimal totalWorkedHours = BigDecimal.ZERO;
 
+    @Column(name = "regular_hours", precision = 5, scale = 2)
+    private BigDecimal regularHours = BigDecimal.ZERO;
+
+    @Column(name = "overtime_hours", precision = 5, scale = 2)
+    private BigDecimal overtimeHours = BigDecimal.ZERO;
+
+    @Column(name = "overtime_pay", precision = 10, scale = 2)
+    private BigDecimal overtimePay = BigDecimal.ZERO;
+
     @Column(name = "total_unpaid_leave_days")
     private Integer totalUnpaidLeaveDays = 0;
 

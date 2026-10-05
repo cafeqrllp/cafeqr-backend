@@ -21,4 +21,7 @@ public interface PayrollRunRepository extends JpaRepository<PayrollRun, UUID> {
 
     @Query("SELECT COUNT(p) > 0 FROM PayrollRun p WHERE p.clientId = :clientId AND (:orgId IS NULL OR p.orgId = :orgId) AND LOWER(TRIM(p.name)) = LOWER(TRIM(:name))")
     boolean existsByNameAndClientIdAndOrgId(@Param("name") String name, @Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    @Query("SELECT p FROM PayrollRun p WHERE p.clientId = :clientId AND (:orgId IS NULL OR p.orgId = :orgId) AND p.status IN ('COMPLETED', 'PROCESSING') AND p.startDate <= :endDate AND p.endDate >= :startDate")
+    List<PayrollRun> findOverlappingRuns(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("startDate") java.time.LocalDate startDate, @Param("endDate") java.time.LocalDate endDate);
 }
