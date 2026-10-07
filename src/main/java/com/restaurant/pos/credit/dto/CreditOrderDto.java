@@ -24,4 +24,6 @@ public class CreditOrderDto {
     private LocalDateTime date;
     private String status;
     private String paymentStatus;
+    private String orderStatus;
+    private Boolean isReceived;
 }

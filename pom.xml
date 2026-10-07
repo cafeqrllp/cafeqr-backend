@@ -146,6 +146,13 @@
             <artifactId>fixedformat4j</artifactId>
             <version>1.2.2</version>
         </dependency>
+
+        <!-- AWS S3 SDK for Cloudflare R2 Object Storage -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.25.0</version>
+        </dependency>
     </dependencies>
 
     <build>
