@@ -129,3 +129,12 @@ logging:
 
 founder:
   secret-key: ${FOUNDER_SECRET_KEY:cafeqr-founder-2024-secret}
+
+cloudflare:
+  r2:
+    endpoint: ${CLOUDFLARE_R2_ENDPOINT:}
+    access-key: ${CLOUDFLARE_R2_ACCESS_KEY:}
+    secret-key: ${CLOUDFLARE_R2_SECRET_KEY:}
+    bucket-name: ${CLOUDFLARE_R2_BUCKET_NAME:}
+    public-url: ${CLOUDFLARE_R2_PUBLIC_URL:}
+
