@@ -12,6 +12,7 @@ import com.restaurant.pos.invoice.domain.Invoice;
 import com.restaurant.pos.invoice.domain.InvoiceType;
 import com.restaurant.pos.invoice.repository.InvoiceRepository;
 import com.restaurant.pos.order.domain.Order;
+import com.restaurant.pos.order.domain.OrderStatus;
 import com.restaurant.pos.order.domain.Payment;
 import com.restaurant.pos.order.domain.PaymentType;
 import com.restaurant.pos.order.repository.PaymentRepository;
@@ -482,6 +483,8 @@ public class CreditQueryService {
                 .date(invoice.getInvoiceDate())
                 .status(invoice.getStatus())
                 .paymentStatus(order != null ? order.getPaymentStatus() : null)
+                .orderStatus(order != null ? order.getOrderStatus() : null)
+                .isReceived(order != null ? order.getIsReceived() : null)
                 .build();
     }
 
@@ -491,6 +494,8 @@ public class CreditQueryService {
         BigDecimal due = creditGuard.money(invoice.getAmountDue());
         BigDecimal paid = total.subtract(due);
         if (paid.compareTo(BigDecimal.ZERO) < 0) paid = BigDecimal.ZERO;
+        boolean isReceived = order != null && (Boolean.TRUE.equals(order.getIsReceived()) || OrderStatus.COMPLETED.name().equalsIgnoreCase(order.getOrderStatus()));
+        String orderStatus = order != null ? order.getOrderStatus() : null;
         return CreditOrderDto.builder()
                 .orderId(invoice.getOrderId())
                 .invoiceId(invoice.getId())
@@ -506,6 +511,8 @@ public class CreditQueryService {
                 .date(invoice.getInvoiceDate())
                 .status(invoice.getStatus())
                 .paymentStatus(order != null ? order.getPaymentStatus() : null)
+                .orderStatus(orderStatus)
+                .isReceived(isReceived)
                 .build();
     }
 

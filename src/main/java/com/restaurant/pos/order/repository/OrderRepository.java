@@ -111,6 +111,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     @Query("SELECT o FROM Order o WHERE o.id = :id")
     Optional<Order> findByIdWithLines(@Param("id") UUID id);
 
+    @EntityGraph(attributePaths = "lines")
+    Optional<Order> findByOrgIdAndReference(UUID orgId, String reference);
+
     long countByClientId(UUID clientId);
 
     /**

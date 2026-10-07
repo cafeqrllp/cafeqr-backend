@@ -1,6 +1,7 @@
 package com.restaurant.pos.order.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.restaurant.pos.order.domain.OrderType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
@@ -234,9 +235,11 @@ public class CreateOrderRequest {
         @Schema(description = "Order-level discount allocated to this line (base amount)", example = "4.23")
         private BigDecimal allocatedOrderDiscount;
 
+        @JsonDeserialize(using = StringOrObjectToStringDeserializer.class)
         @Schema(description = "Product name (for display/denormalization)")
         private String productName;
 
+        @JsonDeserialize(using = StringOrObjectToStringDeserializer.class)
         @Schema(description = "Category name (for KOT routing and display)")
         private String categoryName;
 

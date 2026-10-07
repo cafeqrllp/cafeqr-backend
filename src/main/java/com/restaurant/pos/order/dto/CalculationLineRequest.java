@@ -17,7 +17,9 @@ public class CalculationLineRequest {
     private UUID clientLineId;
     private UUID productId;
     private UUID variantId;
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = StringOrObjectToStringDeserializer.class)
     private String productName;
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = StringOrObjectToStringDeserializer.class)
     private String categoryName;
     private Boolean isPackagedGood;
 
