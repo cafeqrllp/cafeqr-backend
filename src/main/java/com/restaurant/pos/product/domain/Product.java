@@ -24,6 +24,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+@jakarta.persistence.EntityListeners(com.restaurant.pos.realtime.RealtimeChangeEntityListener.class)
 @Table(name = "products")
 public class Product extends AuditableEntity {
 

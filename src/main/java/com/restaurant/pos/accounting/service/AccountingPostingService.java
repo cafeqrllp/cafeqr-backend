@@ -438,8 +438,12 @@ public class AccountingPostingService {
         log.info("resyncAll cleanup done | journals={} | now re-running backfill", journalsDeleted);
 
         AccountingBackfillRequest rebuildRequest = new AccountingBackfillRequest();
-        LocalDateTime yearStart = LocalDateTime.of(java.time.LocalDate.now().getYear(), 1, 1, 0, 0);
-        LocalDateTime now = LocalDateTime.now();
+        // Year boundaries are branch-local; timestamps in the database are UTC.
+        ZoneId branchZone = timezoneResolver.resolveTimezone(clientId, orgId);
+        int branchYear = java.time.ZonedDateTime.now(branchZone).getYear();
+        LocalDateTime yearStart = java.time.ZonedDateTime.of(branchYear, 1, 1, 0, 0, 0, 0, branchZone)
+                .withZoneSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         rebuildRequest.setFrom(yearStart);
         rebuildRequest.setTo(now);
         rebuildRequest.setSourceTypes(Set.of("INVOICE", "PAYMENT", "COGS", "STOCK", "EXPENSE", "PURCHASE"));

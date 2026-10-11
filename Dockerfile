@@ -1,5 +1,5 @@
 # Build stage
-FROM maven:3.9.9-eclipse-temurin-17 AS build
+FROM public.ecr.aws/docker/library/maven:3.9.9-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY pom.xml .
 # Download dependencies to cache them in Docker layer
@@ -8,7 +8,7 @@ COPY src ./src
 RUN mvn -B -DskipTests package
 
 # Run stage
-FROM eclipse-temurin:17-jre-jammy
+FROM public.ecr.aws/docker/library/eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
 # Runtime health checks use curl.

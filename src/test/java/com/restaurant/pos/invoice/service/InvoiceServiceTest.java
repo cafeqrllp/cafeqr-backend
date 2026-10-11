@@ -26,6 +26,7 @@ class InvoiceServiceTest {
 
     private InvoiceRepository invoiceRepository;
     private OrderService orderService;
+    private com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private InvoiceService invoiceService;
     private UUID clientId;
     private UUID orgId;
@@ -34,7 +35,10 @@ class InvoiceServiceTest {
     void setUp() {
         invoiceRepository = mock(InvoiceRepository.class);
         orderService = mock(OrderService.class);
-        invoiceService = new InvoiceService(invoiceRepository, orderService);
+        timezoneResolver = mock(com.restaurant.pos.common.context.TimezoneResolver.class);
+        when(timezoneResolver.resolveTimezone(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.time.ZoneId.of("UTC"));
+        invoiceService = new InvoiceService(invoiceRepository, orderService, timezoneResolver);
 
         clientId = UUID.randomUUID();
         orgId = UUID.randomUUID();
@@ -132,5 +136,32 @@ class InvoiceServiceTest {
         assertThat(result.getId()).isEqualTo(activeInvoiceId);
         assertThat(result.getOrderId()).isEqualTo(activeOrderId);
         assertThat(result.getStatus()).isEqualTo("UNPAID");
+    }
+
+    @Test
+    void dailyBillCounterResetsAtBranchMidnightNotUtcMidnight() {
+        // 19:00 UTC on 10 Oct is 00:30 on 11 Oct in India, so the bill belongs to the 11 Oct branch day.
+        when(timezoneResolver.resolveTimezone(eq(clientId), eq(orgId))).thenReturn(java.time.ZoneId.of("Asia/Kolkata"));
+        when(invoiceRepository.findMaxDailyBillNo(eq(clientId), eq(orgId), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(4);
+        when(invoiceRepository.save(org.mockito.ArgumentMatchers.any(Invoice.class))).thenAnswer(i -> i.getArgument(0));
+
+        Invoice invoice = Invoice.builder()
+                .invoiceDate(java.time.LocalDateTime.of(2026, 10, 10, 19, 0))
+                .totalAmount(BigDecimal.TEN)
+                .amountDue(BigDecimal.TEN)
+                .build();
+        invoice.setClientId(clientId);
+        invoice.setOrgId(orgId);
+
+        invoiceService.createInvoice(invoice);
+
+        org.mockito.ArgumentCaptor<java.time.LocalDateTime> start = org.mockito.ArgumentCaptor.forClass(java.time.LocalDateTime.class);
+        org.mockito.ArgumentCaptor<java.time.LocalDateTime> end = org.mockito.ArgumentCaptor.forClass(java.time.LocalDateTime.class);
+        org.mockito.Mockito.verify(invoiceRepository).findMaxDailyBillNo(eq(clientId), eq(orgId), start.capture(), end.capture());
+        // Branch day 11 Oct 00:00 IST = 10 Oct 18:30 UTC, ending just before 11 Oct 18:30 UTC.
+        assertThat(start.getValue()).isEqualTo(java.time.LocalDateTime.of(2026, 10, 10, 18, 30));
+        assertThat(end.getValue()).isEqualTo(java.time.LocalDateTime.of(2026, 10, 11, 18, 30).minusNanos(1));
+        assertThat(invoice.getDailyBillNo()).isEqualTo(5);
     }
 }

@@ -57,4 +57,6 @@ public class OrderSummaryDto {
     private List<OrderLineSummaryDto> lines = new ArrayList<>();
     private UUID warehouseId;
     private UUID vendorId;
+    private UUID orgId;
+    private UUID clientId;
 }

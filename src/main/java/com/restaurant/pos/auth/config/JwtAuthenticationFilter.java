@@ -94,6 +94,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
 
+        if (jwt == null && request.getParameter("token") != null && !request.getParameter("token").isBlank()) {
+            jwt = request.getParameter("token");
+            System.out.println("===> [DEBUG] JWT Filter: Extracted from query param: token");
+        } else if (jwt == null && request.getParameter("access_token") != null && !request.getParameter("access_token").isBlank()) {
+            jwt = request.getParameter("access_token");
+            System.out.println("===> [DEBUG] JWT Filter: Extracted from query param: access_token");
+        }
+
         if (jwt == null) {
             System.out.println("===> [DEBUG] JWT Filter: No JWT found in header or cookies. Proceeding without authentication.");
             filterChain.doFilter(request, response);
