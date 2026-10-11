@@ -543,6 +543,18 @@ public class QrOrderQueryService {
         );
     }
 
+    /**
+     * Resolves the branch a table belongs to (used to scope realtime streams when the URL carries no usable org).
+     * Returns null when the table is unknown.
+     */
+    public UUID resolveTableOrgId(UUID clientId, String tableIdentifier) {
+        RestaurantTable table = findTable(clientId, null, tableIdentifier);
+        if (table == null || (table.getClientId() != null && !table.getClientId().equals(clientId))) {
+            return null;
+        }
+        return table.getOrgId();
+    }
+
     // ── Private helpers ──
 
     private RestaurantTable findTable(UUID clientId, UUID orgId, String tableIdentifier) {

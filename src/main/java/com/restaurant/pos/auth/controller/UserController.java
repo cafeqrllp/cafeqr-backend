@@ -155,6 +155,10 @@ public class UserController {
                 .email(user.getEmail())
                 .phone(user.getPhone())
                 .role(user.getRoleEntity() != null ? user.getRoleEntity().getName() : "UNKNOWN")
+                .canCancelOrder(user.getRoleEntity() != null ? user.getRoleEntity().getCanCancelOrder() : true)
+                .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
+                .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
+                .canPrintOrder(user.getRoleEntity() != null && user.getRoleEntity().getCanPrintOrder() != null ? user.getRoleEntity().getCanPrintOrder() : true)
                 .build();
 
         return ResponseEntity.ok(ApiResponse.success(dto));

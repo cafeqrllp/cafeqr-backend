@@ -1,0 +1,19 @@
+{
+  "name": "cafeqr-whatsapp-gateway",
+  "version": "2.0.0",
+  "description": "Companion Multi-Tenant WhatsApp Web Gateway for Cafe QR Digital Bill Delivery",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "node-cache": "^5.1.2",
+    "pino": "^9.1.0",
+    "qrcode": "^1.5.3"
+  }
+}

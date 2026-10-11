@@ -1,0 +1,232 @@
+[33mcommit ad1f51e6390db2151b0ea938dbe1084e2e66d822[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Riyas <pnriyas50@gmail.com>
+Date:   Sat Oct 10 04:10:30 2026 +0530
+
+    pdf with message in whatsapp bill
+
+[1mdiff --git a/src/main/java/com/restaurant/pos/order/service/OrderService.java b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1mindex d1adad4..0c69e1c 100644[m
+[1m--- a/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1m+++ b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[36m@@ -1462,6 +1462,8 @@[m [mpublic class OrderService {[m
+                 .lines(toOrderLineSummaries(hydrated.getLines()))[m
+                 .warehouseId(hydrated.getWarehouseId())[m
+                 .vendorId(hydrated.getVendorId())[m
+[32m+[m[32m                .orgId(hydrated.getOrgId())[m
+[32m+[m[32m                .clientId(hydrated.getClientId())[m
+                 .build();[m
+     }[m
+ [m
+[36m@@ -3200,10 +3202,11 @@[m [mpublic class OrderService {[m
+ [m
+         recalculateOrderTotals(order);[m
+ [m
+[31m-        // Attach customer from settle request if not already attached (e.g. kitchen/table orders settled from payment popup)[m
+[31m-        if (order.getCustomerId() == null && (safeRequest.getCustomerId() != null[m
+[32m+[m[32m        // Attach or update customer from settle request (e.g. kitchen/table orders settled from payment popup)[m
+[32m+[m[32m        boolean hasSettleCustomer = safeRequest.getCustomerId() != null[m
+                 || (safeRequest.getCustomerPhone() != null && !safeRequest.getCustomerPhone().isBlank())[m
+[31m-                || (safeRequest.getCustomerName() != null && !safeRequest.getCustomerName().isBlank()))) {[m
+[32m+[m[32m                || (safeRequest.getCustomerName() != null && !safeRequest.getCustomerName().isBlank());[m
+[32m+[m[32m        if (hasSettleCustomer) {[m
+             if (safeRequest.getCustomerId() != null) {[m
+                 order.setCustomerId(safeRequest.getCustomerId());[m
+             }[m
+
+[33mcommit 341d51af49ffbd4cb6ba1d90a2c14c9a9ab43417[m
+Author: Riyas <pnriyas50@gmail.com>
+Date:   Sat Oct 10 03:00:58 2026 +0530
+
+    fix(whatsapp): atomic pdf+caption delivery, retry counter cache, and gateway image pull
+
+[1mdiff --git a/src/main/java/com/restaurant/pos/order/service/OrderService.java b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1mindex b4ed892..d1adad4 100644[m
+[1m--- a/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1m+++ b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[36m@@ -2128,7 +2128,7 @@[m [mpublic class OrderService {[m
+             if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())[m
+                     && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {[m
+                 try {[m
+[31m-                    if (whatsAppService != null) {[m
+[32m+[m[32m                    if (whatsAppService != null && (hydrated.getInvoicePdfBase64() != null || hydrated.getSourceLocalRef() == null)) {[m
+                         whatsAppService.sendOrderSettledBillAsync(hydrated);[m
+                     }[m
+                 } catch (Exception ex) {[m
+
+[33mcommit 1a556231c445d01be0765c2af22090f43bdfcbdc[m
+Author: Riyas <pnriyas50@gmail.com>
+Date:   Sat Oct 10 00:54:16 2026 +0530
+
+    invoice in whatsapp message
+
+[1mdiff --git a/src/main/java/com/restaurant/pos/order/service/OrderService.java b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1mindex e122fb5..b4ed892 100644[m
+[1m--- a/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1m+++ b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[36m@@ -2121,10 +2121,20 @@[m [mpublic class OrderService {[m
+             diagnosticPhase = "handle_table_status";[m
+             handleTableStatus(saved);[m
+ [m
+[31m-            diagnosticPhase = "hydrate_saved_order";[m
+             Order hydrated = hydrateOrder(saved);[m
+             hydrated.setSkipAutoPrintKinds(order.getSkipAutoPrintKinds());[m
+[32m+[m[32m            hydrated.setInvoicePdfBase64(order.getInvoicePdfBase64());[m
+             enqueueCloudPrintJobs(hydrated);[m
+[32m+[m[32m            if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())[m
+[32m+[m[32m                    && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {[m
+[32m+[m[32m                try {[m
+[32m+[m[32m                    if (whatsAppService != null) {[m
+[32m+[m[32m                        whatsAppService.sendOrderSettledBillAsync(hydrated);[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                } catch (Exception ex) {[m
+[32m+[m[32m                    log.warn("Failed to dispatch WhatsApp bill for direct settled order {}", hydrated.getId(), ex);[m
+[32m+[m[32m                }[m
+[32m+[m[32m            }[m
+             logCreditOrderCreateSuccess(logCreditDiagnostics, hydrated);[m
+ [m
+             return hydrated;[m
+[36m@@ -3313,6 +3323,7 @@[m [mpublic class OrderService {[m
+         Order hydrated = hydrateOrder(saved);[m
+         hydrated.setWarnings(saved.getWarnings());[m
+         hydrated.setSkipAutoPrintKinds(safeRequest.getSkipAutoPrintKinds());[m
+[32m+[m[32m        hydrated.setInvoicePdfBase64(safeRequest.getPdfBase64());[m
+         enqueueCloudPrintJobs(hydrated);[m
+ [m
+         try {[m
+[36m@@ -3423,6 +3434,7 @@[m [mpublic class OrderService {[m
+         Order hydrated = hydrateOrder(saved);[m
+         hydrated.setWarnings(saved.getWarnings());[m
+         hydrated.setSkipAutoPrintKinds(safeRequest.getSkipAutoPrintKinds());[m
+[32m+[m[32m        hydrated.setInvoicePdfBase64(safeRequest.getPdfBase64());[m
+         enqueueCloudPrintJobs(hydrated);[m
+ [m
+         try {[m
+
+[33mcommit c570b4f328061a76e97594537754e7ed0c2bf95b[m
+Author: Riyas <pnriyas50@gmail.com>
+Date:   Fri Oct 9 15:14:07 2026 +0530
+
+    print polling and whatsapp bill sending
+
+[1mdiff --git a/src/main/java/com/restaurant/pos/order/service/OrderService.java b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1mindex 87e3e0c..e122fb5 100644[m
+[1m--- a/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1m+++ b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[36m@@ -136,6 +136,10 @@[m [mpublic class OrderService {[m
+     private final org.springframework.context.ApplicationContext applicationContext;[m
+     private final org.springframework.context.ApplicationEventPublisher eventPublisher;[m
+ [m
+[32m+[m[32m    @org.springframework.beans.factory.annotation.Autowired(required = false)[m
+[32m+[m[32m    @org.springframework.context.annotation.Lazy[m
+[32m+[m[32m    private com.restaurant.pos.whatsapp.service.WhatsAppService whatsAppService;[m
+[32m+[m
+     /**[m
+      * Per-thread user display name cache. Each request thread gets its own map so[m
+      * that[m
+[36m@@ -3319,6 +3323,14 @@[m [mpublic class OrderService {[m
+             log.error("Failed to send push notification for settled order {}", hydrated.getId(), ex);[m
+         }[m
+ [m
+[32m+[m[32m        try {[m
+[32m+[m[32m            if (whatsAppService != null) {[m
+[32m+[m[32m                whatsAppService.sendOrderSettledBillAsync(hydrated);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } catch (Exception ex) {[m
+[32m+[m[32m            log.warn("Failed to dispatch WhatsApp bill for settled order {}", hydrated.getId(), ex);[m
+[32m+[m[32m        }[m
+[32m+[m
+         publishLoyaltyEventIfApplicable(hydrated);[m
+ [m
+         publishOrderStatusUpdate(saved);[m
+[36m@@ -3412,6 +3424,15 @@[m [mpublic class OrderService {[m
+         hydrated.setWarnings(saved.getWarnings());[m
+         hydrated.setSkipAutoPrintKinds(safeRequest.getSkipAutoPrintKinds());[m
+         enqueueCloudPrintJobs(hydrated);[m
+[32m+[m
+[32m+[m[32m        try {[m
+[32m+[m[32m            if (whatsAppService != null) {[m
+[32m+[m[32m                whatsAppService.sendOrderSettledBillAsync(hydrated);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } catch (Exception ex) {[m
+[32m+[m[32m            log.warn("Failed to dispatch WhatsApp bill for credit completed order {}", hydrated.getId(), ex);[m
+[32m+[m[32m        }[m
+[32m+[m
+         return hydrated;[m
+     }[m
+ [m
+
+[33mcommit 3e1c020cd313bda7b6108bc84023f5d60588c642[m
+Author: sayooojjayarajanuk <uksayoojjayarajan@gmail.com>
+Date:   Sun Oct 4 09:02:49 2026 +0530
+
+    fix: support round-off and fallback orderDate before invoice settlement
+
+[1mdiff --git a/src/main/java/com/restaurant/pos/order/service/OrderService.java b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1mindex 76aadc8..87e3e0c 100644[m
+[1m--- a/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[1m+++ b/src/main/java/com/restaurant/pos/order/service/OrderService.java[m
+[36m@@ -346,6 +346,14 @@[m [mpublic class OrderService {[m
+         if (order.getSyncOrigin() == null || order.getSyncOrigin().isBlank()) {[m
+             order.setSyncOrigin(order.getSourceOperationId() == null ? "CLOUD_ONLINE" : "OFFLINE_QUEUE");[m
+         }[m
+[32m+[m[32m        if (order.getOrderDate() == null) {[m
+[32m+[m[32m            if (order.getOfflineCreatedAt() != null) {[m
+[32m+[m[32m                ZoneId zoneId = timezoneResolver.resolveTimezone(order.getClientId(), order.getOrgId());[m
+[32m+[m[32m                order.setOrderDate(order.getOfflineCreatedAt().atZone(zoneId).toInstant());[m
+[32m+[m[32m            } else {[m
+[32m+[m[32m                order.setOrderDate(Instant.now());[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+         if (order.getCurrencyId() == null) {[m
+             UUID orgId = order.getOrgId();[m
+             if (orgId == null) {[m
+[36m@@ -438,6 +446,10 @@[m [mpublic class OrderService {[m
+         if (order != null && order.getOfflineCreatedAt() != null) {[m
+             return order.getOfflineCreatedAt();[m
+         }[m
+[32m+[m[32m        if (order != null && order.getCreatedAt() != null) {[m
+[32m+[m[32m            ZoneId zoneId = timezoneResolver.resolveTimezone(order.getClientId(), order.getOrgId());[m
+[32m+[m[32m            return order.getCreatedAt().atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zoneId).toLocalDateTime();[m
+[32m+[m[32m        }[m
+         return LocalDateTime.now();[m
+     }[m
+ [m
+[36m@@ -1401,6 +1413,16 @@[m [mpublic class OrderService {[m
+             }[m
+         }[m
+ [m
+[32m+[m[32m        BigDecimal ro = hydrated.getRoundOffAmount();[m
+[32m+[m[32m        if (ro == null && hydrated.getGrandTotal() != null && hydrated.getTotalAmount() != null) {[m
+[32m+[m[32m            ro = hydrated.getGrandTotal().subtract(hydrated.getTotalAmount());[m
+[32m+[m[32m        }[m
+[32m+[m[32m        Instant resolvedOrderDate = hydrated.getOrderDate();[m
+[32m+[m[32m        if (resolvedOrderDate == null && hydrated.getCreatedAt() != null) {[m
+[32m+[m[32m            ZoneId zoneId = timezoneResolver.resolveTimezone(hydrated.getClientId(), hydrated.getOrgId());[m
+[32m+[m[32m            resolvedOrderDate = hydrated.getCreatedAt().atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zoneId).toInstant();[m
+[32m+[m[32m        }[m
+[32m+[m
+         return OrderSummaryDto.builder()[m
+                 .id(hydrated.getId())[m
+                 .orderNo(hydrated.getOrderNo())[m
+[36m@@ -1421,8 +1443,9 @@[m [mpublic class OrderService {[m
+                 .totalDiscountAmount(hydrated.getTotalDiscountAmount())[m
+                 .grandTotal(hydrated.getGrandTotal())[m
+                 .grossAmount(hydrated.getGrossAmount())[m
+[32m+[m[32m                .roundOffAmount(ro)[m
+                 .discountCalculationVersion(hydrated.getDiscountCalculationVersion())[m
+[31m-                .orderDate(hydrated.getOrderDate())[m
+[32m+[m[32m                .orderDate(resolvedOrderDate)[m
+                 .createdAt(hydrated.getCreatedAt())[m
+                 .updatedAt(hydrated.getUpdatedAt())[m
+                 .createdBy(resolveUserDisplayName(hydrated.getCreatedBy()))[m
+[36m@@ -2269,8 +2292,8 @@[m [mpublic class OrderService {[m
+                     snapshot.setUpdatedBy(current.getCreatedBy());[m
+ [m
+                     LocalDateTime snapTime = (revIdx < sortedTimes.size()) ? sortedTimes.get(revIdx) : current.getCreatedAt();[m
+[31m-                    snapshot.setCreatedAt(snapTime != null ? snapTime : LocalDateTime.now());[m
+[31m-                    snapshot.setUpdatedAt(snapTime != null ? snapTime : LocalDateTime.now());[m
+[32m+[m[32m                    snapshot.setCreatedAt(snapTime != null ? snapTime : LocalDateTime.now(java.time.ZoneOffset.UTC));[m
+[32m+[m[32m                    snapshot.setUpdatedAt(snapTime != null ? snapTime : LocalDateTime.now(java.time.ZoneOffset.UTC));[m
+ [m
+                     // Determine the lines that belonged to this revision[m
+                     List<OrderLine> revLines = new java.util.ArrayList<>();[m

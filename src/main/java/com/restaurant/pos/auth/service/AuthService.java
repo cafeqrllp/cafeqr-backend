@@ -243,6 +243,7 @@ public class AuthService {
                 .canCancelOrder(user.getRoleEntity() != null ? user.getRoleEntity().getCanCancelOrder() : true)
                 .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
                 .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
+                .canPrintOrder(user.getRoleEntity() != null && user.getRoleEntity().getCanPrintOrder() != null ? user.getRoleEntity().getCanPrintOrder() : true)
                 .timezone(user.getOrganization() != null && user.getOrganization().getTimezone() != null ? user.getOrganization().getTimezone() : client.getTimezone())
                 .termsAcceptedVersion(user.getTermsAcceptedVersion())
                 .termsAcceptedAt(user.getTermsAcceptedAt())
