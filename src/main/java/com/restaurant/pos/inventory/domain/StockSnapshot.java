@@ -12,7 +12,6 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@jakarta.persistence.EntityListeners(com.restaurant.pos.realtime.RealtimeChangeEntityListener.class)
 @Table(name = "stock_snapshots", uniqueConstraints = {
         @UniqueConstraint(columnNames = {"warehouse_id", "product_id", "variant_id"})
 })

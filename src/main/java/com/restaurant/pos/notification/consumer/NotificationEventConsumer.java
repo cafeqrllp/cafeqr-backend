@@ -10,7 +10,6 @@ import com.restaurant.pos.outbox.domain.ProcessedEvent;
 import com.restaurant.pos.outbox.processor.OutboxProcessor;
 import com.restaurant.pos.outbox.repository.ProcessedEventRepository;
 import com.restaurant.pos.push.service.PushNotificationService;
-import com.restaurant.pos.whatsapp.service.WhatsAppService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,8 +41,6 @@ public class NotificationEventConsumer {
 
     private final OutboxProcessor outboxProcessor;
     private final PushNotificationService pushNotificationService;
-    // WhatsApp integration for sending settled bills
-    private final WhatsAppService whatsAppService;
     private final OrderRepository orderRepository;
     private final ProcessedEventRepository processedEventRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -92,15 +89,6 @@ public class NotificationEventConsumer {
             pushNotificationService.sendOrderSettledPush(order);
             broadcastSse(event, order);
             log.info("[NotificationConsumer] Sent settled push for order {}", order.getId());
-
-            try {
-                if (order.getSourceLocalRef() == null) {
-                    whatsAppService.sendOrderSettledBill(order);
-                }
-            } catch (Exception waEx) {
-                log.warn("[NotificationConsumer] Failed to send WhatsApp bill for order {}: {}", order.getId(), waEx.getMessage());
-            }
-
             markProcessed(event);
         } finally {
             TenantContext.clear();

@@ -36,7 +36,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
             "https://cafe-qr-delivery-website.vercel.app," +
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
-            "https://testcafeqrscanningapp.pages.dev," +
+            "https://*.pages.dev," +
+            "https://*.vercel.app," +
             "https://pos.cafeqr.in," +
             "https://cafeqr.in," +
             "https://*.cafeqr.in" +

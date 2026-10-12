@@ -13,7 +13,6 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
-@jakarta.persistence.EntityListeners(com.restaurant.pos.realtime.RealtimeChangeEntityListener.class)
 @Table(name = "restaurant_tables")
 public class RestaurantTable extends AuditableEntity {
 
