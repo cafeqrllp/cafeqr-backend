@@ -52,21 +52,14 @@ public class FounderDashboardController {
     @Value("${founder.secret-key}")
     private String founderSecretKey;
 
-    /** Constant-time comparison so the key cannot be recovered through response timing. */
-    private boolean isValidKey(String providedKey) {
-        return providedKey != null && founderSecretKey != null
-                && java.security.MessageDigest.isEqual(
-                        providedKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        founderSecretKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    }
-
     @GetMapping("/dashboard")
     public ResponseEntity<?> getFounderDashboard(
             @RequestHeader(value = "X-Founder-Key", required = false) String providedKey) {
 
         // ── Validate secret key ───────────────────────────────────────────────
-        if (!isValidKey(providedKey)) {
-            log.warn("[FounderDashboard] Unauthorized access attempt (key {})", providedKey == null ? "missing" : "invalid");
+        if (providedKey == null || !providedKey.equals(founderSecretKey)) {
+            log.warn("[FounderDashboard] Unauthorized access attempt with key: {}",
+                    providedKey == null ? "<none>" : providedKey.substring(0, Math.min(4, providedKey.length())) + "...");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(ApiResponse.error("Unauthorized"));
         }
@@ -215,7 +208,7 @@ public class FounderDashboardController {
     public ResponseEntity<?> toggleClientActive(
             @PathVariable UUID clientId,
             @RequestHeader(value = "X-Founder-Key", required = false) String providedKey) {
-        if (!isValidKey(providedKey)) {
+        if (providedKey == null || !providedKey.equals(founderSecretKey)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Unauthorized"));
         }
         Client client = clientRepository.findById(clientId).orElse(null);
@@ -232,7 +225,7 @@ public class FounderDashboardController {
             @PathVariable UUID clientId,
             @RequestBody ExtendSubscriptionRequest req,
             @RequestHeader(value = "X-Founder-Key", required = false) String providedKey) {
-        if (!isValidKey(providedKey)) {
+        if (providedKey == null || !providedKey.equals(founderSecretKey)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Unauthorized"));
         }
         Client client = clientRepository.findById(clientId).orElse(null);
@@ -260,7 +253,7 @@ public class FounderDashboardController {
             @PathVariable UUID clientId,
             @RequestBody RecordPaymentRequest req,
             @RequestHeader(value = "X-Founder-Key", required = false) String providedKey) {
-        if (!isValidKey(providedKey)) {
+        if (providedKey == null || !providedKey.equals(founderSecretKey)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error("Unauthorized"));
         }
         Client client = clientRepository.findById(clientId).orElse(null);

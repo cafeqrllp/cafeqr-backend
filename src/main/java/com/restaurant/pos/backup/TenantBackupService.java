@@ -101,12 +101,6 @@ public class TenantBackupService {
     @Value("${app.backup.restore-token-minutes:30}")
     private long restoreTokenMinutes;
 
-    @Value("${app.backup.max-extracted-bytes:209715200}")
-    private long maxExtractedBytes;
-
-    @Value("${app.backup.max-entries:500}")
-    private int maxArchiveEntries;
-
     private Path storageRoot;
 
     @PostConstruct
@@ -244,19 +238,7 @@ public class TenantBackupService {
 
             return new BackupPreviewResponse(token, expiresAt, imported.manifest(), warnings);
         } catch (IOException ex) {
-            deleteQuietly(uploadPath);
             throw new BusinessException("Unable to read backup file: " + ex.getMessage());
-        } catch (RuntimeException ex) {
-            deleteQuietly(uploadPath);
-            throw ex;
-        }
-    }
-
-    private void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ex) {
-            log.warn("Could not delete rejected upload {}: {}", path.getFileName(), ex.getMessage());
         }
     }
 
@@ -491,7 +473,6 @@ public class TenantBackupService {
             throw new ResourceNotFoundException("Restore upload file is no longer available.");
         }
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        long extractedBytes = 0;
         try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archivePath))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
@@ -501,12 +482,7 @@ public class TenantBackupService {
                 if (entry.getName().contains("..") || entry.getName().startsWith("/") || entry.getName().startsWith("\\")) {
                     throw new BusinessException("Backup archive contains an invalid file path.");
                 }
-                if (entries.size() >= maxArchiveEntries) {
-                    throw new BusinessException("Backup archive contains too many files.");
-                }
-                byte[] data = readAllBytes(zip, maxExtractedBytes - extractedBytes);
-                extractedBytes += data.length;
-                entries.put(entry.getName(), data);
+                entries.put(entry.getName(), readAllBytes(zip));
             }
         }
 
@@ -1084,16 +1060,11 @@ public class TenantBackupService {
         return timestamp == null ? null : timestamp.toInstant();
     }
 
-    private byte[] readAllBytes(ZipInputStream zip, long remainingBudget) throws IOException {
+    private byte[] readAllBytes(ZipInputStream zip) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         byte[] chunk = new byte[8192];
-        long total = 0;
         int read;
         while ((read = zip.read(chunk)) != -1) {
-            total += read;
-            if (total > remainingBudget) {
-                throw new BusinessException("Backup archive expands beyond the allowed size and was rejected.");
-            }
             buffer.write(chunk, 0, read);
         }
         return buffer.toByteArray();

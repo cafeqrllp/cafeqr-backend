@@ -41,7 +41,7 @@ public class SecurityConfig {
                                 .permitAll()
                                 .requestMatchers(
                                         "/api/v1/auth/**",
-                                        "/api/v1/debug/deployment-info",
+                                        "/api/v1/debug/**",
                                         "/api/v1/public/**",
                                         "/api/v1/founder/**",
                                         "/api/v1/reviews/**",
@@ -67,7 +67,6 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(authenticationProvider)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(new CookieAuthOriginFilter(csrfTrustedOrigins), JwtAuthenticationFilter.class)
                 .addFilterAfter(subscriptionCheckFilter, JwtAuthenticationFilter.class);
 
         return http.build();
@@ -97,28 +96,13 @@ public class SecurityConfig {
             "https://cafe-qr-delivery-website.vercel.app," +
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
-            "https://testcafeqrscanningapp.pages.dev," +
+            "https://*.pages.dev," +
+            "https://*.vercel.app," +
             "https://pos.cafeqr.in," +
             "https://cafeqr.in," +
             "https://*.cafeqr.in" +
             "}")
     private String[] allowedOrigins;
-
-    // Origins allowed to make cookie-authenticated, state-changing requests (CSRF defence).
-    // Stricter than CORS on purpose: no *.vercel.app / *.pages.dev wildcards, which anyone can register.
-    // Preview deployments keep working because the frontend authenticates with a Bearer header.
-    @Value("${app.csrf.trusted-origins:" +
-            "http://localhost:*," +
-            "http://127.0.0.1:*," +
-            "https://localhost," +
-            "capacitor://localhost," +
-            "https://cafeqr.in," +
-            "https://*.cafeqr.in," +
-            "https://cafe-qr-frontend.vercel.app," +
-            "https://cafe-test-qr-frontend.vercel.app," +
-            "https://cafeqr-frontend.pages.dev" +
-            "}")
-    private java.util.List<String> csrfTrustedOrigins;
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
@@ -132,9 +116,10 @@ public class SecurityConfig {
             }
         }
 
-        // Always allow the CafeQR domains and Razorpay callbacks so an environment override cannot cause CORS 403s.
-        // Do NOT add *.vercel.app or *.pages.dev wildcards: anyone can register a subdomain there and would be
-        // trusted with credentials. List each deployment explicitly in app.cors.allowed-origins instead.
+        // Unconditionally allow all Vercel deployments, Cloudflare pages, CafeQR domains, and Razorpay callbacks
+        // to prevent environment variable overrides from causing CORS 403 preflight errors
+        configuration.addAllowedOriginPattern("https://*.vercel.app");
+        configuration.addAllowedOriginPattern("https://*.pages.dev");
         configuration.addAllowedOriginPattern("https://*.cafeqr.in");
         configuration.addAllowedOriginPattern("https://cafeqr.in");
         configuration.addAllowedOriginPattern("https://pos.cafeqr.in");

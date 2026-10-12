@@ -2,6 +2,8 @@ package com.restaurant.pos.print.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.restaurant.pos.client.domain.Client;
+import com.restaurant.pos.client.domain.Organization;
 import com.restaurant.pos.client.repository.ClientRepository;
 import com.restaurant.pos.client.repository.OrganizationRepository;
 import com.restaurant.pos.common.dto.ConfigurationDto;
@@ -15,8 +17,6 @@ import com.restaurant.pos.order.repository.OrderRepository;
 import com.restaurant.pos.print.domain.PrintJob;
 import com.restaurant.pos.print.domain.PrintJobKind;
 import com.restaurant.pos.print.domain.PrintJobStatus;
-// Event published for real-time printer dispatch
-import com.restaurant.pos.print.event.PrintJobCreatedEvent;
 import com.restaurant.pos.print.repository.PrintJobAttemptRepository;
 import com.restaurant.pos.print.repository.PrintJobRepository;
 import com.restaurant.pos.purchasing.domain.Customer;
@@ -31,6 +31,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,7 +52,6 @@ public class PrintJobService {
     private final SystemConfigurationService systemConfigurationService;
     private final CustomerRepository customerRepository;
     private final TimezoneResolver timezoneResolver;
-    private final PrintSseService printSseService;
 
     @Transactional
     public PrintJob enqueueOrderJob(UUID orderId, String jobKind) {
@@ -112,10 +112,6 @@ public class PrintJobService {
                 LocalDateTime.now(),
                 PageRequest.of(0, boundedLimit)
         );
-
-        if (jobs.isEmpty()) {
-            return List.of();
-        }
 
         LocalDateTime now = LocalDateTime.now();
         for (PrintJob job : jobs) {
@@ -274,7 +270,6 @@ public class PrintJobService {
                 job.setPrinterProfileId(printerProfileId);
             }
             PrintJob saved = printJobRepository.save(job);
-            notifySsePrintJobCreated(saved, kind.name().toLowerCase(), printerProfileId);
             return saved;
         } catch (DataIntegrityViolationException ex) {
             return printJobRepository.findByClientIdAndDedupeKey(clientId, dedupeKey)
@@ -354,7 +349,6 @@ public class PrintJobService {
             }
             PrintJob saved = printJobRepository.save(job);
             log.info("createKotEditJob: successfully created PrintJob {} for order {} with dedupeKey {}", saved.getId(), order.getId(), dedupeKey);
-            notifySsePrintJobCreated(saved, PrintJobKind.KOT.name().toLowerCase(), printerProfileId);
             return saved;
         } catch (DataIntegrityViolationException ex) {
             return printJobRepository.findByClientIdAndDedupeKey(clientId, dedupeKey)
@@ -377,23 +371,6 @@ public class PrintJobService {
         job.setPrintedAt(now);
         job.setErrorMessage(null);
         job.setNextAttemptAt(null);
-    }
-
-    private void notifySsePrintJobCreated(PrintJob job, String kind, String printerProfileId) {
-        if (job == null || job.getClientId() == null || printSseService == null) {
-            return;
-        }
-        try {
-            printSseService.broadcastPrintJob(new PrintJobCreatedEvent(
-                    job.getClientId(),
-                    job.getOrgId(),
-                    job.getId(),
-                    kind,
-                    printerProfileId
-            ));
-        } catch (Exception ex) {
-            log.warn("Failed to broadcast SSE print job notification: {}", ex.getMessage());
-        }
     }
 
     private Map<String, Object> orderSnapshot(Order order, PrintJobKind kind) {

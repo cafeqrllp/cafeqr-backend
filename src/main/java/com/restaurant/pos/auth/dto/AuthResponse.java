@@ -30,7 +30,6 @@ public class AuthResponse {
     private Boolean canCancelOrder;
     private Boolean canDeleteOrderItem;
     private Boolean canDecrementOrderItem;
-    private Boolean canPrintOrder;
     private String timezone;
     private String termsAcceptedVersion;
     private java.time.LocalDateTime termsAcceptedAt;

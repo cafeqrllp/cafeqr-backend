@@ -24,7 +24,6 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(onlyExplicitlyIncluded = true, callSuper = false)
-@jakarta.persistence.EntityListeners(com.restaurant.pos.realtime.RealtimeChangeEntityListener.class)
 @Table(name = "orders")
 @Inheritance(strategy = InheritanceType.SINGLE_TABLE)
 @DiscriminatorColumn(name = "order_type", discriminatorType = DiscriminatorType.STRING)
@@ -168,9 +167,6 @@ public class Order extends BaseEntity {
     @Transient
     @Builder.Default
     private List<String> skipAutoPrintKinds = new ArrayList<>();
-
-    @Transient
-    private String invoicePdfBase64;
 
     @Column(name = "vendor_id")
     private UUID vendorId;
