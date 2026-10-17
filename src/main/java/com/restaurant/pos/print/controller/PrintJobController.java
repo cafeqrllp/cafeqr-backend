@@ -56,6 +56,19 @@ public class PrintJobController {
         return ResponseEntity.ok(ApiResponse.success(printJobService.describe(job)));
     }
 
+    @GetMapping("/pulse")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> pulse(@RequestParam(defaultValue = "0") long version) {
+        UUID clientId = com.restaurant.pos.common.tenant.TenantContext.getCurrentTenant();
+        if (clientId == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED).build();
+        }
+        long currentVersion = printJobService.getVersion(clientId);
+        return ResponseEntity.ok(ApiResponse.success(Map.of(
+                "hasNew", currentVersion > version,
+                "version", currentVersion
+        )));
+    }
+
     @PostMapping("/claim")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> claim(@RequestParam(defaultValue = "3") int limit) {
         List<PrintJob> jobs = printJobService.claimJobs(limit);

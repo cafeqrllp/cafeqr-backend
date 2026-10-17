@@ -19,4 +19,8 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     List<Organization> findByClientIdAndIsactive(UUID clientId, String isactive);
     boolean existsByClientIdAndSlugIgnoreCase(UUID clientId, String slug);
     boolean existsByClientIdAndSlugIgnoreCaseAndIdNot(UUID clientId, String slug, UUID id);
+    java.util.Optional<Organization> findFirstByPhone(String phone);
+    java.util.Optional<Organization> findFirstByWhatsappNumber(String whatsappNumber);
+    @org.springframework.data.jpa.repository.Query("SELECT o FROM Organization o WHERE o.phone = :p OR o.whatsappNumber = :p")
+    java.util.Optional<Organization> findFirstByAnyPhone(@org.springframework.data.repository.query.Param("p") String phone);
 }

@@ -12,6 +12,7 @@ import java.util.UUID;
 @Repository
 public interface ClientSubscriptionModuleRepository extends JpaRepository<ClientSubscriptionModule, UUID> {
     List<ClientSubscriptionModule> findByClientId(UUID clientId);
+    List<ClientSubscriptionModule> findByOrgId(UUID orgId);
     Optional<ClientSubscriptionModule> findByClientIdAndModuleName(UUID clientId, ModuleName moduleName);
     Optional<ClientSubscriptionModule> findByClientIdAndOrgIdAndModuleName(UUID clientId, UUID orgId, ModuleName moduleName);
 }

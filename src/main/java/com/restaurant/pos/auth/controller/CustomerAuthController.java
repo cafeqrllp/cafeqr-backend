@@ -40,6 +40,7 @@ import java.util.UUID;
 public class CustomerAuthController {
 
     private final OtpService otpService;
+    private final com.restaurant.pos.auth.service.WhatsAppAuthService whatsAppAuthService;
     private final com.restaurant.pos.purchasing.repository.CustomerRepository customerRepository;
     private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
     private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
@@ -48,8 +49,6 @@ public class CustomerAuthController {
 
     @Data
     public static class VerifyOtpRequest {
-        @Email(message = "Invalid email address")
-        @NotBlank(message = "Email is required")
         private String email;
 
         @NotBlank(message = "OTP is required")
@@ -67,7 +66,16 @@ public class CustomerAuthController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> verifyOtp(
             @Valid @RequestBody VerifyOtpRequest request
     ) {
-        boolean valid = otpService.verifyOtp(request.getEmail(), request.getOtp());
+        boolean valid = false;
+        String normalizedEmail = request.getEmail() != null ? request.getEmail().trim().toLowerCase() : null;
+        String rawPhone = request.getPhone() != null ? request.getPhone().trim() : null;
+
+        if (normalizedEmail != null && !normalizedEmail.isBlank()) {
+            valid = otpService.verifyOtp(normalizedEmail, request.getOtp());
+        } else if (rawPhone != null && !rawPhone.isBlank()) {
+            valid = whatsAppAuthService.verifyCustomerOtp(rawPhone, request.getOtp())
+                    || otpService.verifyOtp(rawPhone, request.getOtp());
+        }
 
         if (!valid) {
             return ResponseEntity
@@ -75,7 +83,6 @@ public class CustomerAuthController {
                     .body(ApiResponse.error("Invalid or expired OTP. Please request a new one."));
         }
 
-        String normalizedEmail = request.getEmail().trim().toLowerCase();
         UUID clientId = request.getClientId();
         UUID orgId = request.getOrgId();
 
@@ -95,7 +102,14 @@ public class CustomerAuthController {
 
         com.restaurant.pos.purchasing.domain.Customer customer = null;
         if (clientId != null) {
-            var existing = customerRepository.findFirstByEmailIgnoreCaseAndClientId(normalizedEmail, clientId);
+            java.util.Optional<com.restaurant.pos.purchasing.domain.Customer> existing = java.util.Optional.empty();
+            if (normalizedEmail != null && !normalizedEmail.isBlank()) {
+                existing = customerRepository.findFirstByEmailIgnoreCaseAndClientId(normalizedEmail, clientId);
+            }
+            if (existing.isEmpty() && rawPhone != null && !rawPhone.isBlank()) {
+                existing = customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(normalizePhone(rawPhone), clientId);
+            }
+
             if (existing.isPresent()) {
                 customer = existing.get();
                 boolean changed = false;
@@ -105,8 +119,8 @@ public class CustomerAuthController {
                     changed = true;
                 }
                 if ((customer.getPhone() == null || customer.getPhone().isBlank())
-                        && request.getPhone() != null && !request.getPhone().isBlank()) {
-                    customer.setPhone(normalizePhone(request.getPhone()));
+                        && rawPhone != null && !rawPhone.isBlank()) {
+                    customer.setPhone(normalizePhone(rawPhone));
                     changed = true;
                 }
                 if (changed) {
@@ -115,11 +129,11 @@ public class CustomerAuthController {
             } else {
                 String initialName = (request.getName() != null && !request.getName().isBlank())
                         ? request.getName().trim()
-                        : normalizedEmail.split("@")[0];
+                        : (normalizedEmail != null ? normalizedEmail.split("@")[0] : "Guest");
                 customer = com.restaurant.pos.purchasing.domain.Customer.builder()
                         .name(initialName)
                         .email(normalizedEmail)
-                        .phone(normalizePhone(request.getPhone()))
+                        .phone(normalizePhone(rawPhone))
                         .customerCategory("REGULAR")
                         .isactive("Y")
                         .build();
@@ -131,7 +145,7 @@ public class CustomerAuthController {
 
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         payload.put("verified", true);
-        payload.put("email", normalizedEmail);
+        payload.put("email", normalizedEmail != null ? normalizedEmail : (customer != null && customer.getEmail() != null ? customer.getEmail() : ""));
         if (customer != null) {
             payload.put("customerId", customer.getId());
             payload.put("name", customer.getName());

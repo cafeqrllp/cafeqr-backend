@@ -27,5 +27,14 @@ public class FounderDashboardResponse {
         private int expiredClients;
         private int unpaidClients;
         private long totalRevenuePaise;
+
+        // Executive Platform Pulse
+        private long platformGmvPaise;
+        private long totalOrdersCount;
+        private long activeCafesToday;
+        private long activeCafes7Days;
+        private long mrrPaise;
+        private long arpuPaise;
+        private int activationRatePercent;
     }
 }

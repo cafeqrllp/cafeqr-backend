@@ -51,17 +51,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        
-        StringBuilder cookiesLog = new StringBuilder();
-        if (request.getCookies() != null) {
-            for (jakarta.servlet.http.Cookie c : request.getCookies()) {
-                cookiesLog.append(c.getName()).append("=");
-                String val = c.getValue();
-                cookiesLog.append(val.substring(0, Math.min(val.length(), 10))).append("...; ");
-            }
-        }
-        
-        System.out.println("===> [DEBUG LOG-V3] JWT Filter: Method=" + method + ", Path=" + path + ", Auth=" + (authHeader != null ? "Present" : "null") + ", Cookies=[" + cookiesLog + "]");
 
         // Skip filter for public auth endpoints that don't use tokens (e.g. login, signup)
         if (isPublicPath(path) && authHeader == null) {
@@ -72,30 +61,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String jwt = null;
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             jwt = authHeader.substring(7);
-            System.out.println("===> [DEBUG] JWT Filter: Extracted from Authorization header");
         } else {
             // Check for access_token or token cookie
             if (request.getCookies() != null) {
                 for (jakarta.servlet.http.Cookie cookie : request.getCookies()) {
                     if ("access_token".equals(cookie.getName()) || "token".equals(cookie.getName())) {
                         jwt = cookie.getValue();
-                        System.out.println("===> [DEBUG] JWT Filter: Extracted from cookie: " + cookie.getName());
                         break;
                     }
                 }
-                if (jwt == null) {
-                    String names = java.util.Arrays.stream(request.getCookies())
-                        .map(jakarta.servlet.http.Cookie::getName)
-                        .collect(java.util.stream.Collectors.joining(", "));
-                    System.out.println("===> [DEBUG] JWT Filter: No matching auth cookie found. Present cookies: " + names);
-                }
-            } else {
-                System.out.println("===> [DEBUG] JWT Filter: No cookies present in request");
             }
         }
 
+        if (jwt == null && request.getParameter("token") != null && !request.getParameter("token").isBlank()) {
+            jwt = request.getParameter("token");
+        } else if (jwt == null && request.getParameter("access_token") != null && !request.getParameter("access_token").isBlank()) {
+            jwt = request.getParameter("access_token");
+        }
+
         if (jwt == null) {
-            System.out.println("===> [DEBUG] JWT Filter: No JWT found in header or cookies. Proceeding without authentication.");
             filterChain.doFilter(request, response);
             return;
         }

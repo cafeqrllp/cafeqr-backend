@@ -35,12 +35,22 @@ public class SyncController {
     @GetMapping("/changes")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     public ResponseEntity<ApiResponse<SyncChangesResponse>> changes(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant since,
+            @RequestParam(required = false) String since,
             @RequestParam(required = false) String syncToken
     ) {
-        Instant resolvedSince = since;
+        Instant resolvedSince = null;
         if (syncToken != null && !syncToken.isBlank()) {
             resolvedSince = syncService.decodeSyncToken(syncToken);
+        } else if (since != null && !since.isBlank()) {
+            try {
+                resolvedSince = Instant.parse(since.trim());
+            } catch (Exception e) {
+                try {
+                    resolvedSince = java.time.OffsetDateTime.parse(since.trim()).toInstant();
+                } catch (Exception ignored) {
+                    // Gracefully fallback to full sync if timestamp is unparseable
+                }
+            }
         }
         return ResponseEntity.ok(ApiResponse.success(syncService.changes(resolvedSince)));
     }
