@@ -13,4 +13,8 @@ public interface ClientRepository extends JpaRepository<Client, UUID> {
     Optional<Client> findBySlugIgnoreCase(String slug);
     boolean existsBySlugIgnoreCase(String slug);
     boolean existsBySlugIgnoreCaseAndIdNot(String slug, UUID id);
+    java.util.Optional<Client> findFirstByPhone(String phone);
+    java.util.Optional<Client> findFirstByWhatsappNumber(String whatsappNumber);
+    @org.springframework.data.jpa.repository.Query("SELECT c FROM Client c WHERE c.phone = :p OR c.whatsappNumber = :p")
+    java.util.Optional<Client> findFirstByAnyPhone(@org.springframework.data.repository.query.Param("p") String phone);
 }

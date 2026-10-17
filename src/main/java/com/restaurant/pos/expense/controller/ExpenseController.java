@@ -40,6 +40,7 @@ import java.util.UUID;
 public class ExpenseController {
 
     private final ExpenseService expenseService;
+    private final com.restaurant.pos.category.service.CategoryService categoryService;
 
     @GetMapping
     @StaffAccess
@@ -85,7 +86,20 @@ public class ExpenseController {
      }
 
 
-    @GetMapping("/{id}")
+     @GetMapping("/categories")
+     @StaffAccess
+     @Operation(
+             summary = "Fetch expense categories (alias)",
+             description = "Returns all expense categories for backward compatibility with /api/v1/expenses/categories"
+     )
+     public ResponseEntity<ApiResponse<java.util.List<com.restaurant.pos.category.dto.CategoryResponse>>> getCategoriesAlias(
+             @RequestParam(value = "scope", required = false) String scope,
+             @RequestParam(value = "branchId", required = false) UUID branchId
+     ) {
+         return ResponseEntity.ok(ApiResponse.success(categoryService.getCategories(scope, branchId)));
+     }
+
+    @GetMapping("/{id:[0-9a-fA-F\\-]{36}}")
     @StaffAccess
     @Operation(
             summary = "Get expense by ID",

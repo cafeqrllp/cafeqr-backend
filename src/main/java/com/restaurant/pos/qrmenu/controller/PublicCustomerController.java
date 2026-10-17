@@ -24,6 +24,7 @@ public class PublicCustomerController {
     private final OtpService otpService;
     private final CustomerRepository customerRepository;
     private final EmailService emailService;
+    private final com.restaurant.pos.auth.service.WhatsAppAuthService whatsAppAuthService;
     private final com.restaurant.pos.qrmenu.query.QrOrderQueryService qrOrderQueryService;
     private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
     private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
@@ -33,7 +34,7 @@ public class PublicCustomerController {
         String email = payload.get("email");
         String clientIdStr = payload.get("clientId");
         if (email == null || email.isBlank() || clientIdStr == null || clientIdStr.isBlank()) {
-            return ResponseEntity.badRequest().body(ApiResponse.error("Email and clientId are required"));
+            return ResponseEntity.badRequest().body(ApiResponse.error("Email/phone and clientId are required"));
         }
         UUID clientId = qrOrderQueryService.resolveClientId(clientIdStr);
         if (clientId != null) {
@@ -46,8 +47,12 @@ public class PublicCustomerController {
             }
         }
 
-        String sanitized = email.trim().toLowerCase();
-        Optional<Customer> existing = customerRepository.findFirstByEmailIgnoreCaseAndClientId(sanitized, clientId);
+        boolean isEmail = email.contains("@");
+        String sanitized = isEmail ? email.trim().toLowerCase() : normalizePhone(email);
+        Optional<Customer> existing = isEmail
+                ? customerRepository.findFirstByEmailIgnoreCaseAndClientId(sanitized, clientId)
+                : customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(sanitized, clientId);
+
         if (existing.isPresent()) {
             Customer c = existing.get();
             return ResponseEntity.ok(ApiResponse.success(Map.of(
@@ -71,20 +76,19 @@ public class PublicCustomerController {
         
         boolean isEmail = identifier.contains("@");
         String sanitized = isEmail ? identifier.trim().toLowerCase() : normalizePhone(identifier);
-        String otp = otpService.generateAndSaveOtp(sanitized);
         
         if (isEmail) {
+            String otp = otpService.generateAndSaveOtp(sanitized);
             log.info("============== QR MENU EMAIL OTP ==============");
             log.info("Email: {}", sanitized);
             log.info("OTP: {}", otp);
             log.info("===============================================");
             emailService.sendOtpEmail(sanitized, otp);
         } else {
-            // SMS logic - Mocked for now as requested
-            log.info("============== QR MENU SMS OTP ==============");
+            log.info("============== QR MENU WHATSAPP OTP ==============");
             log.info("Phone: {}", sanitized);
-            log.info("OTP: {}", otp);
-            log.info("=============================================");
+            log.info("==================================================");
+            whatsAppAuthService.sendCustomerOtp(sanitized);
         }
         
         return ResponseEntity.ok(ApiResponse.success("OTP sent successfully to " + sanitized));
@@ -105,7 +109,11 @@ public class PublicCustomerController {
 
         boolean isEmail = identifier.contains("@");
         String sanitized = isEmail ? identifier.trim().toLowerCase() : normalizePhone(identifier);
-        if (!otpService.verifyOtp(sanitized, otp)) {
+        boolean valid = isEmail
+                ? otpService.verifyOtp(sanitized, otp)
+                : (whatsAppAuthService.verifyCustomerOtp(sanitized, otp) || otpService.verifyOtp(sanitized, otp));
+
+        if (!valid) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Invalid or expired OTP"));
         }
 

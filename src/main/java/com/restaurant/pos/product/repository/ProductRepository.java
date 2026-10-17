@@ -1,5 +1,6 @@
 package com.restaurant.pos.product.repository;
 
+import com.restaurant.pos.client.dto.ClientCountProjection;
 import com.restaurant.pos.product.domain.Product;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -148,4 +149,7 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     default Optional<Product> findByBarcodeAndClientIdAndOrgIdOrGlobal(String barcode, UUID clientId, UUID orgId) {
         return findByBarcodeAndClientIdAndOrgIdOrGlobalInternal(barcode, clientId, orgId, NIL_ORG_ID);
     }
+
+    @Query("SELECT p.clientId AS clientId, COUNT(p.id) AS count FROM Product p WHERE p.clientId IS NOT NULL AND (p.isActive IS NULL OR p.isActive = true) GROUP BY p.clientId")
+    List<ClientCountProjection> countActiveProductsPerClient();
 }

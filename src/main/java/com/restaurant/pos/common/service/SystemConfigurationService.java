@@ -349,6 +349,7 @@ public class SystemConfigurationService {
                 .printLeftMarginDots(source.getPrintLeftMarginDots())
                 .printRightMarginDots(source.getPrintRightMarginDots())
                 .printAutoCut(source.isPrintAutoCut())
+                .printSoundAlert(source.isPrintSoundAlert())
                 .printWinListUrl(source.getPrintWinListUrl())
                 .printWinPostUrl(source.getPrintWinPostUrl())
                 .disableEscMargins(source.isDisableEscMargins())
@@ -502,6 +503,7 @@ public class SystemConfigurationService {
                 .printLeftMarginDots(entity.getPrintLeftMarginDots())
                 .printRightMarginDots(entity.getPrintRightMarginDots())
                 .printAutoCut(entity.isPrintAutoCut())
+                .printSoundAlert(entity.isPrintSoundAlert())
                 .printWinListUrl(entity.getPrintWinListUrl())
                 .printWinPostUrl(entity.getPrintWinPostUrl())
                 .disableEscMargins(entity.isDisableEscMargins())
@@ -593,6 +595,7 @@ public class SystemConfigurationService {
         if (dto.getPrintRightMarginDots() != null)
             entity.setPrintRightMarginDots(dto.getPrintRightMarginDots());
         entity.setPrintAutoCut(dto.isPrintAutoCut());
+        entity.setPrintSoundAlert(dto.isPrintSoundAlert());
         if (dto.getPrintWinListUrl() != null) entity.setPrintWinListUrl(dto.getPrintWinListUrl());
         if (dto.getPrintWinPostUrl() != null) entity.setPrintWinPostUrl(dto.getPrintWinPostUrl());
         entity.setDisableEscMargins(dto.isDisableEscMargins());

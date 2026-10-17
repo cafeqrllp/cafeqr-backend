@@ -56,6 +56,26 @@ public class ClientSummaryDto {
     private long totalPaidPaise;
     private int paymentCount;
 
+    // Platform Vitality & Heartbeat
+    private long gmvPaise;
+    private long orderCount;
+    private LocalDateTime lastOrderAt;
+    private int menuItemsCount;
+    private int tablesCount;
+    private String onboardingStep;
+    private int onboardingScore;
+    private String healthStatus;
+
+    // Branch-First resolution & multi-branch breakdown
+    private UUID primaryOrgId;
+    private String primaryBranchName;
+    private String primaryBranchCode;
+    private int branchCount;
+    private List<BranchSummaryDto> branches;
+    private String effectiveSubscriptionStatus;
+    private LocalDateTime effectiveExpiryDate;
+    private int effectiveDaysLeft;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -78,5 +98,25 @@ public class ClientSummaryDto {
         private long amount;
         private String currency;
         private LocalDateTime createdAt;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class BranchSummaryDto {
+        private UUID id;
+        private UUID clientId;
+        private String name;
+        private String branchCode;
+        private String slug;
+        private String phone;
+        private String whatsappNumber;
+        private String address;
+        private String isactive;
+        private String subscriptionStatus;
+        private LocalDateTime subscriptionExpiryDate;
+        private int daysLeft;
+        private List<ModuleInfo> modules;
     }
 }

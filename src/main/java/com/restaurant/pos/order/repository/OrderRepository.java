@@ -1,5 +1,6 @@
 package com.restaurant.pos.order.repository;
 
+import com.restaurant.pos.client.dto.ClientOrderStatsProjection;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderType;
 import org.springframework.data.jpa.repository.EntityGraph;
@@ -170,6 +171,43 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
             @Param("orgId") UUID orgId,
             @Param("tableId") UUID tableId,
             @Param("tableNumber") String tableNumber);
+
+    @Query("""
+            SELECT o.clientId AS clientId,
+                   COUNT(o.id) AS orderCount,
+                   COALESCE(SUM(o.grandTotal), 0) AS totalGmv,
+                   MAX(o.createdAt) AS lastOrderAt
+            FROM Order o
+            WHERE o.orderType = com.restaurant.pos.order.domain.OrderType.SALE
+              AND (o.isactive IS NULL OR o.isactive = 'Y')
+            GROUP BY o.clientId
+            """)
+    List<ClientOrderStatsProjection> aggregateClientOrderStats();
+
+    @Query("""
+            SELECT COUNT(DISTINCT o.clientId)
+            FROM Order o
+            WHERE o.orderType = com.restaurant.pos.order.domain.OrderType.SALE
+              AND (o.isactive IS NULL OR o.isactive = 'Y')
+              AND o.createdAt >= :since
+            """)
+    long countActiveClientsSince(@Param("since") LocalDateTime since);
+
+    @Query("""
+            SELECT COUNT(o.id)
+            FROM Order o
+            WHERE o.orderType = com.restaurant.pos.order.domain.OrderType.SALE
+              AND (o.isactive IS NULL OR o.isactive = 'Y')
+            """)
+    long countAllSaleOrders();
+
+    @Query("""
+            SELECT COALESCE(SUM(o.grandTotal), 0)
+            FROM Order o
+            WHERE o.orderType = com.restaurant.pos.order.domain.OrderType.SALE
+              AND (o.isactive IS NULL OR o.isactive = 'Y')
+            """)
+    java.math.BigDecimal sumPlatformGmv();
 
 }
 

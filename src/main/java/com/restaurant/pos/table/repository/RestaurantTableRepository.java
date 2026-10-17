@@ -1,5 +1,6 @@
 package com.restaurant.pos.table.repository;
 
+import com.restaurant.pos.client.dto.ClientCountProjection;
 import com.restaurant.pos.table.domain.RestaurantTable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -33,4 +34,7 @@ public interface RestaurantTableRepository extends JpaRepository<RestaurantTable
 
     @Query("SELECT t FROM RestaurantTable t WHERE t.clientId = :clientId AND t.orgId = :orgId AND t.updatedAt > :updatedAfter ORDER BY t.displayOrder ASC, t.tableNumber ASC")
     List<RestaurantTable> findByClientIdAndOrgIdAndUpdatedAtAfterOrderByDisplayOrderAscTableNumberAsc(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("updatedAfter") LocalDateTime updatedAfter);
+
+    @Query("SELECT t.clientId AS clientId, COUNT(t.id) AS count FROM RestaurantTable t WHERE t.clientId IS NOT NULL AND (t.isactive IS NULL OR t.isactive = 'Y') GROUP BY t.clientId")
+    List<ClientCountProjection> countActiveTablesPerClient();
 }

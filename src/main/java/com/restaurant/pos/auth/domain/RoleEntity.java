@@ -48,6 +48,10 @@ public class RoleEntity extends BaseEntity {
     @Builder.Default
     private Boolean canDecrementOrderItem = true;
 
+    @Column(name = "can_print_order")
+    @Builder.Default
+    private Boolean canPrintOrder = true;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
         name = "role_permissions",

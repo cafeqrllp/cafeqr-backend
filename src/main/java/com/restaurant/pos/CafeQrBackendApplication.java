@@ -20,6 +20,8 @@ public class CafeQrBackendApplication {
     }
 
     public static void main(String[] args) {
+        // Must happen before Spring/Hibernate/Hikari initialise, otherwise they pick up the OS timezone.
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
         SpringApplication.run(CafeQrBackendApplication.class, args);
     }
 }

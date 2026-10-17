@@ -130,6 +130,7 @@ public class SystemConfiguration {
     private Integer printLeftMarginDots;
     private Integer printRightMarginDots;
     private boolean printAutoCut;
+    private boolean printSoundAlert;
     private String printWinListUrl;
     private String printWinPostUrl;
     

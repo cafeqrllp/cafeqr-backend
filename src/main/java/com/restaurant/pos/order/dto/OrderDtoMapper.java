@@ -462,6 +462,7 @@ public class OrderDtoMapper {
             order.setGrandTotal(request.getGrandTotal());
         }
         order.setSkipAutoPrintKinds(request.getSkipAutoPrintKinds());
+        order.setInvoicePdfBase64(request.getPdfBase64());
 
         if (request.getLines() != null) {
             for (CreateOrderRequest.CreateOrderLineRequest lineReq : request.getLines()) {

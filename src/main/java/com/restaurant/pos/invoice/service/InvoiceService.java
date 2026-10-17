@@ -22,6 +22,7 @@ public class InvoiceService {
 
     private final InvoiceRepository invoiceRepository;
     private final OrderService orderService;
+    private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
 
     @Transactional(readOnly = true)
     public Invoice getInvoice(UUID id) {
@@ -98,11 +99,15 @@ public class InvoiceService {
         if (invoice.getDailyBillNo() == null || invoice.getDailyBillNo() <= 0) {
             LocalDateTime date = invoice.getInvoiceDate();
             if (date == null) {
-                date = LocalDateTime.now();
+                date = LocalDateTime.now(java.time.ZoneOffset.UTC);
                 invoice.setInvoiceDate(date);
             }
-            LocalDateTime start = date.toLocalDate().atStartOfDay();
-            LocalDateTime end = date.toLocalDate().atTime(23, 59, 59, 999999999);
+            // invoiceDate is stored in UTC; the bill counter resets at the branch's local midnight.
+            java.time.ZoneId zone = timezoneResolver.resolveTimezone(invoice.getClientId(), invoice.getOrgId());
+            java.time.LocalDate branchDay = date.atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zone).toLocalDate();
+            LocalDateTime start = branchDay.atStartOfDay(zone).withZoneSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+            LocalDateTime end = branchDay.plusDays(1).atStartOfDay(zone).withZoneSameInstant(java.time.ZoneOffset.UTC)
+                    .toLocalDateTime().minusNanos(1);
             int maxNo = invoiceRepository.findMaxDailyBillNo(invoice.getClientId(), invoice.getOrgId(), start, end);
             invoice.setDailyBillNo(maxNo + 1);
         }

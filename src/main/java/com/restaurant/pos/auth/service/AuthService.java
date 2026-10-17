@@ -189,6 +189,16 @@ public class AuthService {
         return buildAuthResponse(user, client, ipAddress, userAgent);
     }
 
+    @Transactional
+    public AuthResponse authenticateDirectly(User user, String ipAddress, String userAgent) {
+        if (!"Y".equalsIgnoreCase(user.getIsactive())) {
+            throw new BusinessException("Your account is inactive. Please contact support.");
+        }
+        Client client = clientRepository.findById(java.util.Objects.requireNonNull(user.getClientId()))
+                .orElseThrow(() -> new BusinessException("Client not found"));
+        return buildAuthResponse(user, client, ipAddress, userAgent);
+    }
+
     private AuthResponse buildAuthResponse(User user, Client client, String ipAddress, String userAgent) {
         // Self-heal: auto-assign user to the client's default branch if not already set
         UUID resolvedOrgId = user.getOrgId();
@@ -243,6 +253,7 @@ public class AuthService {
                 .canCancelOrder(user.getRoleEntity() != null ? user.getRoleEntity().getCanCancelOrder() : true)
                 .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
                 .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
+                .canPrintOrder(user.getRoleEntity() != null && user.getRoleEntity().getCanPrintOrder() != null ? user.getRoleEntity().getCanPrintOrder() : true)
                 .timezone(user.getOrganization() != null && user.getOrganization().getTimezone() != null ? user.getOrganization().getTimezone() : client.getTimezone())
                 .termsAcceptedVersion(user.getTermsAcceptedVersion())
                 .termsAcceptedAt(user.getTermsAcceptedAt())

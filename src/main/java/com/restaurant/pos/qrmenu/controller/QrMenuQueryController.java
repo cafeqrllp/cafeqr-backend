@@ -29,19 +29,19 @@ import java.util.UUID;
 public class QrMenuQueryController {
 
     private final QrOrderQueryService queryService;
+    private final com.restaurant.pos.qrmenu.query.QrMenuCacheService menuCache;
 
     /**
      * GET /api/v1/public/menu/{clientId}/{orgId}
      * Returns the full active menu for a given restaurant (client + org, via UUID or slug).
      */
     @GetMapping("/{clientId}/{orgId}")
-    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getMenu(
             @PathVariable String clientId,
             @PathVariable String orgId) {
         UUID clientUuid = queryService.resolveClientId(clientId);
         UUID orgUuid = queryService.resolveOrgId(clientUuid, orgId);
-        List<Map<String, Object>> menu = queryService.getMenu(clientUuid, orgUuid);
+        List<Map<String, Object>> menu = menuCache.getMenu(clientUuid, orgUuid);
         return ResponseEntity.ok(ApiResponse.success(menu));
     }
 
