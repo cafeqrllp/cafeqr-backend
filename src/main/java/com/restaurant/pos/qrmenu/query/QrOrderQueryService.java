@@ -193,7 +193,8 @@ public class QrOrderQueryService {
         info.put("taxDefaultId", qrConfig.getTaxDefaultId());
         info.put("currencySymbol", (qrConfig.getCurrencySymbol() != null && !qrConfig.getCurrencySymbol().isBlank())
                 ? qrConfig.getCurrencySymbol()
-                : "₹");
+                : "");
+        info.put("currencyCode", qrConfig.getCurrencyCode());
         info.put("currencyDecimalPlaces", qrConfig.getCurrencyDecimalPlaces() != null ? qrConfig.getCurrencyDecimalPlaces() : 2);
 
         // Inventory & Loyalty module status (for frontend to conditionally display features)
@@ -263,6 +264,8 @@ public class QrOrderQueryService {
                     lm.put("productName", line.getProductName());
                     lm.put("categoryName", line.getCategoryName());
                     lm.put("quantity", line.getQuantity());
+                    lm.put("unitOfMeasure", line.getUnitOfMeasure());
+                    lm.put("uomPrecision", line.getUomPrecision());
                     lm.put("unitPrice", line.getUnitPrice());
                     lm.put("lineTotal", line.getLineTotal());
                     lm.put("taxRate", line.getTaxRate());
@@ -337,6 +340,9 @@ public class QrOrderQueryService {
                     item.put("name", p.getName());
                     item.put("description", p.getDescription());
                     item.put("price", p.getPrice());
+                    item.put("uomName", p.getUom() != null ? p.getUom().getName() : null);
+                    item.put("uomShortName", p.getUom() != null ? p.getUom().getShortName() : null);
+                    item.put("uomPrecision", p.getUom() != null ? p.getUom().getUomPrecision() : 0);
                     item.put("imageUrl", p.getImageUrl());
                     item.put("category", p.getCategory() != null ? p.getCategory().getName() : "Others");
                     boolean isVeg = "VEG".equalsIgnoreCase(p.getProductType())

@@ -39,4 +39,7 @@ public class ProductBean {
     private Integer variantCount;
     private Boolean hasUpsells;
     private Integer upsellCount;
+    private String uomName;
+    private String uomShortName;
+    private Integer uomPrecision;
 }

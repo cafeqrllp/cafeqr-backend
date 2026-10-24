@@ -107,9 +107,11 @@ public class WhatsAppService {
             log.debug("[WhatsAppService] Could not verify line initialization: {}", ex.getMessage());
         }
 
-        Long lastSent = recentlySentOrders.get(order.getId());
         long now = System.currentTimeMillis();
-        if (lastSent != null && (now - lastSent) < 60_000) {
+        // Atomic claim: concurrent callers (frontend request + settled-event consumer) cannot both pass
+        Long claimed = recentlySentOrders.compute(order.getId(),
+                (k, v) -> (v != null && now - v < 60_000) ? v : now);
+        if (claimed != now) {
             log.info("[WhatsAppService] WhatsApp bill already sent recently for order {}, skipping duplicate", order.getId());
             return true;
         }
@@ -174,9 +176,9 @@ public class WhatsAppService {
         // Dispatch clean, instant text bill containing the public e-bill link
         boolean dispatched = dispatchToGateway(primarySessionId, fallbackSessionId, normalizedPhone, billMessage, null, null);
         if (dispatched) {
-            recentlySentOrders.put(order.getId(), now);
             log.info("[WhatsAppService] Digital bill successfully sent for order {}", order.getId());
         } else {
+            recentlySentOrders.remove(order.getId(), now);
             log.warn("[WhatsAppService] Digital bill dispatch failed for order {}", order.getId());
         }
         return dispatched;
@@ -211,7 +213,6 @@ public class WhatsAppService {
                     order.getId(), (now - lastSent));
             return true;
         }
-        recentlySentOrders.remove(order.getId());
         return sendOrderSettledBill(order, explicitFrontendUrl);
     }
 

@@ -110,7 +110,7 @@ class WhatsAppBillFormatterTest {
 
         // Verify Header
         assertTrue(message.contains("🧾 *TAX INVOICE*"));
-        assertTrue(message.contains("🍽 *RIYAS TEST RESTAURANT 1*"));
+        assertTrue(message.contains("🍽️ *RIYAS TEST RESTAURANT 1*"));
         assertTrue(message.contains("Hi *Riyas*, thank you for dining with us! 😊"));
 
         // Verify Token & Invoice

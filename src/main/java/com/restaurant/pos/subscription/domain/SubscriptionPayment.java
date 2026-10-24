@@ -3,16 +3,16 @@ package com.restaurant.pos.subscription.domain;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
 @Table(name = "subscription_payments")
-@Data
+@Getter
+@Setter
 @Builder
-@NoArgsConstructor
 @AllArgsConstructor
 public class SubscriptionPayment {
     @Id
@@ -33,14 +33,25 @@ public class SubscriptionPayment {
 
     private long amount;
 
-    @Builder.Default
-    private String currency = "INR";
+    private String currency;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    public SubscriptionPayment() {
+        super();
+        this.currency = "INR";
+    }
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (currency == null) {
+            currency = "INR";
+        }
+    }
+
+    public static class SubscriptionPaymentBuilder {
+        private String currency = "INR";
     }
 }

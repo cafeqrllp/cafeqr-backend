@@ -19,7 +19,6 @@ public class UserContext {
         private String orgName;
         private UUID terminalId;
         private String terminalName;
-        private String currency;
         private String country;
     }
 

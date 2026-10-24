@@ -33,4 +33,7 @@ public interface PosProductSummaryView {
     Integer getVariantCount();
     Boolean getHasUpsells();
     Integer getUpsellCount();
+    String getUomName();
+    String getUomShortName();
+    Integer getUomPrecision();
 }

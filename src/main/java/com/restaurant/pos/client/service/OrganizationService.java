@@ -24,6 +24,7 @@ public class OrganizationService {
     private final OrganizationRepository repository;
     private final ClientRepository clientRepository;
     private final PaymentTypeRepository paymentTypeRepository;
+    private final com.restaurant.pos.purchasing.service.DefaultCurrencyService defaultCurrencyService;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
 
     public List<Organization> getMyOrganizations() {
@@ -78,6 +79,7 @@ public class OrganizationService {
 
         Organization saved = repository.save(organization);
         seedDefaultPaymentTypes(saved);
+        defaultCurrencyService.ensureDefaultCurrency(clientId, saved.getId());
         return saved;
     }
 

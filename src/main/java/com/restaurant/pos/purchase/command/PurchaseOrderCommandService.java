@@ -569,6 +569,7 @@ public class PurchaseOrderCommandService {
         newLine.setProductName(oldLine.getProductName());
         newLine.setCategoryName(oldLine.getCategoryName());
         newLine.setUnitOfMeasure(oldLine.getUnitOfMeasure());
+        newLine.setUomPrecision(oldLine.getUomPrecision());
         newLine.setQuantity(oldLine.getQuantity());
         newLine.setUnitPrice(oldLine.getUnitPrice());
         newLine.setTaxRate(oldLine.getTaxRate());

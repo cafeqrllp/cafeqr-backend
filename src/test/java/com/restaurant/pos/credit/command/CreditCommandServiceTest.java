@@ -20,13 +20,17 @@ import com.restaurant.pos.sequence.service.DocumentSequenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.restaurant.pos.common.service.CurrencyScaleService;
+
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -46,6 +50,7 @@ class CreditCommandServiceTest {
     private BranchContextService branchContext;
     private DocumentSequenceService sequenceService;
     private AuditLogService auditLogService;
+    private CurrencyScaleService currencyScale;
 
     private CreditCommandService service;
 
@@ -65,6 +70,8 @@ class CreditCommandServiceTest {
         branchContext = mock(BranchContextService.class);
         sequenceService = mock(DocumentSequenceService.class);
         auditLogService = mock(AuditLogService.class);
+        currencyScale = mock(CurrencyScaleService.class);
+        when(currencyScale.decimalPlaces(any(), any())).thenReturn(2);
 
         service = new CreditCommandService(
                 creditGuard,
@@ -77,10 +84,15 @@ class CreditCommandServiceTest {
                 configurationService,
                 branchContext,
                 sequenceService,
-                auditLogService
+                auditLogService,
+                currencyScale
         );
 
         when(creditGuard.requireClient()).thenReturn(clientId);
+        when(creditGuard.money(any(), anyInt())).thenAnswer(invocation -> {
+            BigDecimal val = invocation.getArgument(0);
+            return val == null ? BigDecimal.ZERO : val.setScale(invocation.<Integer>getArgument(1), RoundingMode.HALF_UP);
+        });
         when(creditGuard.money(any())).thenAnswer(invocation -> {
             BigDecimal val = invocation.getArgument(0);
             return val == null ? BigDecimal.ZERO : val.setScale(2);

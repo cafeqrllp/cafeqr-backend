@@ -282,7 +282,7 @@ public class SystemConfigurationService {
                 .taxRatesJson("[]")
                 .pricesIncludeTax(false)
                 .taxSplitEnabled(true)
-                .currencySymbol("\u20b9")
+                .currencySymbol("")
                 .currencyPosition("before")
                 .roundOffMode("automatic")
                 .roundOffAutoFactor(java.math.BigDecimal.ONE)
@@ -356,6 +356,33 @@ public class SystemConfigurationService {
                 .build();
     }
 
+    /**
+     * Default currency from Currency Master: the single source of truth for the
+     * symbol and ISO code shown to users. Org-level default wins over client-level.
+     */
+    public String resolveDefaultCurrencyCode(UUID clientId, UUID orgId) {
+        if (clientId == null) {
+            return null;
+        }
+        return findDefaultCurrency(clientId, orgId).map(com.restaurant.pos.purchasing.domain.Currency::getCode).orElse(null);
+    }
+
+    private Optional<com.restaurant.pos.purchasing.domain.Currency> findDefaultCurrency(UUID clientId, UUID orgId) {
+        Optional<com.restaurant.pos.purchasing.domain.Currency> defaultCurrencyOpt = Optional.empty();
+        if (orgId != null) {
+            defaultCurrencyOpt = currencyRepository
+                    .findByClientIdAndOrgIdAndIsDefaultTrue(clientId, orgId)
+                    .stream()
+                    .findFirst();
+        }
+        if (defaultCurrencyOpt.isEmpty()) {
+            defaultCurrencyOpt = currencyRepository.findByClientIdAndIsDefaultTrue(clientId)
+                    .stream()
+                    .findFirst();
+        }
+        return defaultCurrencyOpt;
+    }
+
     private String resolveLogoUrl(UUID clientId, UUID orgId) {
         String logoUrl = null;
         if (clientId != null) {
@@ -388,26 +415,18 @@ public class SystemConfigurationService {
 
         Integer decimalPlaces = 2;
         String currencySymbol = "";
+        String currencyCode = null;
 
         if (entity.getClientId() != null) {
             try {
-                Optional<com.restaurant.pos.purchasing.domain.Currency> defaultCurrencyOpt = Optional.empty();
-                if (orgId != null) {
-                    defaultCurrencyOpt = currencyRepository
-                            .findByClientIdAndOrgIdAndIsDefaultTrue(entity.getClientId(), orgId)
-                            .stream()
-                            .findFirst();
-                }
-                if (defaultCurrencyOpt.isEmpty()) {
-                    defaultCurrencyOpt = currencyRepository.findByClientIdAndIsDefaultTrue(entity.getClientId())
-                            .stream()
-                            .findFirst();
-                }
+                Optional<com.restaurant.pos.purchasing.domain.Currency> defaultCurrencyOpt =
+                        findDefaultCurrency(entity.getClientId(), orgId);
 
                 if (defaultCurrencyOpt.isPresent()) {
                     var currency = defaultCurrencyOpt.get();
                     decimalPlaces = currency.getDecimalPlaces() != null ? currency.getDecimalPlaces() : 2;
                     currencySymbol = currency.getSymbol() != null ? currency.getSymbol() : "";
+                    currencyCode = currency.getCode();
                 }
             } catch (Exception e) {
                 log.warn("Failed to fetch default currency details for client {}, org {}", entity.getClientId(), orgId,
@@ -492,6 +511,7 @@ public class SystemConfigurationService {
                 .pricesIncludeTax(entity.isPricesIncludeTax())
                 .taxSplitEnabled(entity.isTaxSplitEnabled())
                 .currencySymbol(currencySymbol)
+                .currencyCode(currencyCode)
                 .currencyPosition(entity.getCurrencyPosition())
                 .currencyDecimalPlaces(decimalPlaces)
                 .billFooter(entity.getBillFooter())

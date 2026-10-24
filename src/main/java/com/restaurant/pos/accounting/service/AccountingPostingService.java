@@ -7,6 +7,7 @@ import com.restaurant.pos.category.domain.ExpenseCategory;
 import com.restaurant.pos.category.repository.ExpenseCategoryRepository;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.inventory.domain.StockAdjustment;
 import com.restaurant.pos.inventory.domain.StockAdjustmentLine;
@@ -47,7 +48,7 @@ import java.util.function.Supplier;
 @RequiredArgsConstructor
 public class AccountingPostingService {
 
-    private static final int MAX_BACKFILL_DAYS = 366;
+    private static final int MAX_BACKFILL_DAYS = 1830;
 
     private final AccountingService accountingService;
     private final AccountingDefaultsService defaultsService;
@@ -66,6 +67,7 @@ public class AccountingPostingService {
     private final StockAdjustmentRepository stockAdjustmentRepository;
     private final ExpenseRepository expenseRepository;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+    private final CurrencyScaleService currencyScale;
 
     public PostingOutcome postInvoice(Order order, Invoice invoice) {
         if (invoice == null || invoice.getId() == null || isVoid(invoice.getStatus()) || isInactive(invoice.getIsactive())) {
@@ -663,43 +665,44 @@ public class AccountingPostingService {
         if (type != InvoiceType.CUSTOMER_INVOICE || isVoidStatus(invoice.getStatus()) || isVoidStatus(invoice.getDocStatus())) {
             return false;
         }
-        BigDecimal discount = effectiveInvoiceDiscount(order);
+        int dp = currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
+        BigDecimal discount = effectiveInvoiceDiscount(order, dp);
         if (discount.compareTo(BigDecimal.ZERO) <= 0) {
             return false;
         }
         return findActiveSourceJournal(invoiceSourceType(invoice), invoice.getId())
                 .filter(entry -> Boolean.TRUE.equals(entry.getAutoPosted()))
-                .map(entry -> !invoiceJournalMatchesOrder(entry, order, invoice))
+                .map(entry -> !invoiceJournalMatchesOrder(entry, order, invoice, dp))
                 .orElse(false);
     }
 
-    private boolean invoiceJournalMatchesOrder(JournalEntry entry, Order order, Invoice invoice) {
-        BigDecimal total = money(invoice.getTotalAmount());
-        BigDecimal tax = clampTax(order != null ? order.getTotalTaxAmount() : BigDecimal.ZERO, total);
-        BigDecimal discount = effectiveInvoiceDiscount(order);
+    private boolean invoiceJournalMatchesOrder(JournalEntry entry, Order order, Invoice invoice, int dp) {
+        BigDecimal total = money(invoice.getTotalAmount(), dp);
+        BigDecimal tax = clampTax(order != null ? order.getTotalTaxAmount() : BigDecimal.ZERO, total, dp);
+        BigDecimal discount = effectiveInvoiceDiscount(order, dp);
         BigDecimal grossBeforeDiscount = total.subtract(tax).add(discount);
 
-        return journalAmount(entry, AccountingDefaultsService.ACCOUNTS_RECEIVABLE, true).compareTo(total) == 0
-                && journalAmount(entry, AccountingDefaultsService.DISCOUNT_ALLOWED, true).compareTo(discount) == 0
-                && journalAmount(entry, AccountingDefaultsService.SALES_REVENUE, false).compareTo(grossBeforeDiscount) == 0
-                && journalAmount(entry, AccountingDefaultsService.OUTPUT_TAX, false).compareTo(tax) == 0;
+        return journalAmount(entry, AccountingDefaultsService.ACCOUNTS_RECEIVABLE, true, dp).compareTo(total) == 0
+                && journalAmount(entry, AccountingDefaultsService.DISCOUNT_ALLOWED, true, dp).compareTo(discount) == 0
+                && journalAmount(entry, AccountingDefaultsService.SALES_REVENUE, false, dp).compareTo(grossBeforeDiscount) == 0
+                && journalAmount(entry, AccountingDefaultsService.OUTPUT_TAX, false, dp).compareTo(tax) == 0;
     }
 
-    private BigDecimal journalAmount(JournalEntry entry, String systemKey, boolean debit) {
+    private BigDecimal journalAmount(JournalEntry entry, String systemKey, boolean debit, int dp) {
         if (entry == null || entry.getLines() == null) {
-            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP);
         }
         UUID clientId = requireClient();
         UUID orgId = entry.getOrgId();
         Optional<AccountingAccount> account = accountRepository.findByClientIdAndOrgIdAndSystemKeyIgnoreCase(clientId, orgId, systemKey);
         if (account.isEmpty()) {
-            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP);
         }
         UUID accountId = account.get().getId();
         return entry.getLines().stream()
                 .filter(line -> accountId.equals(line.getAccountId()))
-                .map(line -> debit ? money(line.getDebit()) : money(line.getCredit()))
-                .reduce(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), BigDecimal::add);
+                .map(line -> debit ? money(line.getDebit(), dp) : money(line.getCredit(), dp))
+                .reduce(BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP), BigDecimal::add);
     }
 
     private boolean isVoidedSaleOrder(Order order) {
@@ -920,49 +923,51 @@ public class AccountingPostingService {
     }
 
     private Optional<JournalEntry> buildInvoiceJournal(Order order, Expense expense, Invoice invoice) {
-        BigDecimal total = money(invoice.getTotalAmount());
+        UUID scaleOrgId = invoice.getOrgId() != null ? invoice.getOrgId() : (order != null ? order.getOrgId() : (expense != null ? expense.getOrgId() : null));
+        int dp = currencyScale.decimalPlaces(invoice.getClientId(), scaleOrgId);
+        BigDecimal total = money(invoice.getTotalAmount(), dp);
         if (total.compareTo(BigDecimal.ZERO) <= 0) {
             return Optional.empty();
         }
         InvoiceType type = invoice.getInvoiceType() == null ? InvoiceType.CUSTOMER_INVOICE : invoice.getInvoiceType();
-        BigDecimal tax = clampTax(order != null ? order.getTotalTaxAmount() : BigDecimal.ZERO, total);
+        BigDecimal tax = clampTax(order != null ? order.getTotalTaxAmount() : BigDecimal.ZERO, total, dp);
         BigDecimal base = total.subtract(tax);
 
         List<JournalLine> lines = new ArrayList<>();
         if (type == InvoiceType.CUSTOMER_INVOICE) {
-            BigDecimal discount = effectiveInvoiceDiscount(order);
+            BigDecimal discount = effectiveInvoiceDiscount(order, dp);
             BigDecimal grossBeforeDiscount = base.add(discount);
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_RECEIVABLE), total, BigDecimal.ZERO,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_RECEIVABLE), total, BigDecimal.ZERO,
                     PartyType.CUSTOMER, invoice.getCustomerId(), "Customer invoice receivable");
             if (discount.compareTo(BigDecimal.ZERO) > 0) {
-                addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.DISCOUNT_ALLOWED), discount, BigDecimal.ZERO,
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.DISCOUNT_ALLOWED), discount, BigDecimal.ZERO,
                         null, null, "Sales discount allowed");
             }
             if (grossBeforeDiscount.compareTo(BigDecimal.ZERO) > 0) {
-                addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.SALES_REVENUE), BigDecimal.ZERO, grossBeforeDiscount,
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.SALES_REVENUE), BigDecimal.ZERO, grossBeforeDiscount,
                         null, null, "Gross sales revenue");
             }
             if (tax.compareTo(BigDecimal.ZERO) > 0) {
-                addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.OUTPUT_TAX), BigDecimal.ZERO, tax,
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.OUTPUT_TAX), BigDecimal.ZERO, tax,
                         null, null, "Output tax");
             }
         } else if (type == InvoiceType.VENDOR_BILL) {
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), base, BigDecimal.ZERO,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), base, BigDecimal.ZERO,
                     null, null, "Purchase inventory");
             if (tax.compareTo(BigDecimal.ZERO) > 0) {
-                addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INPUT_TAX), tax, BigDecimal.ZERO,
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INPUT_TAX), tax, BigDecimal.ZERO,
                         null, null, "Input tax");
             }
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), BigDecimal.ZERO, total,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), BigDecimal.ZERO, total,
                     PartyType.VENDOR, invoice.getVendorId(), "Vendor payable");
         } else {
             AccountingAccount expenseAccount = resolveExpenseAccount(invoice, order, expense);
-            addLine(lines, expenseAccount, base, BigDecimal.ZERO, null, null, "Expense");
+            addLine(lines, dp, expenseAccount, base, BigDecimal.ZERO, null, null, "Expense");
             if (tax.compareTo(BigDecimal.ZERO) > 0) {
-                addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INPUT_TAX), tax, BigDecimal.ZERO,
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INPUT_TAX), tax, BigDecimal.ZERO,
                         null, null, "Input tax");
             }
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), BigDecimal.ZERO, total,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), BigDecimal.ZERO, total,
                     null, null, "Expense payable");
         }
 
@@ -975,7 +980,9 @@ public class AccountingPostingService {
     }
 
     private Optional<JournalEntry> buildPaymentJournal(Order order, Expense expense, Payment payment) {
-        BigDecimal amount = money(payment.getAmountPaid());
+        UUID scaleOrgId = payment.getOrgId() != null ? payment.getOrgId() : (order != null ? order.getOrgId() : (expense != null ? expense.getOrgId() : null));
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), scaleOrgId);
+        BigDecimal amount = money(payment.getAmountPaid(), dp);
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return Optional.empty();
         }
@@ -991,23 +998,23 @@ public class AccountingPostingService {
         }
 
         for (PaymentSplit split : splits) {
-            BigDecimal splitAmount = money(split.getAmount());
+            BigDecimal splitAmount = money(split.getAmount(), dp);
             if (splitAmount.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
             AccountingAccount paymentAccount = defaultsService.resolvePaymentAccount(split.getPaymentMethod());
             if (inbound) {
-                addLine(lines, paymentAccount, splitAmount, BigDecimal.ZERO, null, null, "Payment received");
+                addLine(lines, dp, paymentAccount, splitAmount, BigDecimal.ZERO, null, null, "Payment received");
             } else {
-                addLine(lines, paymentAccount, BigDecimal.ZERO, splitAmount, null, null, "Payment made");
+                addLine(lines, dp, paymentAccount, BigDecimal.ZERO, splitAmount, null, null, "Payment made");
             }
         }
 
         if (inbound) {
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_RECEIVABLE), BigDecimal.ZERO, amount,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_RECEIVABLE), BigDecimal.ZERO, amount,
                     PartyType.CUSTOMER, resolvePaymentCustomerId(order, payment), "Receivable settled");
         } else {
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), amount, BigDecimal.ZERO,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_PAYABLE), amount, BigDecimal.ZERO,
                     PartyType.VENDOR, order != null ? order.getVendorId() : null, "Payable settled");
         }
 
@@ -1020,30 +1027,32 @@ public class AccountingPostingService {
     }
 
     private Optional<JournalEntry> buildSaleCogsJournal(Order order) {
+        int dp = currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
         BigDecimal costTotal = BigDecimal.ZERO;
         if (order.getLines() != null) {
             for (OrderLine line : order.getLines()) {
                 if (line == null || !line.isActive() || line.getProductId() == null) {
                     continue;
                 }
-                BigDecimal unitCost = resolveUnitCost(line);
+                BigDecimal unitCost = resolveUnitCost(line, dp);
                 costTotal = costTotal.add(unitCost.multiply(quantity(line.getQuantity())));
             }
         }
-        costTotal = money(costTotal);
+        costTotal = money(costTotal, dp);
         if (costTotal.compareTo(BigDecimal.ZERO) <= 0) {
             return Optional.empty();
         }
         List<JournalLine> lines = new ArrayList<>();
-        addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.PURCHASE_COGS), costTotal, BigDecimal.ZERO,
+        addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.PURCHASE_COGS), costTotal, BigDecimal.ZERO,
                 null, null, "Sales cost of goods sold");
-        addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), BigDecimal.ZERO, costTotal,
+        addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), BigDecimal.ZERO, costTotal,
                 null, null, "Inventory consumed by sale");
         return journal("SALE_COGS", order.getId(), orderDate(order), order.getTerminalId(), order.getWarehouseId(), order.getCurrencyId(),
                 order.getOrgId(), "Auto posted COGS for " + order.getOrderNo(), lines);
     }
 
     private Optional<JournalEntry> buildStockAdjustmentJournal(StockAdjustment adjustment) {
+        int dp = currencyScale.decimalPlaces(adjustment.getClientId(), adjustment.getOrgId());
         BigDecimal value = BigDecimal.ZERO;
         if (adjustment.getLines() != null) {
             for (StockAdjustmentLine line : adjustment.getLines()) {
@@ -1051,24 +1060,24 @@ public class AccountingPostingService {
 
                     continue;
                 }
-                value = value.add(quantity(line.getQuantityChange()).multiply(money(line.getUnitCost())));
+                value = value.add(quantity(line.getQuantityChange()).multiply(money(line.getUnitCost(), dp)));
             }
         }
-        value = money(value);
+        value = money(value, dp);
         if (value.compareTo(BigDecimal.ZERO) == 0) {
             return Optional.empty();
         }
         List<JournalLine> lines = new ArrayList<>();
         BigDecimal absolute = value.abs();
         if (value.compareTo(BigDecimal.ZERO) > 0) {
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), absolute, BigDecimal.ZERO,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), absolute, BigDecimal.ZERO,
                     null, null, "Stock adjustment increase");
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.STOCK_ADJUSTMENT_GAIN_LOSS), BigDecimal.ZERO, absolute,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.STOCK_ADJUSTMENT_GAIN_LOSS), BigDecimal.ZERO, absolute,
                     null, null, "Stock adjustment gain");
         } else {
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.STOCK_ADJUSTMENT_GAIN_LOSS), absolute, BigDecimal.ZERO,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.STOCK_ADJUSTMENT_GAIN_LOSS), absolute, BigDecimal.ZERO,
                     null, null, "Stock adjustment loss");
-            addLine(lines, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), BigDecimal.ZERO, absolute,
+            addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.INVENTORY_ASSET), BigDecimal.ZERO, absolute,
                     null, null, "Stock adjustment decrease");
         }
         return journal("STOCK_ADJUSTMENT", adjustment.getId(), adjustment.getAdjustmentDate(), null, adjustment.getWarehouseId(), null,
@@ -1076,12 +1085,13 @@ public class AccountingPostingService {
     }
 
     private Optional<JournalEntry> buildReversalJournal(JournalEntry original, String reason) {
+        int dp = currencyScale.decimalPlaces(original.getClientId(), original.getOrgId());
         List<JournalLine> lines = new ArrayList<>();
         for (JournalLine originalLine : original.getLines()) {
-            addLine(lines,
+            addLine(lines, dp,
                     accountById(originalLine.getAccountId()),
-                    money(originalLine.getCredit()),
-                    money(originalLine.getDebit()),
+                    money(originalLine.getCredit(), dp),
+                    money(originalLine.getDebit(), dp),
                     originalLine.getPartyType(),
                     originalLine.getPartyId(),
                     "Reversal: " + nullToDash(originalLine.getDescription()));
@@ -1124,18 +1134,18 @@ public class AccountingPostingService {
         return Optional.of(entry);
     }
 
-    private BigDecimal effectiveInvoiceDiscount(Order order) {
+    private BigDecimal effectiveInvoiceDiscount(Order order, int dp) {
         if (order == null) {
-            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP);
         }
         if (order.getLines() == null || order.getLines().isEmpty()) {
-            return money(order.getTotalDiscountAmount()).setScale(2, RoundingMode.HALF_UP);
+            return money(order.getTotalDiscountAmount(), dp).setScale(dp, RoundingMode.HALF_UP);
         }
         BigDecimal totalExTaxDiscount = BigDecimal.ZERO;
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
             if (line.getGrossLineAmount() == null || line.getTaxType() == null) {
-                BigDecimal disc = money(line.getDiscountAmount());
-                BigDecimal taxRate = money(line.getTaxRate());
+                BigDecimal disc = money(line.getDiscountAmount(), dp);
+                BigDecimal taxRate = money(line.getTaxRate(), dp);
                 boolean isInclusive = line.getIsPackagedGood() != null && line.getIsPackagedGood();
                 BigDecimal discExTax = isInclusive 
                         ? disc.divide(BigDecimal.ONE.add(taxRate.divide(BigDecimal.valueOf(100))), 4, RoundingMode.HALF_UP)
@@ -1143,9 +1153,9 @@ public class AccountingPostingService {
                 totalExTaxDiscount = totalExTaxDiscount.add(discExTax);
                 continue;
             }
-            BigDecimal grossLine = money(line.getGrossLineAmount());
-            BigDecimal taxable = money(line.getTaxableAmount());
-            BigDecimal taxRate = money(line.getTaxRate());
+            BigDecimal grossLine = money(line.getGrossLineAmount(), dp);
+            BigDecimal taxable = money(line.getTaxableAmount(), dp);
+            BigDecimal taxRate = money(line.getTaxRate(), dp);
             boolean isInclusive = "INCLUSIVE".equalsIgnoreCase(String.valueOf(line.getTaxType()));
             
             BigDecimal lineGrossExTax = isInclusive 
@@ -1155,13 +1165,13 @@ public class AccountingPostingService {
             BigDecimal lineDiscountExTax = lineGrossExTax.subtract(taxable).max(BigDecimal.ZERO);
             totalExTaxDiscount = totalExTaxDiscount.add(lineDiscountExTax);
         }
-        return totalExTaxDiscount.setScale(2, RoundingMode.HALF_UP);
+        return totalExTaxDiscount.setScale(dp, RoundingMode.HALF_UP);
     }
 
-    private void addLine(List<JournalLine> lines, AccountingAccount account, BigDecimal debit, BigDecimal credit,
+    private void addLine(List<JournalLine> lines, int dp, AccountingAccount account, BigDecimal debit, BigDecimal credit,
                          PartyType partyType, UUID partyId, String description) {
-        BigDecimal debitAmount = money(debit);
-        BigDecimal creditAmount = money(credit);
+        BigDecimal debitAmount = money(debit, dp);
+        BigDecimal creditAmount = money(credit, dp);
         if (debitAmount.compareTo(BigDecimal.ZERO) == 0 && creditAmount.compareTo(BigDecimal.ZERO) == 0) {
             return;
         }
@@ -1336,10 +1346,10 @@ public class AccountingPostingService {
         return type == PaymentType.INBOUND ? "INBOUND_PAYMENT" : "OUTBOUND_PAYMENT";
     }
 
-    private BigDecimal resolveUnitCost(OrderLine line) {
+    private BigDecimal resolveUnitCost(OrderLine line, int dp) {
         return productRepository.findById(line.getProductId())
                 .map(Product::getCostPrice)
-                .map(this::money)
+                .map(cost -> money(cost, dp))
                 .orElse(BigDecimal.ZERO);
     }
 
@@ -1360,8 +1370,8 @@ public class AccountingPostingService {
         return fallbackDate != null ? fallbackDate : LocalDateTime.now();
     }
 
-    private BigDecimal clampTax(BigDecimal tax, BigDecimal total) {
-        BigDecimal value = money(tax);
+    private BigDecimal clampTax(BigDecimal tax, BigDecimal total, int dp) {
+        BigDecimal value = money(tax, dp);
         if (value.compareTo(BigDecimal.ZERO) < 0) {
             return BigDecimal.ZERO;
         }
@@ -1430,12 +1440,13 @@ public class AccountingPostingService {
 
     @Transactional
     public void recalculateAccountBalances(UUID clientId, UUID orgId) {
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
         List<AccountingAccount> accounts = orgId == null
                 ? accountRepository.findByClientIdOrderByCodeAsc(clientId)
                 : accountRepository.findByClientIdAndOrgIdOrderByCodeAsc(clientId, orgId);
         Map<UUID, AccountingAccount> accountsById = new LinkedHashMap<>();
         for (AccountingAccount account : accounts) {
-            account.setCurrentBalance(money(account.getOpeningBalance()));
+            account.setCurrentBalance(money(account.getOpeningBalance(), dp));
             accountsById.put(account.getId(), account);
         }
 
@@ -1455,7 +1466,7 @@ public class AccountingPostingService {
             for (JournalLine line : entry.getLines()) {
                 AccountingAccount account = accountsById.get(line.getAccountId());
                 if (account != null) {
-                    account.setCurrentBalance(money(account.getCurrentBalance()).add(accountBalanceEffect(account, money(line.getDebit()), money(line.getCredit()))));
+                    account.setCurrentBalance(money(account.getCurrentBalance(), dp).add(accountBalanceEffect(account, money(line.getDebit(), dp), money(line.getCredit(), dp))));
                 }
             }
         });
@@ -1490,8 +1501,8 @@ public class AccountingPostingService {
         return "N".equalsIgnoreCase(isactive);
     }
 
-    private BigDecimal money(BigDecimal value) {
-        return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP);
+    private BigDecimal money(BigDecimal value, int dp) {
+        return (value == null ? BigDecimal.ZERO : value).setScale(dp, RoundingMode.HALF_UP);
     }
 
     private BigDecimal quantity(BigDecimal value) {

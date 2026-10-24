@@ -632,10 +632,11 @@ public class ExpenseService {
     }
 
     private LocalDateTime toLocalDateTime(Instant instant, ZoneId zoneId) {
+        // Stored invoice/payment dates are UTC; the frontend converts them to the branch timezone for display.
         if (instant == null) {
-            return LocalDateTime.now(zoneId);
+            return LocalDateTime.now(java.time.ZoneOffset.UTC);
         }
-        return LocalDateTime.ofInstant(instant, zoneId);
+        return LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC);
     }
 
 

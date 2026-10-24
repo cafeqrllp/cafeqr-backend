@@ -57,13 +57,14 @@ public class Client extends AuditableEntity {
     private String posType; 
     private LocalDateTime subscriptionExpiryDate;
 
-    private String currency; 
     @Column(columnDefinition = "TEXT")
     private String logoUrl;
     @Column(name = "banner_url", columnDefinition = "TEXT")
     private String bannerUrl;
     private String brandColor; 
     private String timezone;
+    @Builder.Default
+    private String currency = "INR";
     
     @Builder.Default
     private String primaryLanguage = "English";
@@ -89,6 +90,9 @@ public class Client extends AuditableEntity {
     
     public String getWhatsappNumber() { return whatsappNumber; }
     public void setWhatsappNumber(String whatsappNumber) { this.whatsappNumber = whatsappNumber; }
+
+    public String getCurrency() { return currency != null ? currency : "INR"; }
+    public void setCurrency(String currency) { this.currency = currency; }
 
     public boolean isActive() {
         return "Y".equalsIgnoreCase(isactive);

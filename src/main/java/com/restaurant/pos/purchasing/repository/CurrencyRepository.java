@@ -16,4 +16,5 @@ public interface CurrencyRepository extends JpaRepository<Currency, UUID> {
     Optional<Currency> findByIdAndClientIdAndOrgId(UUID id, UUID clientId, UUID orgId);
     List<Currency> findByClientIdAndIsDefaultTrue(UUID clientId);
     List<Currency> findByClientIdAndOrgIdAndIsDefaultTrue(UUID clientId, UUID orgId);
+    boolean existsByClientIdAndOrgId(UUID clientId, UUID orgId);
 }

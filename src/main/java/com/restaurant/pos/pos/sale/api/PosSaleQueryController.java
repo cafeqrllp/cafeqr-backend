@@ -153,7 +153,7 @@ public class PosSaleQueryController {
             @Parameter(description = "Zero-indexed page number") @RequestParam(defaultValue = "0") @Min(0) int page,
             @Parameter(description = "Page size (max 200)") @RequestParam(defaultValue = "20") @Min(1) @Max(200) int size,
             @Parameter(description = "Filter by order status") @RequestParam(required = false) String status,
-            @Parameter(description = "Search term (order no, customer name/phone)") @RequestParam(required = false) String q,
+            @Parameter(description = "Search term (order no, description/remarks, customer name/phone)") @RequestParam(required = false) String q,
             @Parameter(description = "Filter by organization/branch ID") @RequestParam(required = false) UUID orgId,
             @Parameter(description = "Filter by terminal ID") @RequestParam(required = false) UUID terminalId) {
 

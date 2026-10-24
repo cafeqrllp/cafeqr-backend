@@ -1,5 +1,6 @@
 package com.restaurant.pos.order.service;
 
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.accounting.dto.AccountingSummaryDto;
@@ -61,6 +62,7 @@ public class ReportService {
     private final CreditQueryService creditService;
     private final OrderService orderService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final CurrencyScaleService currencyScale;
 
 
     // ─── Sales Summary ──────────────────────────────────────────────────────
@@ -92,8 +94,12 @@ public class ReportService {
             }
         }
 
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
+
         BigDecimal avg = totalOrders > 0
-                ? grandTotal.divide(BigDecimal.valueOf(totalOrders), 2, RoundingMode.HALF_UP)
+                ? grandTotal.divide(BigDecimal.valueOf(totalOrders), dp, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
         return SalesSummaryDto.builder()
@@ -305,6 +311,9 @@ public class ReportService {
     }
 
     public List<PaymentBreakdownDto> getPaymentBreakdown(List<Order> orders) {
+        int dp = orders.isEmpty()
+                ? CurrencyScaleService.FALLBACK_DECIMAL_PLACES
+                : currencyScale.decimalPlaces(orders.get(0).getClientId(), orders.get(0).getOrgId());
         BigDecimal totalRevenue = BigDecimal.ZERO;
         Map<String, BigDecimal[]> payMethodMap = new LinkedHashMap<>();
         Map<UUID, List<Payment>> paymentsByOrder = new LinkedHashMap<>();
@@ -348,7 +357,7 @@ public class ReportService {
                     if (splits.isEmpty()) {
                         String method = normalizeReportPaymentMethod(p.getPaymentMethod());
                         if ("MIXED".equalsIgnoreCase(method)) {
-                            BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                            BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                             BigDecimal remaining = safe(p.getAmountPaid()).subtract(half);
                             addPaymentBreakdownBucket(payMethodMap, "CASH", half);
                             addPaymentBreakdownBucket(payMethodMap, "ONLINE", remaining);
@@ -383,6 +392,10 @@ public class ReportService {
     public List<TaxSummaryDto> getTaxSummary(Instant from, Instant to, UUID orgId, UUID terminalId) {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
 
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
+
         Map<BigDecimal, BigDecimal[]> taxMap = new TreeMap<>();
 
         for (Order o : orders) {
@@ -403,7 +416,7 @@ public class ReportService {
 
         return taxMap.entrySet().stream()
                 .map(e -> {
-                    BigDecimal halfTax = e.getValue()[1].divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                    BigDecimal halfTax = e.getValue()[1].divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                     return TaxSummaryDto.builder()
                             .taxRate(e.getKey())
                             .taxableAmount(e.getValue()[0])
@@ -917,11 +930,13 @@ public class ReportService {
         }
         return customers.stream()
                 .map(customer -> {
-                    String name = customer.getName() != null && !customer.getName().isBlank() ? customer.getName() : "Guest";
-                    return customer.getPhone() != null && !customer.getPhone().isBlank()
-                            ? name + " (" + customer.getPhone() + ")"
-                            : name;
+                    boolean hasName = customer.getName() != null && !customer.getName().isBlank();
+                    boolean hasPhone = customer.getPhone() != null && !customer.getPhone().isBlank();
+                    if (hasName && hasPhone) return customer.getName() + " (" + customer.getPhone() + ")";
+                    if (hasName) return customer.getName();
+                    return hasPhone ? customer.getPhone() : "";
                 })
+                .filter(text -> !text.isBlank())
                 .collect(Collectors.joining(", "));
     }
 
@@ -1309,6 +1324,7 @@ public class ReportService {
 
         UUID clientId = TenantContext.getCurrentTenant();
         UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
 
         Map<UUID, List<Customer>> customerEntitiesMap = batchLinkedCustomerEntities(orders, clientId);
@@ -1358,7 +1374,7 @@ public class ReportService {
                     BigDecimal lineTotal = safe(line.getLineTotal());
                     BigDecimal tax = safe(line.getTaxAmount());
                     BigDecimal taxable = lineTotal.subtract(tax);
-                    BigDecimal halfTax = tax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                    BigDecimal halfTax = tax.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
 
                     // 1. Accumulate for HSN summary
                     hsnMap.computeIfAbsent(rate, k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO});

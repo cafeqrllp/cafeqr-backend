@@ -104,6 +104,8 @@ public class PublicInvoiceController {
         }
 
         String currencySymbol = whatsAppBillFormatter.resolveCurrencySymbol(order, org, client);
+        Integer currencyDecimals = whatsAppBillFormatter.resolveCurrencyDecimals(order, org, client);
+        int dp = currencyDecimals != null ? currencyDecimals : 2;
         String taxLabel = (sysConfig != null && sysConfig.getTaxLabelGlobal() != null && !sysConfig.getTaxLabelGlobal().isBlank())
                 ? sysConfig.getTaxLabelGlobal().trim()
                 : "GST";
@@ -176,7 +178,7 @@ public class PublicInvoiceController {
         BigDecimal sgstAmount = null;
 
         if (totalTax != null && totalTax.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+            BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal otherHalf = totalTax.subtract(halfTax);
             cgstAmount = halfTax;
             sgstAmount = otherHalf;
@@ -221,7 +223,7 @@ public class PublicInvoiceController {
                             }
                         } else if ("MIXED".equalsIgnoreCase(p.getPaymentMethod()) && p.getAmountPaid() != null) {
                             BigDecimal total = p.getAmountPaid();
-                            BigDecimal half = total.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                            BigDecimal half = total.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                             BigDecimal rem = total.subtract(half);
                             splitDtos.add(PublicDigitalInvoiceDto.PaymentSplitDto.builder()
                                     .paymentMethod("CASH")
@@ -284,6 +286,7 @@ public class PublicInvoiceController {
                 .paymentMethod(payMethod)
                 .paymentStatus(payStatus)
                 .currencySymbol(currencySymbol)
+                .currencyDecimals(currencyDecimals)
                 .taxLabel(taxLabel)
                 .grossAmount(grossAmount)
                 .totalDiscountAmount(discount)

@@ -7,6 +7,7 @@ import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.service.BranchContextService;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.credit.common.CreditGuard;
@@ -60,6 +61,7 @@ public class CreditCommandService {
     private final BranchContextService branchContext;
     private final DocumentSequenceService sequenceService;
     private final com.restaurant.pos.common.service.AuditLogService auditLogService;
+    private final CurrencyScaleService currencyScale;
 
     // ── Suspend / Reactivate ─────────────────────────────────────────────────
 
@@ -185,11 +187,12 @@ public class CreditCommandService {
             }
         }
 
-        BigDecimal amount = creditGuard.money(command.getAmount());
+        UUID orgId = branchContext.requireWriteOrgId(command.getOrgId());
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
+        BigDecimal amount = creditGuard.money(command.getAmount(), dp);
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException("Payment amount must be greater than zero");
         }
-        UUID orgId = branchContext.requireWriteOrgId(command.getOrgId());
         String paymentMethod = creditGuard.normalizePaymentMethod(command.getPaymentMethod());
 
         UUID invoiceId = command.getInvoiceId();
@@ -248,11 +251,12 @@ public class CreditCommandService {
             }
         }
 
-        BigDecimal amount = creditGuard.money(command.getAmount());
+        UUID orgId = branchContext.requireWriteOrgId(command.getOrgId());
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
+        BigDecimal amount = creditGuard.money(command.getAmount(), dp);
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException("Payment amount must be greater than zero");
         }
-        UUID orgId = branchContext.requireWriteOrgId(command.getOrgId());
         String paymentMethod = creditGuard.normalizePaymentMethod(command.getPaymentMethod());
 
         UUID invoiceId = command.getInvoiceId();
@@ -299,6 +303,7 @@ public class CreditCommandService {
     // ── Customer Payment allocation ──────────────────────────────────────────
 
     private void allocatePayment(CreditCustomer customer, Payment payment, RecordPaymentCommand command) {
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
         UUID orgId = customer.getOrgId() != null ? customer.getOrgId() : TenantContext.getCurrentOrg();
         ConfigurationDto config = orgId != null
                 ? configurationService.getEffectiveConfigurationForBranch(orgId)
@@ -307,14 +312,14 @@ public class CreditCommandService {
         String requestedMode = command.getAllocationMode();
         String mode = requestedMode != null && !requestedMode.isBlank() ? requestedMode : configuredMode;
         mode = "MANUAL".equalsIgnoreCase(mode) ? "MANUAL" : "OLDEST_FIRST";
-        BigDecimal remaining = creditGuard.money(payment.getAmountPaid());
+        BigDecimal remaining = creditGuard.money(payment.getAmountPaid(), dp);
         List<PaymentAllocation> allocations = new ArrayList<>();
 
         if (command.getInvoiceId() != null) {
             Invoice invoice = invoiceRepository.findByIdAndClientId(command.getInvoiceId(), customer.getClientId())
                     .orElseThrow(() -> new ResourceNotFoundException("Credit invoice not found"));
             validateCreditInvoice(customer, invoice);
-            BigDecimal allocated = creditGuard.money(invoice.getAmountDue()).min(remaining);
+            BigDecimal allocated = creditGuard.money(invoice.getAmountDue(), dp).min(remaining);
             if (allocated.compareTo(BigDecimal.ZERO) > 0) {
                 allocations.add(buildAllocation(customer.getId(), payment, invoice, allocated,
                         "Direct order-level payment allocation"));
@@ -337,8 +342,8 @@ public class CreditCommandService {
                             .findByIdAndClientId(allocationEntry.getInvoiceId(), customer.getClientId())
                             .orElseThrow(() -> new ResourceNotFoundException("Credit invoice not found"));
                     validateCreditInvoice(customer, invoice);
-                    BigDecimal allocated = creditGuard.money(allocationEntry.getAmount())
-                            .min(creditGuard.money(invoice.getAmountDue())).min(remaining);
+                    BigDecimal allocated = creditGuard.money(allocationEntry.getAmount(), dp)
+                            .min(creditGuard.money(invoice.getAmountDue(), dp)).min(remaining);
                     if (allocated.compareTo(BigDecimal.ZERO) > 0) {
                         allocations.add(buildAllocation(customer.getId(), payment, invoice, allocated,
                                 "Manual credit payment allocation"));
@@ -354,7 +359,7 @@ public class CreditCommandService {
                     if (command.getInvoiceId() != null && command.getInvoiceId().equals(invoice.getId())) {
                         continue;
                     }
-                    BigDecimal allocated = creditGuard.money(invoice.getAmountDue()).min(remaining);
+                    BigDecimal allocated = creditGuard.money(invoice.getAmountDue(), dp).min(remaining);
                     if (allocated.compareTo(BigDecimal.ZERO) > 0) {
                         allocations.add(buildAllocation(customer.getId(), payment, invoice, allocated,
                                 "Oldest-first credit payment allocation"));
@@ -378,14 +383,15 @@ public class CreditCommandService {
     // ── Vendor Payment allocation ────────────────────────────────────────────
 
     private void allocateVendorPayment(Vendor vendor, Payment payment, RecordPaymentCommand command) {
-        BigDecimal remaining = creditGuard.money(payment.getAmountPaid());
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
+        BigDecimal remaining = creditGuard.money(payment.getAmountPaid(), dp);
         List<PaymentAllocation> allocations = new ArrayList<>();
 
         if (command.getInvoiceId() != null) {
             Invoice invoice = invoiceRepository.findByIdAndClientId(command.getInvoiceId(), vendor.getClientId())
                     .orElseThrow(() -> new ResourceNotFoundException("Vendor bill not found"));
             validateVendorInvoice(vendor, invoice);
-            BigDecimal allocated = creditGuard.money(invoice.getAmountDue()).min(remaining);
+            BigDecimal allocated = creditGuard.money(invoice.getAmountDue(), dp).min(remaining);
             if (allocated.compareTo(BigDecimal.ZERO) > 0) {
                 allocations.add(buildAllocation(vendor.getId(), payment, invoice, allocated,
                         "Direct vendor bill payment allocation"));
@@ -400,7 +406,7 @@ public class CreditCommandService {
                 if (command.getInvoiceId() != null && command.getInvoiceId().equals(invoice.getId())) {
                     continue;
                 }
-                BigDecimal allocated = creditGuard.money(invoice.getAmountDue()).min(remaining);
+                BigDecimal allocated = creditGuard.money(invoice.getAmountDue(), dp).min(remaining);
                 if (allocated.compareTo(BigDecimal.ZERO) > 0) {
                     allocations.add(buildAllocation(vendor.getId(), payment, invoice, allocated,
                             "Vendor bill settlement allocation"));
@@ -422,12 +428,13 @@ public class CreditCommandService {
 
     private PaymentAllocation buildAllocation(UUID partnerId, Payment payment, Invoice invoice, BigDecimal amount,
             String notes) {
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
         PaymentAllocation allocation = PaymentAllocation.builder()
                 .paymentId(payment.getId())
                 .invoiceId(invoice != null ? invoice.getId() : null)
                 .orderId(invoice != null ? invoice.getOrderId() : null)
                 .creditCustomerId(partnerId)
-                .allocatedAmount(creditGuard.money(amount))
+                .allocatedAmount(creditGuard.money(amount, dp))
                 .allocationDate(payment.getPaymentDate())
                 .status("POSTED")
                 .notes(notes)
@@ -438,7 +445,8 @@ public class CreditCommandService {
     }
 
     private void applyInvoicePayment(Invoice invoice, BigDecimal amount) {
-        BigDecimal due = creditGuard.money(invoice.getAmountDue()).subtract(creditGuard.money(amount));
+        int dp = currencyScale.decimalPlaces(invoice.getClientId(), invoice.getOrgId());
+        BigDecimal due = creditGuard.money(invoice.getAmountDue(), dp).subtract(creditGuard.money(amount, dp));
         if (due.compareTo(BigDecimal.ZERO) <= 0) {
             invoice.setAmountDue(BigDecimal.ZERO);
             invoice.setStatus("PAID");
@@ -538,18 +546,19 @@ public class CreditCommandService {
     }
 
     private CreditBPartnerDto toDtoWithBalance(CreditCustomer customer) {
+        int dp = currencyScale.decimalPlaces(customer.getClientId(), customer.getOrgId());
         BigDecimal invoiceTotal = creditGuard
-                .money(invoiceRepository.sumTotalAmountByCustomer(customer.getClientId(), customer.getId()));
+                .money(invoiceRepository.sumTotalAmountByCustomer(customer.getClientId(), customer.getId()), dp);
         BigDecimal pendingInvoiceBalance = creditGuard
-                .money(invoiceRepository.sumAmountDueByCustomer(customer.getClientId(), customer.getId()));
+                .money(invoiceRepository.sumAmountDueByCustomer(customer.getClientId(), customer.getId()), dp);
         BigDecimal paidTotal = creditGuard
-                .money(paymentRepository.sumPaidByCustomer(customer.getClientId(), customer.getId()));
+                .money(paymentRepository.sumPaidByCustomer(customer.getClientId(), customer.getId()), dp);
         long openCount = invoiceRepository.countOpenInvoicesByCustomer(customer.getClientId(), customer.getId());
 
-        BigDecimal totalCredit = creditGuard.money(customer.getOpeningBalance()).add(invoiceTotal);
-        BigDecimal balance = creditGuard.money(customer.getOpeningBalance())
+        BigDecimal totalCredit = creditGuard.money(customer.getOpeningBalance(), dp).add(invoiceTotal);
+        BigDecimal balance = creditGuard.money(customer.getOpeningBalance(), dp)
                 .add(pendingInvoiceBalance)
-                .setScale(2, RoundingMode.HALF_UP);
+                .setScale(dp, RoundingMode.HALF_UP);
 
         return CreditBPartnerDto.builder()
                 .id(customer.getId())
@@ -558,8 +567,8 @@ public class CreditCommandService {
                 .phone(customer.getPhone())
                 .email(customer.getEmail())
                 .status(customer.getStatus())
-                .creditLimit(creditGuard.money(customer.getCreditLimit()))
-                .openingBalance(creditGuard.money(customer.getOpeningBalance()))
+                .creditLimit(creditGuard.money(customer.getCreditLimit(), dp))
+                .openingBalance(creditGuard.money(customer.getOpeningBalance(), dp))
                 .totalCreditExtended(totalCredit)
                 .paymentsReceived(paidTotal)
                 .balance(balance)
@@ -570,18 +579,19 @@ public class CreditCommandService {
     }
 
     private CreditBPartnerDto toVendorDtoWithBalance(Vendor vendor) {
+        int dp = currencyScale.decimalPlaces(vendor.getClientId(), vendor.getOrgId());
         BigDecimal invoiceTotal = creditGuard
-                .money(invoiceRepository.sumTotalAmountByVendor(vendor.getClientId(), vendor.getId()));
+                .money(invoiceRepository.sumTotalAmountByVendor(vendor.getClientId(), vendor.getId()), dp);
         BigDecimal pendingInvoiceBalance = creditGuard
-                .money(invoiceRepository.sumAmountDueByVendor(vendor.getClientId(), vendor.getId()));
+                .money(invoiceRepository.sumAmountDueByVendor(vendor.getClientId(), vendor.getId()), dp);
         BigDecimal paidTotal = creditGuard
-                .money(paymentRepository.sumPaidByVendor(vendor.getClientId(), vendor.getId()));
+                .money(paymentRepository.sumPaidByVendor(vendor.getClientId(), vendor.getId()), dp);
         long openCount = invoiceRepository.countOpenInvoicesByVendor(vendor.getClientId(), vendor.getId());
 
-        BigDecimal totalCredit = creditGuard.money(vendor.getOpeningBalance()).add(invoiceTotal);
-        BigDecimal balance = creditGuard.money(vendor.getOpeningBalance())
+        BigDecimal totalCredit = creditGuard.money(vendor.getOpeningBalance(), dp).add(invoiceTotal);
+        BigDecimal balance = creditGuard.money(vendor.getOpeningBalance(), dp)
                 .add(pendingInvoiceBalance)
-                .setScale(2, RoundingMode.HALF_UP);
+                .setScale(dp, RoundingMode.HALF_UP);
 
         return CreditBPartnerDto.builder()
                 .id(vendor.getId())
@@ -589,8 +599,8 @@ public class CreditCommandService {
                 .phone(vendor.getPhone())
                 .email(vendor.getEmail())
                 .status("ACTIVE")
-                .creditLimit(creditGuard.money(vendor.getCreditLimit()))
-                .openingBalance(creditGuard.money(vendor.getOpeningBalance()))
+                .creditLimit(creditGuard.money(vendor.getCreditLimit(), dp))
+                .openingBalance(creditGuard.money(vendor.getOpeningBalance(), dp))
                 .totalCreditExtended(totalCredit)
                 .paymentsReceived(paidTotal)
                 .balance(balance)

@@ -1,5 +1,6 @@
 package com.restaurant.pos.order.dto;
 
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.order.domain.DiscountEngineVersion;
 import com.restaurant.pos.order.domain.DiscountSource;
 import com.restaurant.pos.order.domain.Order;
@@ -21,6 +22,7 @@ public class OrderDtoMapper {
     private final com.restaurant.pos.order.repository.PaymentRepository paymentRepository;
     private final com.restaurant.pos.order.repository.PaymentSplitRepository paymentSplitRepository;
     private final com.restaurant.pos.client.repository.TerminalRepository terminalRepository;
+    private final CurrencyScaleService currencyScale;
 
     private java.time.Instant toInstant(java.time.LocalDateTime ldt, java.time.ZoneId zone) {
         if (ldt == null)
@@ -156,6 +158,7 @@ public class OrderDtoMapper {
 
         if ("MIXED".equalsIgnoreCase(order.getPaymentMethod()) || "MIXED".equalsIgnoreCase(referenceNo)) {
             try {
+                int dp = currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
                 // Use pre-loaded cache when available (populated by warmPaymentCache), else
                 // fall back to DB
                 java.util.Map<java.util.UUID, java.util.List<com.restaurant.pos.order.domain.Payment>> pCache = paymentsByOrderId
@@ -181,7 +184,7 @@ public class OrderDtoMapper {
                             }
                         }
                         if ((splits == null || splits.isEmpty()) && p.getAmountPaid() != null) {
-                            BigDecimal half = p.getAmountPaid().divide(BigDecimal.valueOf(2), 2,
+                            BigDecimal half = p.getAmountPaid().divide(BigDecimal.valueOf(2), dp,
                                     java.math.RoundingMode.HALF_UP);
                             cashAmount = half;
                             onlineAmount = p.getAmountPaid().subtract(half);

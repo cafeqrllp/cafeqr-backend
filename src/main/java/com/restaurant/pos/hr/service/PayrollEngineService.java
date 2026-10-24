@@ -1,6 +1,7 @@
 package com.restaurant.pos.hr.service;
 
 import com.restaurant.pos.common.service.AuditLogService;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.hr.dto.HrSettingsDto;
 
 import com.restaurant.pos.common.exception.BusinessException;
@@ -41,6 +42,7 @@ public class PayrollEngineService {
     private final HrSettingsService hrSettingsService;
     private final ExpenseRepository expenseRepository;
     private final AuditLogService auditLogService;
+    private final CurrencyScaleService currencyScale;
 
     @Transactional
     public PayrollRunDto initiatePayrollRun(PayrollRunDto dto) {
@@ -93,6 +95,7 @@ public class PayrollEngineService {
     private void generateSalarySlips(PayrollRun run) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
 
         // Calculate period duration in days and months factor
         long daysInPeriod = java.time.temporal.ChronoUnit.DAYS.between(run.getStartDate(), run.getEndDate()) + 1;
@@ -206,13 +209,13 @@ public class PayrollEngineService {
                 }
 
                 BigDecimal normalPay = emp.getHourlyRate().multiply(normalHours);
-                computedOtPay = emp.getHourlyRate().multiply(otMultiplier).multiply(overtimeHours).setScale(2, RoundingMode.HALF_UP);
+                computedOtPay = emp.getHourlyRate().multiply(otMultiplier).multiply(overtimeHours).setScale(dp, RoundingMode.HALF_UP);
                 grossPay = normalPay.add(computedOtPay);
             } else {
                 // Monthly salaried - calculate base pay proportional to the date range (daysInPeriod / 30)
                 BigDecimal dailyRate = emp.getBaseSalary().divide(new BigDecimal("30"), 4, RoundingMode.HALF_UP);
-                BigDecimal basePayForPeriod = dailyRate.multiply(new BigDecimal(daysInPeriod)).setScale(2, RoundingMode.HALF_UP);
-                unpaidLeaveDeductionAmount = dailyRate.multiply(BigDecimal.valueOf(unpaidLeaveDays)).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal basePayForPeriod = dailyRate.multiply(new BigDecimal(daysInPeriod)).setScale(dp, RoundingMode.HALF_UP);
+                unpaidLeaveDeductionAmount = dailyRate.multiply(BigDecimal.valueOf(unpaidLeaveDays)).setScale(dp, RoundingMode.HALF_UP);
                 grossPay = basePayForPeriod; // Exception-Based Pay: Gross pay is full, unpaid leave is a deduction
 
                 // CQR-135: Include overtime pay for monthly-salaried employees who worked beyond the standard daily threshold.
@@ -233,7 +236,7 @@ public class PayrollEngineService {
                         }
                     } catch (Exception ignored) {}
                     BigDecimal effectiveHourlyRate = dailyRate.divide(standardHoursPerDay, 4, RoundingMode.HALF_UP);
-                    computedOtPay = effectiveHourlyRate.multiply(otMultiplier).multiply(overtimeHours).setScale(2, RoundingMode.HALF_UP);
+                    computedOtPay = effectiveHourlyRate.multiply(otMultiplier).multiply(overtimeHours).setScale(dp, RoundingMode.HALF_UP);
                     grossPay = grossPay.add(computedOtPay);
                 }
             }
@@ -250,11 +253,11 @@ public class PayrollEngineService {
                 if ("FIXED".equals(comp.getAmountType())) {
                     BigDecimal fixedBase = empComp.getOverrideAmount() != null ? empComp.getOverrideAmount() : comp.getDefaultAmount();
                     if (fixedBase == null) fixedBase = BigDecimal.ZERO;
-                    compAmount = fixedBase.multiply(monthsInPeriod).setScale(2, RoundingMode.HALF_UP);
+                    compAmount = fixedBase.multiply(monthsInPeriod).setScale(dp, RoundingMode.HALF_UP);
                 } else if ("PERCENTAGE".equals(comp.getAmountType())) {
                     BigDecimal percentage = empComp.getOverridePercentage() != null ? empComp.getOverridePercentage() : comp.getPercentage();
                     if (percentage == null) percentage = BigDecimal.ZERO;
-                    compAmount = grossPay.multiply(percentage).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+                    compAmount = grossPay.multiply(percentage).divide(new BigDecimal("100"), dp, RoundingMode.HALF_UP);
                 }
 
                 if ("EARNING".equals(comp.getType())) {
@@ -268,7 +271,7 @@ public class PayrollEngineService {
             List<SalaryAdvance> advances = salaryAdvanceRepository.findActiveAdvancesByEmployeeId(emp.getId(), clientId, orgId);
             for (SalaryAdvance advance : advances) {
                 BigDecimal monthlyInstallment = advance.getMonthlyInstallmentAmount();
-                BigDecimal toDeduct = monthlyInstallment.multiply(monthsInPeriod).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal toDeduct = monthlyInstallment.multiply(monthsInPeriod).setScale(dp, RoundingMode.HALF_UP);
                 if (toDeduct.compareTo(advance.getRemainingBalance()) > 0) {
                     toDeduct = advance.getRemainingBalance();
                 }

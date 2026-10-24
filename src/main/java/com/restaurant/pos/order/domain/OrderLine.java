@@ -54,7 +54,7 @@ public class OrderLine {
     private Boolean isPackagedGood;
 
     @Builder.Default
-    @Column(precision = 15, scale = 3, nullable = false)
+    @Column(precision = 15, scale = 4, nullable = false)
     private BigDecimal quantity = BigDecimal.ONE;
 
     @Builder.Default

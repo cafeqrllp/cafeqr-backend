@@ -13,8 +13,8 @@ import com.restaurant.pos.order.dto.CalculationResult;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 
-import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,16 +31,15 @@ class FinancialParityTest {
 
     @TestFactory
     Stream<DynamicTest> runSharedParityScenarios() throws IOException {
-        File jsonFile = new File("../cafe-qr-frontend/utils/financial_parity_scenarios.json");
-        if (!jsonFile.exists()) {
-            // Fallback for different build environments or runner cwd
-            jsonFile = new File("cafe-qr-frontend/utils/financial_parity_scenarios.json");
+        // Copy of cafe-qr-frontend/utils/financial_parity_scenarios.json, kept on the classpath so CI
+        // (which checks out only this repo) can run it.
+        List<ScenarioDto> scenarios;
+        try (InputStream json = FinancialParityTest.class.getResourceAsStream("/financial_parity_scenarios.json")) {
+            if (json == null) {
+                fail("Shared parity test scenarios JSON not found on classpath");
+            }
+            scenarios = mapper.readValue(json, new TypeReference<List<ScenarioDto>>() {});
         }
-        if (!jsonFile.exists()) {
-            fail("Shared parity test scenarios JSON file not found at " + jsonFile.getAbsolutePath());
-        }
-
-        List<ScenarioDto> scenarios = mapper.readValue(jsonFile, new TypeReference<List<ScenarioDto>>() {});
 
         return scenarios.stream().map(tc -> DynamicTest.dynamicTest(
                 tc.id + ": " + tc.description,

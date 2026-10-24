@@ -1,9 +1,6 @@
 package com.restaurant.pos.table.service;
 
 import com.restaurant.pos.auth.service.EmailService;
-import com.restaurant.pos.client.domain.Client;
-import com.restaurant.pos.client.repository.ClientRepository;
-import com.restaurant.pos.client.repository.OrganizationRepository;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.service.BranchContextService;
 import com.restaurant.pos.common.tenant.TenantContext;
@@ -35,17 +32,8 @@ public class RestaurantTableService {
     private final BranchContextService branchContext;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private ClientRepository clientRepository;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private OrganizationRepository organizationRepository;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private PosCacheInvalidationService posCacheInvalidationService;
-
-    @org.springframework.beans.factory.annotation.Value("${app.frontend-url:http://localhost:3000}")
-    private String frontendUrl;
 
     @Transactional
     public List<RestaurantTable> getAllTables() {
@@ -133,26 +121,6 @@ public class RestaurantTableService {
         table.setOrgId(branchContext.requireWriteOrgId(table.getOrgId()));
         RestaurantTable saved = tableRepository.save(table);
         invalidatePosTableCache(saved.getClientId(), saved.getOrgId());
-        
-        // On creation, automatically send QR mail to owner
-        if (isNew) {
-            String clientSlug = (clientRepository != null && saved.getClientId() != null)
-                    ? clientRepository.findById(saved.getClientId())
-                    .map(Client::getSlug)
-                    .filter(s -> !s.isBlank())
-                    .orElse(String.valueOf(saved.getClientId()))
-                    : String.valueOf(saved.getClientId());
-            String branchSlug = (organizationRepository != null && saved.getOrgId() != null)
-                    ? organizationRepository.findById(saved.getOrgId())
-                    .map(org -> org.getSlug() != null && !org.getSlug().isBlank() ? org.getSlug() : (org.getBranchCode() != null ? org.getBranchCode().toLowerCase() : null))
-                    .filter(s -> s != null && !s.isBlank())
-                    .orElse(String.valueOf(saved.getOrgId()))
-                    : String.valueOf(saved.getOrgId());
-            String tableIdent = saved.getId() != null ? saved.getId().toString() : "";
-            String qrLink = String.format("%s/menu/%s/%s/%s", frontendUrl, clientSlug, branchSlug, tableIdent);
-            sendQRCode(saved.getId(), null, qrLink);
-        }
-        
         return saved;
     }
 

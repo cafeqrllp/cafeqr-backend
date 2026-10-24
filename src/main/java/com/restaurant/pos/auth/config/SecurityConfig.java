@@ -98,6 +98,7 @@ public class SecurityConfig {
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
             "https://testcafeqrscanningapp.pages.dev," +
+            "https://cafeqr-scanning-app.pages.dev," +
             "https://test-cafeqr-founder-dashboard.pages.dev," +
             "https://cafeqr-founder-dashboard.pages.dev," +
             "https://pos.cafeqr.in," +
@@ -142,6 +143,9 @@ public class SecurityConfig {
         configuration.addAllowedOriginPattern("https://*.cafeqr.in");
         configuration.addAllowedOriginPattern("https://cafeqr.in");
         configuration.addAllowedOriginPattern("https://pos.cafeqr.in");
+        configuration.addAllowedOriginPattern("https://cafeqr-frontend.pages.dev");
+        configuration.addAllowedOriginPattern("https://testcafeqrscanningapp.pages.dev");
+        configuration.addAllowedOriginPattern("https://cafeqr-scanning-app.pages.dev");
         configuration.addAllowedOriginPattern("https://test-cafeqr-founder-dashboard.pages.dev");
         configuration.addAllowedOriginPattern("https://cafeqr-founder-dashboard.pages.dev");
         configuration.addAllowedOriginPattern("https://*.razorpay.com");
@@ -155,7 +159,7 @@ public class SecurityConfig {
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setExposedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L);
+        configuration.setMaxAge(7200L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);

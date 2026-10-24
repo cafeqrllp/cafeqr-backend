@@ -1,0 +1,1306 @@
+[
+  {
+    "id": "TC-01",
+    "description": "Pure exclusive items, no discount, no tax",
+    "profile": {
+      "tax_enabled": false,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 2,
+        "tax_rate": 5.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 200.00,
+      "taxable_amount": 200.00,
+      "total_tax": 0.00,
+      "grand_total": 200.00,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 0,
+      "items": [
+        {
+          "line_total": 200.00,
+          "taxable_amount": 200.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-02",
+    "description": "Pure exclusive items, tax 18%, no discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 2,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 236.00,
+      "taxable_amount": 200.00,
+      "total_tax": 36.00,
+      "grand_total": 236.00,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 0,
+      "items": [
+        {
+          "line_total": 236.00,
+          "taxable_amount": 200.00,
+          "tax_amount": 36.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-03",
+    "description": "Exclusive items, flat amount order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 2,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 20 },
+    "expected": {
+      "gross_amount": 236.00,
+      "taxable_amount": 183.05,
+      "total_tax": 32.95,
+      "grand_total": 216.00,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 8.474576,
+      "items": [
+        {
+          "line_total": 216.00,
+          "taxable_amount": 183.05,
+          "tax_amount": 32.95
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-04",
+    "description": "Exclusive items, percent order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 2,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "PERCENT", "value": 10 },
+    "expected": {
+      "gross_amount": 236.00,
+      "taxable_amount": 180.00,
+      "total_tax": 32.40,
+      "grand_total": 212.40,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 10,
+      "items": [
+        {
+          "line_total": 212.40,
+          "taxable_amount": 180.00,
+          "tax_amount": 32.40
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-05",
+    "description": "Mixed exclusive + inclusive, amount order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": true
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 20 },
+    "expected": {
+      "gross_amount": 236.00,
+      "taxable_amount": 183.06,
+      "total_tax": 32.95,
+      "grand_total": 216.01,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 8.474576,
+      "items": [
+        {
+          "line_total": 108.01,
+          "taxable_amount": 91.53,
+          "tax_amount": 16.48
+        },
+        {
+          "line_total": 108.00,
+          "taxable_amount": 91.53,
+          "tax_amount": 16.47
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-06",
+    "description": "Mixed exclusive + inclusive, percent order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": true
+      }
+    ],
+    "orderDiscount": { "type": "PERCENT", "value": 10 },
+    "expected": {
+      "gross_amount": 236.00,
+      "taxable_amount": 180.00,
+      "total_tax": 32.40,
+      "grand_total": 212.40,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 10,
+      "items": [
+        {
+          "line_total": 106.20,
+          "taxable_amount": 90.00,
+          "tax_amount": 16.20
+        },
+        {
+          "line_total": 106.20,
+          "taxable_amount": 90.00,
+          "tax_amount": 16.20
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-08",
+    "description": "Line discount + order discount combined (ex-tax)",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false,
+        "discount_amount": 10
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 9 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 83.90,
+      "total_tax": 15.10,
+      "grand_total": 99.00,
+      "round_off_amount": 0.00,
+      "order_discount_percent": 8.333333,
+      "items": [
+        {
+          "line_total": 99.00,
+          "taxable_amount": 83.90,
+          "tax_amount": 15.10
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-09",
+    "description": "Round-off automatic (factor 1)",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2,
+      "round_off_config": {
+        "round_off_enabled": true,
+        "round_off_mode": "AUTOMATIC",
+        "round_off_auto_factor": 1
+      }
+    },
+    "items": [
+      {
+        "price": 100.50,
+        "quantity": 1,
+        "tax_rate": 0,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 100.50,
+      "taxable_amount": 100.50,
+      "total_tax": 0.00,
+      "grand_total": 101.00,
+      "round_off_amount": 0.50,
+      "items": [
+        {
+          "line_total": 100.50,
+          "taxable_amount": 100.50,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-10",
+    "description": "Round-off manual",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2,
+      "round_off_config": {
+        "round_off_enabled": true,
+        "round_off_mode": "MANUAL",
+        "round_off_manual_value": -0.50
+      }
+    },
+    "items": [
+      {
+        "price": 100.50,
+        "quantity": 1,
+        "tax_rate": 0,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 100.50,
+      "taxable_amount": 100.50,
+      "total_tax": 0.00,
+      "grand_total": 100.00,
+      "round_off_amount": -0.50,
+      "items": [
+        {
+          "line_total": 100.50,
+          "taxable_amount": 100.50,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-11",
+    "description": "Inclusive item, default tax, no discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 100.00,
+      "total_tax": 18.00,
+      "grand_total": 118.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 118.00,
+          "taxable_amount": 100.00,
+          "tax_amount": 18.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-12",
+    "description": "Inclusive item, amount line discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false,
+        "discount_amount": 18
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 84.75,
+      "total_tax": 15.25,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 84.75,
+          "tax_amount": 15.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-13",
+    "description": "Inclusive item, percent line discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false,
+        "discount_percent": 10
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 90.00,
+      "total_tax": 16.20,
+      "grand_total": 106.20,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 106.20,
+          "taxable_amount": 90.00,
+          "tax_amount": 16.20
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-14",
+    "description": "Inclusive item, amount order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 18 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 84.75,
+      "total_tax": 15.25,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 84.75,
+          "tax_amount": 15.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-15",
+    "description": "Inclusive item, percent order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "PERCENT", "value": 10 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 90.00,
+      "total_tax": 16.20,
+      "grand_total": 106.20,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 106.20,
+          "taxable_amount": 90.00,
+          "tax_amount": 16.20
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-16",
+    "description": "Inclusive item, combined line and order discounts",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false,
+        "discount_amount": 10
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 8 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 84.75,
+      "total_tax": 15.25,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 84.75,
+          "tax_amount": 15.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-17",
+    "description": "Forced inclusive (packaged good), price include tax = false",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": true
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 100.00,
+      "total_tax": 18.00,
+      "grand_total": 118.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 118.00,
+          "taxable_amount": 100.00,
+          "tax_amount": 18.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-18",
+    "description": "Packaged good, explicit line discount percent",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "is_packaged": true,
+        "discount_percent": 10
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 90.00,
+      "total_tax": 16.20,
+      "grand_total": 106.20,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 106.20,
+          "taxable_amount": 90.00,
+          "tax_amount": 16.20
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-19",
+    "description": "Packaged good, explicit line discount amount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "is_packaged": true,
+        "discount_amount": 18
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 84.75,
+      "total_tax": 15.25,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 84.75,
+          "tax_amount": 15.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-20",
+    "description": "Packaged good, order discount amount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "is_packaged": true
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 18 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 84.75,
+      "total_tax": 15.25,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 84.75,
+          "tax_amount": 15.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-21",
+    "description": "Mixed normal inclusive + packaged + exclusive",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 118.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": true
+      },
+      {
+        "price": 200.00,
+        "quantity": 1,
+        "tax_rate": 5.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 30 },
+    "expected": {
+      "gross_amount": 436.00,
+      "taxable_amount": 363.61,
+      "total_tax": 42.39,
+      "grand_total": 406.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 109.88,
+          "taxable_amount": 93.12,
+          "tax_amount": 16.76
+        },
+        {
+          "line_total": 109.88,
+          "taxable_amount": 93.12,
+          "tax_amount": 16.76
+        },
+        {
+          "line_total": 186.24,
+          "taxable_amount": 177.37,
+          "tax_amount": 8.87
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-22",
+    "description": "Tax type NONE (exempt item), rate = 18%, no discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 100.00,
+      "taxable_amount": 100.00,
+      "total_tax": 0.00,
+      "grand_total": 100.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 100.00,
+          "taxable_amount": 100.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-23",
+    "description": "Tax type NONE, rate = 18%, amount line discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "NONE",
+        "is_packaged": false,
+        "discount_amount": 10
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 100.00,
+      "taxable_amount": 90.00,
+      "total_tax": 0.00,
+      "grand_total": 90.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 90.00,
+          "taxable_amount": 90.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-24",
+    "description": "Tax type NONE, rate = 18%, amount order discount",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 10 },
+    "expected": {
+      "gross_amount": 100.00,
+      "taxable_amount": 90.00,
+      "total_tax": 0.00,
+      "grand_total": 90.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 90.00,
+          "taxable_amount": 90.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-25",
+    "description": "Multi-item repeating decimals (quantity 3, unitPrice 10.00, tax 18% inclusive)",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 10.00,
+        "quantity": 3,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 30.00,
+      "taxable_amount": 25.42,
+      "total_tax": 4.58,
+      "grand_total": 30.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 30.00,
+          "taxable_amount": 25.42,
+          "tax_amount": 4.58
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-26",
+    "description": "Repeating decimal order discount allocation",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 10.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 10.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 10.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 3 },
+    "expected": {
+      "gross_amount": 30.00,
+      "taxable_amount": 22.89,
+      "total_tax": 4.11,
+      "grand_total": 27.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 9.00,
+          "taxable_amount": 7.63,
+          "tax_amount": 1.37
+        },
+        {
+          "line_total": 9.00,
+          "taxable_amount": 7.63,
+          "tax_amount": 1.37
+        },
+        {
+          "line_total": 9.00,
+          "taxable_amount": 7.63,
+          "tax_amount": 1.37
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-27",
+    "description": "Automatic round-off with factor 5",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2,
+      "round_off_config": {
+        "round_off_enabled": true,
+        "round_off_mode": "AUTOMATIC",
+        "round_off_auto_factor": 5
+      }
+    },
+    "items": [
+      {
+        "price": 102.00,
+        "quantity": 1,
+        "tax_rate": 0,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 102.00,
+      "taxable_amount": 102.00,
+      "total_tax": 0.00,
+      "grand_total": 100.00,
+      "round_off_amount": -2.00,
+      "items": [
+        {
+          "line_total": 102.00,
+          "taxable_amount": 102.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-28",
+    "description": "Automatic round-off with factor 10",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2,
+      "round_off_config": {
+        "round_off_enabled": true,
+        "round_off_mode": "AUTOMATIC",
+        "round_off_auto_factor": 10
+      }
+    },
+    "items": [
+      {
+        "price": 106.00,
+        "quantity": 1,
+        "tax_rate": 0,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 106.00,
+      "taxable_amount": 106.00,
+      "total_tax": 0.00,
+      "grand_total": 110.00,
+      "round_off_amount": 4.00,
+      "items": [
+        {
+          "line_total": 106.00,
+          "taxable_amount": 106.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-29",
+    "description": "Residual discount allocation check",
+    "profile": {
+      "tax_enabled": true,
+      "default_tax_rate": 18.00,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      },
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 10 },
+    "expected": {
+      "gross_amount": 354.00,
+      "taxable_amount": 291.53,
+      "total_tax": 52.47,
+      "grand_total": 344.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 114.67,
+          "taxable_amount": 97.18,
+          "tax_amount": 17.49
+        },
+        {
+          "line_total": 114.67,
+          "taxable_amount": 97.18,
+          "tax_amount": 17.49
+        },
+        {
+          "line_total": 114.66,
+          "taxable_amount": 97.17,
+          "tax_amount": 17.49
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-30",
+    "description": "Quantity is decimal (1.25, price 100, no tax)",
+    "profile": {
+      "tax_enabled": false,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1.25,
+        "tax_rate": 0.00,
+        "tax_type": "NONE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 125.00,
+      "taxable_amount": 125.00,
+      "total_tax": 0.00,
+      "grand_total": 125.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 125.00,
+          "taxable_amount": 125.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-31",
+    "description": "Quantity is decimal, tax is exclusive 18%",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1.25,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 147.50,
+      "taxable_amount": 125.00,
+      "total_tax": 22.50,
+      "grand_total": 147.50,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 147.50,
+          "taxable_amount": 125.00,
+          "tax_amount": 22.50
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-32",
+    "description": "Quantity is decimal, tax is inclusive 18%",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": true,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 118.00,
+        "quantity": 1.25,
+        "tax_rate": 18.00,
+        "tax_type": "INCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 147.50,
+      "taxable_amount": 125.00,
+      "total_tax": 22.50,
+      "grand_total": 147.50,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 147.50,
+          "taxable_amount": 125.00,
+          "tax_amount": 22.50
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-33",
+    "description": "Line discount amount equal to gross (free item)",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false,
+        "discount_amount": 118
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 0.00,
+      "total_tax": 0.00,
+      "grand_total": 0.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 0.00,
+          "taxable_amount": 0.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-34",
+    "description": "Order discount amount equal to eligible face sum (free order)",
+    "profile": {
+      "tax_enabled": true,
+      "prices_include_tax": false,
+      "currencyDecimalPlaces": 2
+    },
+    "items": [
+      {
+        "price": 100.00,
+        "quantity": 1,
+        "tax_rate": 18.00,
+        "tax_type": "EXCLUSIVE",
+        "is_packaged": false
+      }
+    ],
+    "orderDiscount": { "type": "AMOUNT", "value": 118 },
+    "expected": {
+      "gross_amount": 118.00,
+      "taxable_amount": 0.00,
+      "total_tax": 0.00,
+      "grand_total": 0.00,
+      "round_off_amount": 0.00,
+      "items": [
+        {
+          "line_total": 0.00,
+          "taxable_amount": 0.00,
+          "tax_amount": 0.00
+        }
+      ]
+    }
+  },
+  {
+    "id": "TC-35",
+    "description": "Negative quantity (invalid)",
+    "profile": { "tax_enabled": false, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": -2, "tax_rate": 0, "tax_type": "NONE", "is_packaged": false } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-36",
+    "description": "Zero quantity (invalid)",
+    "profile": { "tax_enabled": false, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 0, "tax_rate": 0, "tax_type": "NONE", "is_packaged": false } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-37",
+    "description": "Negative unit price (invalid)",
+    "profile": { "tax_enabled": false, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": -100.00, "quantity": 1, "tax_rate": 0, "tax_type": "NONE", "is_packaged": false } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-38",
+    "description": "Negative tax rate (invalid)",
+    "profile": { "tax_enabled": true, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 1, "tax_rate": -5, "tax_type": "EXCLUSIVE", "is_packaged": false } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-39",
+    "description": "Negative discount value (invalid)",
+    "profile": { "tax_enabled": true, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 1, "tax_rate": 18, "tax_type": "EXCLUSIVE", "is_packaged": false, "discount_amount": -10 } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-40",
+    "description": "Percent line discount > 100% (invalid)",
+    "profile": { "tax_enabled": true, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 1, "tax_rate": 18, "tax_type": "EXCLUSIVE", "is_packaged": false, "discount_percent": 110 } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 0 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-41",
+    "description": "Percent order discount > 100% (invalid)",
+    "profile": { "tax_enabled": true, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 1, "tax_rate": 18, "tax_type": "EXCLUSIVE", "is_packaged": false } ],
+    "orderDiscount": { "type": "PERCENT", "value": 110 },
+    "expectsError": true
+  },
+  {
+    "id": "TC-42",
+    "description": "Amount order discount > eligible face total (invalid)",
+    "profile": { "tax_enabled": true, "prices_include_tax": false, "currencyDecimalPlaces": 2 },
+    "items": [ { "price": 100.00, "quantity": 1, "tax_rate": 18, "tax_type": "EXCLUSIVE", "is_packaged": false } ],
+    "orderDiscount": { "type": "AMOUNT", "value": 150 },
+    "expectsError": true
+  }
+]

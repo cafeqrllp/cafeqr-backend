@@ -15,6 +15,7 @@ import java.util.UUID;
 public class ClientService {
 
     private final ClientRepository clientRepository;
+    private final com.restaurant.pos.product.service.DefaultUomService defaultUomService;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
 
     public List<Client> getAllClients() {
@@ -44,7 +45,6 @@ public class ClientService {
         client.setGstNumber(clientDetails.getGstNumber());
         client.setFssaiNumber(clientDetails.getFssaiNumber());
         client.setWebsite(clientDetails.getWebsite());
-        client.setCurrency(clientDetails.getCurrency());
         
         // Branding & Operational
         client.setLogoUrl(clientDetails.getLogoUrl());
@@ -88,7 +88,9 @@ public class ClientService {
         } else {
             client.setSlug(sanitizeSlug(client.getSlug()));
         }
-        return clientRepository.save(java.util.Objects.requireNonNull(client));
+        Client saved = clientRepository.save(java.util.Objects.requireNonNull(client));
+        defaultUomService.ensureDefaultUom(saved.getId());
+        return saved;
     }
 
     public static String sanitizeSlug(String input) {
