@@ -82,10 +82,21 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
           AND (
             :search IS NULL
             OR o.order_no ILIKE '%' || :search || '%'
+            OR COALESCE(o.description, '') ILIKE '%' || :search || '%'
+            OR COALESCE(o.remarks, '') ILIKE '%' || :search || '%'
             OR COALESCE(c.name, '') ILIKE '%' || :search || '%'
             OR COALESCE(c.phone, '') ILIKE '%' || :search || '%'
             OR COALESCE(cc.name, '') ILIKE '%' || :search || '%'
             OR COALESCE(cc.phone, '') ILIKE '%' || :search || '%'
+            OR EXISTS (
+              SELECT 1 FROM invoices inv
+              WHERE inv.order_id = o.id AND inv.invoice_no ILIKE '%' || :search || '%'
+            )
+            OR EXISTS (
+              SELECT 1 FROM order_lines ol
+              WHERE ol.order_id = o.id AND ol.isactive = 'Y'
+                AND ol.product_name ILIKE '%' || :search || '%'
+            )
           )
         ORDER BY o.order_date DESC, o.created_at DESC
         """, nativeQuery = true)
@@ -255,9 +266,13 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
             (EXISTS (SELECT 1 FROM product_variant_mappings pvm WHERE pvm.product_id = p.id)) AS hasVariants,
             (CAST((SELECT COUNT(*) FROM product_variant_mappings pvm WHERE pvm.product_id = p.id) AS integer)) AS variantCount,
             (EXISTS (SELECT 1 FROM product_upsells pu WHERE pu.parent_product_id = p.id AND pu.is_active = true)) AS hasUpsells,
-            (CAST((SELECT COUNT(*) FROM product_upsells pu WHERE pu.parent_product_id = p.id AND pu.is_active = true) AS integer)) AS upsellCount
+            (CAST((SELECT COUNT(*) FROM product_upsells pu WHERE pu.parent_product_id = p.id AND pu.is_active = true) AS integer)) AS upsellCount,
+            u.name              AS uomName,
+            u.short_name        AS uomShortName,
+            COALESCE(u.uom_precision, 0) AS uomPrecision
         FROM products p
         LEFT JOIN categories c ON c.id = p.category_id
+        LEFT JOIN uoms u ON u.id = p.uom_id
         WHERE (p.client_id = :clientId OR p.client_id IS NULL)
           AND (CAST(:orgId AS uuid) IS NULL OR p.org_id = CAST(:orgId AS uuid) OR p.org_id IS NULL OR p.org_id = CAST('00000000-0000-0000-0000-000000000000' AS uuid))
           AND p.is_active = true

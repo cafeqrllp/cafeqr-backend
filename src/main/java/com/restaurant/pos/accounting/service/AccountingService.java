@@ -9,6 +9,7 @@ import com.restaurant.pos.accounting.repository.*;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.service.BranchContextService;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.invoice.domain.Invoice;
@@ -47,7 +48,7 @@ import java.util.stream.Collectors;
 public class AccountingService {
 
     private static final int DEFAULT_REPORT_DAYS = 31;
-    private static final int MAX_REPORT_DAYS = 366;
+    private static final int MAX_REPORT_DAYS = 1830;
     private static final int MAX_JOURNAL_ROWS = 500;
     private static final Set<String> FINANCIAL_PAYMENT_METHODS = Set.of("CASH", "ONLINE", "UPI", "CARD", "BANK", "CHEQUE");
 
@@ -61,6 +62,7 @@ public class AccountingService {
     private final OrderRepository orderRepository;
     private final BranchContextService branchContext;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
+    private final CurrencyScaleService currencyScale;
 
 
     public List<AccountingAccount> getAccounts(boolean includeInactive) {
@@ -867,11 +869,13 @@ public class AccountingService {
     }
 
     public BigDecimal calculateTaxExclusiveDiscount(Order order) {
+        int dp = order == null ? CurrencyScaleService.FALLBACK_DECIMAL_PLACES
+                : currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
         if (order == null) {
-            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP);
         }
         if (order.getLines() == null || order.getLines().isEmpty()) {
-            return money(order.getTotalDiscountAmount()).setScale(2, RoundingMode.HALF_UP);
+            return money(order.getTotalDiscountAmount()).setScale(dp, RoundingMode.HALF_UP);
         }
         BigDecimal totalExTaxDiscount = BigDecimal.ZERO;
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
@@ -897,7 +901,7 @@ public class AccountingService {
         if (totalExTaxDiscount.compareTo(BigDecimal.ZERO) == 0 && order.getTotalDiscountAmount() != null) {
             totalExTaxDiscount = money(order.getTotalDiscountAmount());
         }
-        return totalExTaxDiscount.setScale(2, RoundingMode.HALF_UP);
+        return totalExTaxDiscount.setScale(dp, RoundingMode.HALF_UP);
     }
 
     private AccountingAccount getScopedAccount(UUID id) {

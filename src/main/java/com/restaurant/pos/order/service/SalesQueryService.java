@@ -3,6 +3,7 @@ package com.restaurant.pos.order.service;
 import com.restaurant.pos.client.repository.TerminalRepository;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.service.BranchContextService;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.order.dto.OrderCustomerDto;
@@ -32,11 +33,10 @@ import java.util.*;
 @Transactional(readOnly = true)
 public class SalesQueryService {
 
-    private static final Duration MAX_REPORT_RANGE = Duration.ofDays(31);
-
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final TerminalRepository terminalRepository;
     private final BranchContextService branchContext;
+    private final CurrencyScaleService currencyScale;
 
     @Transactional(readOnly = true, timeout = 10)
     public SalesDashboardResponse getDashboard(SalesDashboardQuery query) {
@@ -50,6 +50,7 @@ public class SalesQueryService {
         }
 
         UUID clientId = TenantContext.getCurrentTenant();
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
         if (query.getTerminalId() != null) {
             if (orgId != null) {
                 terminalRepository.findByIdAndClientIdAndOrgId(query.getTerminalId(), clientId, orgId)
@@ -79,7 +80,7 @@ public class SalesQueryService {
         String whereClause = buildWhereClause(criteria, params);
 
         // 1. Fetch aggregated sales summary statistics
-        SalesSummaryDto summary = fetchSalesSummary(whereClause, params);
+        SalesSummaryDto summary = fetchSalesSummary(whereClause, params, dp);
 
         // 2. Fetch the requested page of orders
         int page = query.getEffectivePage();
@@ -109,17 +110,15 @@ public class SalesQueryService {
     }
 
     private void validateQueryRange(Instant from, Instant to, String search) {
-        if (search != null && !search.isBlank()) {
-            return;
-        }
         if (from == null || to == null) {
+            // A text search without an explicit date range spans all dates
+            if (search != null && !search.isBlank()) {
+                return;
+            }
             throw new IllegalArgumentException("Query date parameters cannot be null");
         }
         if (from.isAfter(to)) {
             throw new IllegalArgumentException("Query from date must be before to date");
-        }
-        if (Duration.between(from, to).compareTo(MAX_REPORT_RANGE) > 0) {
-            throw new IllegalArgumentException("Query date range cannot exceed 31 days");
         }
     }
 
@@ -158,13 +157,13 @@ public class SalesQueryService {
             where.append("AND o.isactive = 'Y' AND o.order_status <> 'VOID' AND o.order_no NOT LIKE '%\\_VOID\\_%' ESCAPE '\\' ");
         }
 
-        // Date range filters (optional when searching by text query)
-        if (criteria.from() != null && !hasSearchText) {
+        // Date range filters always apply when provided; a text search with no range spans all dates
+        if (criteria.from() != null) {
             where.append("AND o.order_date >= :fromDate ");
             params.addValue("fromDate", java.sql.Timestamp.from(criteria.from()));
         }
 
-        if (criteria.to() != null && !hasSearchText) {
+        if (criteria.to() != null) {
             where.append("AND o.order_date <= :toDate ");
             params.addValue("toDate", java.sql.Timestamp.from(criteria.to()));
         }
@@ -185,9 +184,6 @@ public class SalesQueryService {
             where.append("  LOWER(TRIM(o.order_no)) = :searchExact ");
             where.append("  OR LOWER(TRIM(o.order_no)) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(CAST(o.id AS VARCHAR)) = :searchExact ");
-            where.append("  OR LOWER(COALESCE(o.customer_name, '')) LIKE :searchPattern ESCAPE '\\' ");
-            where.append("  OR LOWER(COALESCE(o.customer_phone, '')) LIKE :searchPattern ESCAPE '\\' ");
-            where.append("  OR LOWER(COALESCE(o.description, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.description, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR LOWER(COALESCE(o.reference, '')) LIKE :searchPattern ESCAPE '\\' ");
             where.append("  OR EXISTS (SELECT 1 FROM invoices i WHERE i.order_id = o.id AND (LOWER(TRIM(i.invoice_no)) = :searchExact OR LOWER(TRIM(i.invoice_no)) LIKE :searchPattern ESCAPE '\\' OR CAST(i.daily_bill_no AS VARCHAR) = :searchExact OR CAST(i.daily_bill_no AS VARCHAR) LIKE :searchPattern ESCAPE '\\')) ");
@@ -226,7 +222,7 @@ public class SalesQueryService {
         return where.toString();
     }
 
-    private SalesSummaryDto fetchSalesSummary(String whereClause, MapSqlParameterSource params) {
+    private SalesSummaryDto fetchSalesSummary(String whereClause, MapSqlParameterSource params, int dp) {
         String summarySql = "WITH filtered_orders AS ( " +
                 "  SELECT o.id, o.total_amount, o.total_tax_amount, o.total_discount_amount, o.grand_total " +
                 "  FROM orders o " +
@@ -254,7 +250,7 @@ public class SalesQueryService {
             long totalOrders = rs.getLong("total_orders");
             BigDecimal grandTotal = rs.getBigDecimal("grand_total");
             BigDecimal avg = totalOrders > 0
-                    ? grandTotal.divide(BigDecimal.valueOf(totalOrders), 2, RoundingMode.HALF_UP)
+                    ? grandTotal.divide(BigDecimal.valueOf(totalOrders), dp, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
 
             return SalesSummaryDto.builder()
@@ -343,7 +339,7 @@ public class SalesQueryService {
                     .createdBy(rs.getString("created_by"))
                     .updatedBy(rs.getString("updated_by"))
                     .invoiceNo(rs.getString("invoice_no"))
-                    .dailyBillNo(rs.getInt("daily_bill_no"))
+                    .dailyBillNo(rs.getObject("daily_bill_no", Integer.class))
                     .paymentNo(rs.getString("payment_no"))
                     .description(rs.getString("description"))
                     .remarks(rs.getString("remarks") != null ? rs.getString("remarks") : rs.getString("description"))

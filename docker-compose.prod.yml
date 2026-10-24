@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# CafeQR 2.0 — Production Docker Compose (Hostinger VPS)
+# CafeQR 2.0 — Production Docker Compose (Oracle Cloud VPS)
 # ──────────────────────────────────────────────────────────────
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d
@@ -17,11 +17,7 @@ services:
     container_name: cafeqr-caddy
     restart: unless-stopped
     environment:
-      # Defaults to HTTP on any host/IP. Set CADDY_SITE_ADDRESS=your-domain.com
-      # in .env after DNS is ready to enable automatic HTTPS.
       - CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-:80}
-      # The inert default does not affect IP-first deployments. At HTTPS
-      # cutover set this to http://69.62.83.147.
       - CADDY_REDIRECT_SITE_ADDRESS=${CADDY_REDIRECT_SITE_ADDRESS:-http://redirect.invalid}
       - CADDY_CANONICAL_ORIGIN=${CADDY_CANONICAL_ORIGIN:-https://app.cafeqr.in}
     ports:
@@ -58,6 +54,7 @@ services:
       - SPRING_DATA_REDIS_SSL=false
       - SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE=${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:-25}
       - SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:-5}
+      - WHATSAPP_GATEWAY_URL=${WHATSAPP_GATEWAY_URL:-http://whatsapp-gateway:3005}
     volumes:
       - backend_backups:/app/data/backups
     depends_on:
@@ -70,9 +67,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 15
-      # The VPS is resource-constrained; Spring Boot + Hibernate + Flyway
-      # can easily take 3-5 minutes on cold start. Give it 7 minutes
-      # before even counting failures.
       start_period: 420s
     networks:
       - frontend_net
@@ -95,10 +89,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      # Localhost-only admin access for SSH-tunneled tools such as DBeaver.
-      # Do not bind this to 0.0.0.0 in production.
       - "127.0.0.1:15432:5432"
-    # Production-tuned PostgreSQL for 4 GB VPS
     command: >
       postgres
         -c shared_buffers=256MB
@@ -151,17 +142,32 @@ services:
         limits:
           memory: 192M
 
+  # ── WhatsApp Companion Gateway (Baileys Multi-Tenant Microservice) ──
+  whatsapp-gateway:
+    image: ${WHATSAPP_GATEWAY_IMAGE:-ghcr.io/cafeqrllp/cafeqr-whatsapp-gateway:latest}
+    build:
+      context: ./whatsapp-gateway
+      dockerfile: Dockerfile
+    container_name: cafeqr-whatsapp-gateway
+    restart: unless-stopped
+    volumes:
+      - whatsapp_auth_data:/app/auth_sessions
+    networks:
+      - frontend_net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
 # ── Networks ──
-# Two isolated networks ensure the database/cache/queue
-# are NEVER reachable from the public internet.
 networks:
   frontend_net:
     driver: bridge
   backend_net:
     driver: bridge
-    internal: true    # No internet access — internal services only
+    internal: true
   db_admin_net:
-    driver: bridge    # Enables localhost-only DB admin port publishing
+    driver: bridge
 
 # ── Volumes ──
 volumes:
@@ -170,3 +176,4 @@ volumes:
   postgres_data:
   redis_data:
   backend_backups:
+  whatsapp_auth_data:

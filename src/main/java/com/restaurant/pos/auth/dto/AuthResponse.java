@@ -23,7 +23,6 @@ public class AuthResponse {
     private java.util.UUID terminalId;
     private String terminalName;
     private java.util.UUID userId;
-    private String currency;
     private String country;
     private String subscriptionStatus;
     private java.time.LocalDateTime subscriptionExpiryDate;

@@ -310,7 +310,6 @@ public class FounderDashboardController {
                             .phone(resolvedPhone)
                             .address(client.getAddress())
                             .country(client.getCountry())
-                            .currency(client.getCurrency())
                             .timezone(client.getTimezone())
                             .posType(client.getPosType())
                             .website(client.getWebsite())

@@ -37,6 +37,8 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
     private final ClientRepository clientRepository;
+    private final com.restaurant.pos.product.service.DefaultUomService defaultUomService;
+    private final com.restaurant.pos.purchasing.service.DefaultCurrencyService defaultCurrencyService;
     private final OrganizationRepository organizationRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
@@ -72,6 +74,7 @@ public class AuthService {
         client = clientRepository.save(client);
         UUID clientId = client.getId();
         log.info("Created client with ID: {}", clientId);
+        defaultUomService.ensureDefaultUom(clientId);
         TenantContext.setCurrentTenant(clientId);
 
         // 2. Provision Default Organization
@@ -88,6 +91,7 @@ public class AuthService {
         defaultOrg.setCreatedBy("SYSTEM");
         defaultOrg = organizationRepository.save(defaultOrg);
         log.info("Created default organization with ID: {}", defaultOrg.getId());
+        defaultCurrencyService.ensureDefaultCurrency(clientId, defaultOrg.getId());
         
         // 3. Seed Roles & Permissions for the Tenant
         seedTenantRoles(clientId, "SYSTEM");
@@ -246,7 +250,6 @@ public class AuthService {
                 .terminalId(user.getTerminalId())
                 .terminalName(user.getTerminal() != null ? user.getTerminal().getName() : null)
                 .userId(user.getId())
-                .currency(client.getCurrency())
                 .country(client.getCountry())
                 .subscriptionStatus(subStatus)
                 .subscriptionExpiryDate(subExpiry)

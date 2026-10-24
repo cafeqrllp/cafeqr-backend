@@ -133,6 +133,7 @@ class OrderServiceTest {
                                 mock(com.restaurant.pos.push.service.PushNotificationService.class),
                                 timezoneResolver,
                                 mock(CurrencyRepository.class),
+                                new com.restaurant.pos.common.service.CurrencyScaleService(mock(CurrencyRepository.class)),
                                 new OrderCalculationService(),
                                 mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class),
                                 mock(org.springframework.context.ApplicationContext.class),
@@ -923,13 +924,18 @@ class OrderServiceTest {
                 when(customerRepository.findByClientIdAndOrderLink(eq(clientId), any(), any())).thenReturn(List.of());
                 when(customerRepository.findFirstByPhoneAndClientIdOrderByCreatedAtAsc(eq("9111222333"), eq(clientId)))
                                 .thenReturn(Optional.empty());
+                Customer[] savedCustomer = new Customer[1];
                 when(customerRepository.save(any(Customer.class))).thenAnswer(invocation -> {
                         Customer c = invocation.getArgument(0);
                         if (c.getId() == null) {
                                 c.setId(generatedCustomerId);
                         }
+                        savedCustomer[0] = c;
                         return c;
                 });
+                // Settle re-links customers by id after saving the new one; the saved row must be findable.
+                when(customerRepository.findByIdAndClientId(generatedCustomerId, clientId))
+                                .thenAnswer(invocation -> Optional.ofNullable(savedCustomer[0]));
 
                 OrderSettleRequest request = new OrderSettleRequest();
                 request.setPaymentMethod("CASH");

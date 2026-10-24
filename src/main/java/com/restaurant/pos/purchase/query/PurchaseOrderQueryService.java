@@ -2,6 +2,7 @@ package com.restaurant.pos.purchase.query;
 
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderType;
@@ -34,6 +35,7 @@ public class PurchaseOrderQueryService {
     private final PurchaseOrderDtoMapper purchaseOrderDtoMapper;
     private final com.restaurant.pos.order.service.OrderService orderService;
     private final com.restaurant.pos.purchasing.repository.VendorRepository vendorRepository;
+    private final CurrencyScaleService currencyScale;
 
     /**
      * Paginated purchase order history list mapped to lightweight PurchaseOrderSummaryDto.
@@ -160,6 +162,13 @@ public class PurchaseOrderQueryService {
         });
     }
 
+    private int currencyDp(UUID orgId) {
+        UUID resolvedOrgId = orgId != null
+                ? orgId
+                : (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg());
+        return currencyScale.decimalPlaces(TenantContext.getCurrentTenant(), resolvedOrgId);
+    }
+
     private java.math.BigDecimal safe(java.math.BigDecimal val) {
         return val != null ? val : java.math.BigDecimal.ZERO;
     }
@@ -169,6 +178,7 @@ public class PurchaseOrderQueryService {
             java.time.Instant from, java.time.Instant to, UUID orgId, UUID vendorId, UUID warehouseId) {
         List<Order> orders = fetchFilteredPurchaseOrders(from, to, orgId, vendorId, warehouseId, false);
 
+        int dp = currencyDp(orgId);
         java.math.BigDecimal totalPurchases = java.math.BigDecimal.ZERO;
         java.math.BigDecimal totalPaid = java.math.BigDecimal.ZERO;
         java.math.BigDecimal totalUnpaid = java.math.BigDecimal.ZERO;
@@ -205,7 +215,7 @@ public class PurchaseOrderQueryService {
                 if ("PAID".equals(payStatus)) {
                     totalPaid = totalPaid.add(grandTotal);
                 } else if ("PARTIAL".equals(payStatus)) {
-                    java.math.BigDecimal half = grandTotal.divide(java.math.BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+                    java.math.BigDecimal half = grandTotal.divide(java.math.BigDecimal.valueOf(2), dp, java.math.RoundingMode.HALF_UP);
                     totalPaid = totalPaid.add(half);
                     totalUnpaid = totalUnpaid.add(grandTotal.subtract(half));
                 } else {
@@ -216,7 +226,7 @@ public class PurchaseOrderQueryService {
 
         long nonDraftCount = totalOrders - draftOrders;
         java.math.BigDecimal averageOrderValue = (nonDraftCount > 0 && totalPurchases.compareTo(java.math.BigDecimal.ZERO) > 0)
-                ? totalPurchases.divide(java.math.BigDecimal.valueOf(nonDraftCount), 2, java.math.RoundingMode.HALF_UP)
+                ? totalPurchases.divide(java.math.BigDecimal.valueOf(nonDraftCount), dp, java.math.RoundingMode.HALF_UP)
                 : java.math.BigDecimal.ZERO;
 
         return com.restaurant.pos.purchase.dto.PurchaseReportSummaryDto.builder()
@@ -311,6 +321,7 @@ public class PurchaseOrderQueryService {
         List<Order> orders = fetchFilteredPurchaseOrders(from, to, orgId, vendorId, warehouseId, false);
 
         UUID clientId = TenantContext.getCurrentTenant();
+        int dp = currencyDp(orgId);
         java.util.Map<UUID, String> vendorNameCache = new java.util.HashMap<>();
         try {
             vendorRepository.findByClientIdOrderByNameAsc(clientId).forEach(v -> {
@@ -354,7 +365,7 @@ public class PurchaseOrderQueryService {
             if ("PAID".equals(payStatus)) {
                 acc.totalPaid = acc.totalPaid.add(grandTotal);
             } else if ("PARTIAL".equals(payStatus)) {
-                java.math.BigDecimal half = grandTotal.divide(java.math.BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+                java.math.BigDecimal half = grandTotal.divide(java.math.BigDecimal.valueOf(2), dp, java.math.RoundingMode.HALF_UP);
                 acc.totalPaid = acc.totalPaid.add(half);
                 acc.outstandingBalance = acc.outstandingBalance.add(grandTotal.subtract(half));
             } else {

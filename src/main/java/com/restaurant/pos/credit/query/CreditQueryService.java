@@ -1,6 +1,7 @@
 package com.restaurant.pos.credit.query;
 
 import com.restaurant.pos.common.exception.BusinessException;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.credit.common.CreditGuard;
 import com.restaurant.pos.credit.domain.CreditCustomer;
@@ -62,6 +63,7 @@ public class CreditQueryService {
     private final PaymentRepository paymentRepository;
     private final com.restaurant.pos.order.repository.OrderRepository orderRepository;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
+    private final CurrencyScaleService currencyScale;
 
     // ── List Customers / Partners ────────────────────────────────────────────
 
@@ -87,13 +89,14 @@ public class CreditQueryService {
             Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByVendorIds(clientId, vendorIds));
 
             return vendors.stream().map(vendor -> {
-                BigDecimal invTotal = creditGuard.money(invoiceTotals.get(vendor.getId()));
-                BigDecimal pendingBal = creditGuard.money(pendingBalances.get(vendor.getId()));
-                BigDecimal paid = creditGuard.money(paidTotals.get(vendor.getId()));
+                int dp = currencyScale.decimalPlaces(vendor.getClientId(), vendor.getOrgId());
+                BigDecimal invTotal = creditGuard.money(invoiceTotals.get(vendor.getId()), dp);
+                BigDecimal pendingBal = creditGuard.money(pendingBalances.get(vendor.getId()), dp);
+                BigDecimal paid = creditGuard.money(paidTotals.get(vendor.getId()), dp);
                 long openCount = openCounts.getOrDefault(vendor.getId(), 0L);
 
-                BigDecimal totalCredit = creditGuard.money(vendor.getOpeningBalance()).add(invTotal);
-                BigDecimal balance = creditGuard.money(vendor.getOpeningBalance()).add(pendingBal).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal totalCredit = creditGuard.money(vendor.getOpeningBalance(), dp).add(invTotal);
+                BigDecimal balance = creditGuard.money(vendor.getOpeningBalance(), dp).add(pendingBal).setScale(dp, RoundingMode.HALF_UP);
                 String vStatus = "Y".equalsIgnoreCase(vendor.getIsactive()) ? "ACTIVE" : "INACTIVE";
 
                 return CreditBPartnerDto.builder()
@@ -102,8 +105,8 @@ public class CreditQueryService {
                         .phone(vendor.getPhone())
                         .email(vendor.getEmail())
                         .status(vStatus)
-                        .creditLimit(creditGuard.money(vendor.getCreditLimit()))
-                        .openingBalance(creditGuard.money(vendor.getOpeningBalance()))
+                        .creditLimit(creditGuard.money(vendor.getCreditLimit(), dp))
+                        .openingBalance(creditGuard.money(vendor.getOpeningBalance(), dp))
                         .totalCreditExtended(totalCredit)
                         .paymentsReceived(paid)
                         .balance(balance)
@@ -127,13 +130,14 @@ public class CreditQueryService {
         Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByCustomerIds(clientId, customerIds));
 
         return customers.stream().map(customer -> {
-            BigDecimal invTotal = creditGuard.money(invoiceTotals.get(customer.getId()));
-            BigDecimal pendingBal = creditGuard.money(pendingBalances.get(customer.getId()));
-            BigDecimal paid = creditGuard.money(paidTotals.get(customer.getId()));
+            int dp = currencyScale.decimalPlaces(customer.getClientId(), customer.getOrgId());
+            BigDecimal invTotal = creditGuard.money(invoiceTotals.get(customer.getId()), dp);
+            BigDecimal pendingBal = creditGuard.money(pendingBalances.get(customer.getId()), dp);
+            BigDecimal paid = creditGuard.money(paidTotals.get(customer.getId()), dp);
             long openCount = openCounts.getOrDefault(customer.getId(), 0L);
 
-            BigDecimal totalCredit = creditGuard.money(customer.getOpeningBalance()).add(invTotal);
-            BigDecimal balance = creditGuard.money(customer.getOpeningBalance()).add(pendingBal).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal totalCredit = creditGuard.money(customer.getOpeningBalance(), dp).add(invTotal);
+            BigDecimal balance = creditGuard.money(customer.getOpeningBalance(), dp).add(pendingBal).setScale(dp, RoundingMode.HALF_UP);
 
             return CreditBPartnerDto.builder()
                     .id(customer.getId())
@@ -142,8 +146,8 @@ public class CreditQueryService {
                     .phone(customer.getPhone())
                     .email(customer.getEmail())
                     .status(customer.getStatus())
-                    .creditLimit(creditGuard.money(customer.getCreditLimit()))
-                    .openingBalance(creditGuard.money(customer.getOpeningBalance()))
+                    .creditLimit(creditGuard.money(customer.getCreditLimit(), dp))
+                    .openingBalance(creditGuard.money(customer.getOpeningBalance(), dp))
                     .totalCreditExtended(totalCredit)
                     .paymentsReceived(paid)
                     .balance(balance)
@@ -261,6 +265,7 @@ public class CreditQueryService {
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
         UUID orgId = TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, orgId);
         if (from != null && to != null && from.isAfter(to)) {
             throw new BusinessException("Start date ('from') cannot be after end date ('to')");
@@ -319,13 +324,13 @@ public class CreditQueryService {
         Map<UUID, CreditCustomer> customersById = customersById(invoices, payments);
         Map<UUID, Order> ordersById = batchLoadOrdersForInvoices(invoices);
 
-        BigDecimal creditExtended = invoices.stream().map(Invoice::getTotalAmount).map(creditGuard::money).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal paymentsReceived = payments.stream().map(Payment::getAmountPaid).map(creditGuard::money).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal creditExtended = invoices.stream().map(Invoice::getTotalAmount).map(amount -> creditGuard.money(amount, dp)).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal paymentsReceived = payments.stream().map(Payment::getAmountPaid).map(amount -> creditGuard.money(amount, dp)).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal outputTax = invoices.stream()
                 .map(invoice -> ordersById.get(invoice.getOrderId()))
                 .filter(Objects::nonNull)
                 .map(Order::getTotalTaxAmount)
-                .map(creditGuard::money)
+                .map(amount -> creditGuard.money(amount, dp))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         List<CreditOrderDto> orderRows = invoices.stream()
@@ -339,10 +344,10 @@ public class CreditQueryService {
 
         BigDecimal totalOpeningBalance = customersById.values().stream()
                 .map(CreditCustomer::getOpeningBalance)
-                .map(creditGuard::money)
+                .map(amount -> creditGuard.money(amount, dp))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal outstanding = totalOpeningBalance.add(creditExtended).subtract(paymentsReceived).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal outstanding = totalOpeningBalance.add(creditExtended).subtract(paymentsReceived).setScale(dp, RoundingMode.HALF_UP);
 
         long customerCount = customersById.keySet().size();
         return CreditReportDto.builder()
@@ -463,9 +468,10 @@ public class CreditQueryService {
     }
 
     private CreditOrderDto toOrderDto(Invoice invoice, CreditCustomer customer, Order order) {
-        BigDecimal total = creditGuard.money(invoice.getTotalAmount());
-        BigDecimal tax = order != null ? creditGuard.money(order.getTotalTaxAmount()) : BigDecimal.ZERO;
-        BigDecimal due = creditGuard.money(invoice.getAmountDue());
+        int dp = currencyScale.decimalPlaces(invoice.getClientId(), invoice.getOrgId());
+        BigDecimal total = creditGuard.money(invoice.getTotalAmount(), dp);
+        BigDecimal tax = order != null ? creditGuard.money(order.getTotalTaxAmount(), dp) : BigDecimal.ZERO;
+        BigDecimal due = creditGuard.money(invoice.getAmountDue(), dp);
         BigDecimal paid = total.subtract(due);
         if (paid.compareTo(BigDecimal.ZERO) < 0) paid = BigDecimal.ZERO;
         return CreditOrderDto.builder()
@@ -489,9 +495,10 @@ public class CreditQueryService {
     }
 
     private CreditOrderDto toVendorOrderDto(Invoice invoice, Vendor vendor, Order order) {
-        BigDecimal total = creditGuard.money(invoice.getTotalAmount());
-        BigDecimal tax = order != null ? creditGuard.money(order.getTotalTaxAmount()) : BigDecimal.ZERO;
-        BigDecimal due = creditGuard.money(invoice.getAmountDue());
+        int dp = currencyScale.decimalPlaces(invoice.getClientId(), invoice.getOrgId());
+        BigDecimal total = creditGuard.money(invoice.getTotalAmount(), dp);
+        BigDecimal tax = order != null ? creditGuard.money(order.getTotalTaxAmount(), dp) : BigDecimal.ZERO;
+        BigDecimal due = creditGuard.money(invoice.getAmountDue(), dp);
         BigDecimal paid = total.subtract(due);
         if (paid.compareTo(BigDecimal.ZERO) < 0) paid = BigDecimal.ZERO;
         boolean isReceived = order != null && (Boolean.TRUE.equals(order.getIsReceived()) || OrderStatus.COMPLETED.name().equalsIgnoreCase(order.getOrderStatus()));
@@ -517,6 +524,7 @@ public class CreditQueryService {
     }
 
     private CreditReportDto.PaymentTransactionDto toPaymentTransaction(Payment payment, CreditCustomer customer, Map<UUID, Order> ordersById, Map<UUID, Invoice> invoicesById) {
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
         String orderNo = null;
         Order order = payment.getOrderId() != null ? ordersById.get(payment.getOrderId()) : null;
         if (order == null && payment.getInvoiceId() != null) {
@@ -554,7 +562,7 @@ public class CreditQueryService {
                 .paymentType(paymentTypeStr)
                 .paymentTypeLabel("Customer Payment")
                 .paymentMethod(payment.getPaymentMethod())
-                .amount(creditGuard.money(payment.getAmountPaid()))
+                .amount(creditGuard.money(payment.getAmountPaid(), dp))
                 .roundOffAmount(roundOff)
                 .taxAmount(taxAmount)
                 .subtotal(subtotal)
@@ -570,6 +578,7 @@ public class CreditQueryService {
     }
 
     private CreditReportDto.PaymentTransactionDto toVendorPaymentTransaction(Payment payment, Vendor vendor, Map<UUID, Order> ordersById, Map<UUID, Invoice> invoicesById) {
+        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
         String orderNo = null;
         Order order = payment.getOrderId() != null ? ordersById.get(payment.getOrderId()) : null;
         if (order == null && payment.getInvoiceId() != null) {
@@ -607,7 +616,7 @@ public class CreditQueryService {
                 .paymentType(paymentTypeStr)
                 .paymentTypeLabel("Vendor Settlement")
                 .paymentMethod(payment.getPaymentMethod())
-                .amount(creditGuard.money(payment.getAmountPaid()))
+                .amount(creditGuard.money(payment.getAmountPaid(), dp))
                 .roundOffAmount(roundOff)
                 .taxAmount(taxAmount)
                 .subtotal(subtotal)

@@ -1,6 +1,7 @@
 package com.restaurant.pos.order.service;
 
 import com.restaurant.pos.common.context.TimezoneResolver;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.expense.domain.Expense;
@@ -44,6 +45,7 @@ public class PaymentBalanceReportService {
     private final ExpenseRepository expenseRepository;
     private final PaymentTypeRepository paymentTypeRepository;
     private final TimezoneResolver timezoneResolver;
+    private final CurrencyScaleService currencyScale;
 
     private static class Accumulator {
         String paymentMethod;
@@ -66,6 +68,7 @@ public class PaymentBalanceReportService {
     public PaymentBalanceReportDto getPaymentTypeBalances(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
 
         // 1. Initialize buckets from configured Payment Types in the database
         Map<String, Accumulator> buckets = new LinkedHashMap<>();
@@ -122,9 +125,9 @@ public class PaymentBalanceReportService {
             List<Payment> payments = paymentsByOrder.getOrDefault(o.getId(), List.of());
             if (payments.isEmpty()) {
                 if (Boolean.TRUE.equals(o.getIsCredit())) {
-                    recordInflow(buckets, "CREDIT", safe(o.getGrandTotal()), true);
+                    recordInflow(buckets, "CREDIT", safe(o.getGrandTotal()), true, dp);
                 } else {
-                    recordInflow(buckets, "UNASSIGNED", safe(o.getGrandTotal()), true);
+                    recordInflow(buckets, "UNASSIGNED", safe(o.getGrandTotal()), true, dp);
                 }
             } else {
                 for (Payment p : payments) {
@@ -132,23 +135,23 @@ public class PaymentBalanceReportService {
                     if (splits.isEmpty()) {
                         String method = normalizeKey(p.getPaymentMethod());
                         if (isMixedOrComposite(method)) {
-                            BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                            BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                             BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                            recordInflow(buckets, "CASH", half, true);
-                            recordInflow(buckets, "ONLINE", rem, true);
+                            recordInflow(buckets, "CASH", half, true, dp);
+                            recordInflow(buckets, "ONLINE", rem, true, dp);
                         } else {
-                            recordInflow(buckets, method, safe(p.getAmountPaid()), true);
+                            recordInflow(buckets, method, safe(p.getAmountPaid()), true, dp);
                         }
                     } else {
                         for (PaymentSplit split : splits) {
                             String splitMethod = normalizeKey(split.getPaymentMethod());
                             if (isMixedOrComposite(splitMethod)) {
-                                BigDecimal half = safe(split.getAmount()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                                BigDecimal half = safe(split.getAmount()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                                 BigDecimal rem = safe(split.getAmount()).subtract(half);
-                                recordInflow(buckets, "CASH", half, true);
-                                recordInflow(buckets, "ONLINE", rem, true);
+                                recordInflow(buckets, "CASH", half, true, dp);
+                                recordInflow(buckets, "ONLINE", rem, true, dp);
                             } else {
-                                recordInflow(buckets, splitMethod, safe(split.getAmount()), true);
+                                recordInflow(buckets, splitMethod, safe(split.getAmount()), true, dp);
                             }
                         }
                     }
@@ -172,12 +175,12 @@ public class PaymentBalanceReportService {
                 // Non-order inbound payment = credit customer settlement / collection
                 String method = normalizeKey(p.getPaymentMethod());
                 if (isMixedOrComposite(method)) {
-                    BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                    BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                     BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                    recordInflowCollection(buckets, "CASH", half);
-                    recordInflowCollection(buckets, "ONLINE", rem);
+                    recordInflowCollection(buckets, "CASH", half, dp);
+                    recordInflowCollection(buckets, "ONLINE", rem, dp);
                 } else {
-                    recordInflowCollection(buckets, method, safe(p.getAmountPaid()));
+                    recordInflowCollection(buckets, method, safe(p.getAmountPaid()), dp);
                 }
             }
         }
@@ -191,12 +194,12 @@ public class PaymentBalanceReportService {
                 if (e != null && e.isActive() && !"VOID".equalsIgnoreCase(e.getDocStatus())) {
                     String method = normalizeKey(e.getPaymentMethod());
                     if (isMixedOrComposite(method)) {
-                        BigDecimal half = safe(e.getAmount()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                        BigDecimal half = safe(e.getAmount()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                         BigDecimal rem = safe(e.getAmount()).subtract(half);
-                        recordExpenseOutflow(buckets, "CASH", half);
-                        recordExpenseOutflow(buckets, "ONLINE", rem);
+                        recordExpenseOutflow(buckets, "CASH", half, dp);
+                        recordExpenseOutflow(buckets, "ONLINE", rem, dp);
                     } else {
-                        recordExpenseOutflow(buckets, method, safe(e.getAmount()));
+                        recordExpenseOutflow(buckets, method, safe(e.getAmount()), dp);
                     }
                 }
             }
@@ -209,12 +212,12 @@ public class PaymentBalanceReportService {
                 if (p.getExpenseId() == null) {
                     String method = normalizeKey(p.getPaymentMethod());
                     if (isMixedOrComposite(method)) {
-                        BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                        BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                         BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                        recordPurchaseOutflow(buckets, "CASH", half);
-                        recordPurchaseOutflow(buckets, "ONLINE", rem);
+                        recordPurchaseOutflow(buckets, "CASH", half, dp);
+                        recordPurchaseOutflow(buckets, "ONLINE", rem, dp);
                     } else {
-                        recordPurchaseOutflow(buckets, method, safe(p.getAmountPaid()));
+                        recordPurchaseOutflow(buckets, method, safe(p.getAmountPaid()), dp);
                     }
                 }
             }
@@ -245,7 +248,7 @@ public class PaymentBalanceReportService {
             }
 
             BigDecimal avgTxn = acc.inflowCount > 0
-                    ? acc.inflowAmount.divide(BigDecimal.valueOf(acc.inflowCount), 2, RoundingMode.HALF_UP)
+                    ? acc.inflowAmount.divide(BigDecimal.valueOf(acc.inflowCount), dp, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
 
             PaymentTypeBalanceDto dto = PaymentTypeBalanceDto.builder()
@@ -321,13 +324,13 @@ public class PaymentBalanceReportService {
         }
     }
 
-    private void recordInflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, boolean isSales) {
+    private void recordInflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, boolean isSales, int dp) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal rem = amount.subtract(half);
-            recordInflow(buckets, "CASH", half, isSales);
-            recordInflow(buckets, "ONLINE", rem, isSales);
+            recordInflow(buckets, "CASH", half, isSales, dp);
+            recordInflow(buckets, "ONLINE", rem, isSales, dp);
             return;
         }
         Accumulator acc = buckets.computeIfAbsent(key, k -> {
@@ -343,13 +346,13 @@ public class PaymentBalanceReportService {
         acc.inflowCount++;
     }
 
-    private void recordInflowCollection(Map<String, Accumulator> buckets, String key, BigDecimal amount) {
+    private void recordInflowCollection(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal rem = amount.subtract(half);
-            recordInflowCollection(buckets, "CASH", half);
-            recordInflowCollection(buckets, "ONLINE", rem);
+            recordInflowCollection(buckets, "CASH", half, dp);
+            recordInflowCollection(buckets, "ONLINE", rem, dp);
             return;
         }
         Accumulator acc = buckets.computeIfAbsent(key, k -> {
@@ -363,13 +366,13 @@ public class PaymentBalanceReportService {
         acc.inflowCount++;
     }
 
-    private void recordExpenseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount) {
+    private void recordExpenseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal rem = amount.subtract(half);
-            recordExpenseOutflow(buckets, "CASH", half);
-            recordExpenseOutflow(buckets, "ONLINE", rem);
+            recordExpenseOutflow(buckets, "CASH", half, dp);
+            recordExpenseOutflow(buckets, "ONLINE", rem, dp);
             return;
         }
         Accumulator acc = buckets.computeIfAbsent(key, k -> {
@@ -383,13 +386,13 @@ public class PaymentBalanceReportService {
         acc.outflowCount++;
     }
 
-    private void recordPurchaseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount) {
+    private void recordPurchaseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal rem = amount.subtract(half);
-            recordPurchaseOutflow(buckets, "CASH", half);
-            recordPurchaseOutflow(buckets, "ONLINE", rem);
+            recordPurchaseOutflow(buckets, "CASH", half, dp);
+            recordPurchaseOutflow(buckets, "ONLINE", rem, dp);
             return;
         }
         Accumulator acc = buckets.computeIfAbsent(key, k -> {

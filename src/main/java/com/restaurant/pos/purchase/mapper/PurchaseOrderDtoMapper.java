@@ -80,6 +80,7 @@ public class PurchaseOrderDtoMapper {
                 line.setQuantity(lineCmd.getQuantity());
                 line.setUnitPrice(lineCmd.getUnitPrice());
                 line.setUnitOfMeasure(lineCmd.getUnitOfMeasure());
+                line.setUomPrecision(lineCmd.getUomPrecision() != null ? lineCmd.getUomPrecision() : 0);
                 line.setTaxRate(lineCmd.getTaxRate() != null ? lineCmd.getTaxRate() : BigDecimal.ZERO);
                 line.setTaxAmount(lineCmd.getTaxAmount() != null ? lineCmd.getTaxAmount() : BigDecimal.ZERO);
                 line.setDiscountAmount(lineCmd.getDiscountAmount() != null ? lineCmd.getDiscountAmount() : BigDecimal.ZERO);
@@ -136,6 +137,7 @@ public class PurchaseOrderDtoMapper {
                 line.setQuantity(lineCmd.getQuantity());
                 line.setUnitPrice(lineCmd.getUnitPrice());
                 line.setUnitOfMeasure(lineCmd.getUnitOfMeasure());
+                line.setUomPrecision(lineCmd.getUomPrecision() != null ? lineCmd.getUomPrecision() : 0);
                 line.setTaxRate(lineCmd.getTaxRate() != null ? lineCmd.getTaxRate() : BigDecimal.ZERO);
                 line.setTaxAmount(lineCmd.getTaxAmount() != null ? lineCmd.getTaxAmount() : BigDecimal.ZERO);
                 line.setDiscountAmount(lineCmd.getDiscountAmount() != null ? lineCmd.getDiscountAmount() : BigDecimal.ZERO);
@@ -203,6 +205,7 @@ public class PurchaseOrderDtoMapper {
                             .quantity(line.getQuantity())
                             .unitPrice(line.getUnitPrice())
                             .unitOfMeasure(line.getUnitOfMeasure())
+                            .uomPrecision(line.getUomPrecision())
                             .taxRate(line.getTaxRate())
                             .taxAmount(line.getTaxAmount())
                             .discountAmount(line.getDiscountAmount())

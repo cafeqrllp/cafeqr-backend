@@ -182,6 +182,7 @@ class OrderWorkflowParityTest {
                 mock(com.restaurant.pos.push.service.PushNotificationService.class),
                 timezoneResolver,
                 mock(CurrencyRepository.class),
+                new com.restaurant.pos.common.service.CurrencyScaleService(mock(CurrencyRepository.class)),
                 new OrderCalculationService(),
                 mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class),
                 applicationContext,

@@ -13,6 +13,8 @@ import java.util.UUID;
 
 @Repository
 public interface UomRepository extends JpaRepository<Uom, UUID> {
+
+    boolean existsByClientId(UUID clientId);
     UUID NIL_ORG_ID = new UUID(0L, 0L);
 
     @Query("SELECT u FROM Uom u WHERE (u.clientId = :clientId OR u.clientId IS NULL) AND (:orgId IS NULL OR u.orgId = :orgId OR u.orgId IS NULL OR u.orgId = :nilOrgId)")

@@ -5,6 +5,7 @@ import com.restaurant.pos.client.domain.Client;
 import com.restaurant.pos.client.repository.ClientRepository;
 import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.exception.BusinessException;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.invoice.domain.Invoice;
@@ -73,6 +74,7 @@ public class QrOrderCommandService {
     private final QrOrderRepository qrOrderRepository;
     private final ClientRepository clientRepository;
     private final SystemConfigurationService systemConfigurationService;
+    private final CurrencyScaleService currencyScale;
     private final CustomerRepository customerRepository;
     private final CurrencyRepository currencyRepository;
     private final PrintJobService printJobService;
@@ -119,6 +121,7 @@ public class QrOrderCommandService {
         }
 
         UUID defaultCurrencyId = resolveDefaultCurrencyId(clientId, orgId);
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
 
         String paymentStatus = String.valueOf(payload.getOrDefault("paymentStatus", "PENDING")).toUpperCase();
         String paymentMethod = String.valueOf(payload.getOrDefault("paymentMethod", "CASH")).toUpperCase();
@@ -256,11 +259,11 @@ public class QrOrderCommandService {
                 finalLineTotal = lineGross;
             } else if (itemPricesIncludeTax) {
                 finalLineTotal = lineGross;
-                taxableAmount = lineGross.divide(BigDecimal.ONE.add(lineRate), 2, RoundingMode.HALF_UP);
+                taxableAmount = lineGross.divide(BigDecimal.ONE.add(lineRate), dp, RoundingMode.HALF_UP);
                 lineTax = lineGross.subtract(taxableAmount);
             } else {
                 taxableAmount = lineGross;
-                lineTax = lineGross.multiply(lineRate).setScale(2, RoundingMode.HALF_UP);
+                lineTax = lineGross.multiply(lineRate).setScale(dp, RoundingMode.HALF_UP);
                 finalLineTotal = lineGross.add(lineTax);
             }
 
@@ -579,7 +582,7 @@ public class QrOrderCommandService {
             }
 
             Customer newCust = Customer.builder()
-                    .name(name != null && !name.isBlank() ? name : "Guest")
+                    .name(name != null && !name.isBlank() ? name : "")
                     .phone(sanitized)
                     .build();
             newCust.setClientId(clientId);
@@ -704,6 +707,7 @@ public class QrOrderCommandService {
                 log.error("Failed to generate invoice for QR order {}: {}", saved.getOrderNo(), ex.getMessage(), ex);
             }
         } else {
+            int dp = currencyScale.decimalPlaces(saved.getClientId(), saved.getOrgId());
             for (Invoice existingInv : activeInvoices) {
                 if (existingInv.getDailyBillNo() == null || existingInv.getDailyBillNo() <= 0) {
                     if (saved.getDailyBillNo() != null && saved.getDailyBillNo() > 0) {
@@ -714,7 +718,7 @@ public class QrOrderCommandService {
                 existingInv.setTotalAmount(saved.getGrandTotal());
                 existingInv.setGrossAmount(saved.getGrossAmount());
                 existingInv.setTotalTaxAmount(saved.getTotalTaxAmount());
-                existingInv.setTaxableAmount(computeTaxableSum(saved.getLines()));
+                existingInv.setTaxableAmount(computeTaxableSum(saved.getLines(), dp));
 
                 // Synchronize amount due
                 if (isPaid) {
@@ -909,13 +913,13 @@ public class QrOrderCommandService {
         }
     }
 
-    private BigDecimal computeTaxableSum(List<OrderLine> lines) {
+    private BigDecimal computeTaxableSum(List<OrderLine> lines, int dp) {
         if (lines == null) return BigDecimal.ZERO;
         return lines.stream()
                 .filter(l -> !"N".equalsIgnoreCase(l.getIsactive()) && l.getTaxableAmount() != null)
                 .map(OrderLine::getTaxableAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .setScale(2, RoundingMode.HALF_UP);
+                .setScale(dp, RoundingMode.HALF_UP);
     }
 
     private UUID resolveDefaultCurrencyId(UUID clientId, UUID orgId) {

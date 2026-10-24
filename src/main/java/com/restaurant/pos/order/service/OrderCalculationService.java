@@ -422,7 +422,9 @@ public class OrderCalculationService {
 
         String mode = request.getRoundOffMode() != null && !request.getRoundOffMode().isBlank()
                 ? request.getRoundOffMode().toUpperCase()
-                : (config != null && config.getRoundOffMode() != null ? config.getRoundOffMode().toUpperCase() : "AUTOMATIC");
+                : (config != null && config.isRoundOffEnabled() && config.getRoundOffMode() != null
+                        ? config.getRoundOffMode().toUpperCase()
+                        : "DISABLED");
 
         if ("DISABLED".equals(mode)) return BigDecimal.ZERO;
 

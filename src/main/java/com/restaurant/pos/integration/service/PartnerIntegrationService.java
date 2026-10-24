@@ -4,6 +4,7 @@ import com.restaurant.pos.client.domain.Organization;
 import com.restaurant.pos.client.repository.OrganizationRepository;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
+import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.integration.dto.PartnerOrderCancelDto;
 import com.restaurant.pos.integration.dto.PartnerOrderRequestDto;
 import com.restaurant.pos.integration.dto.StoreMenuExportDto;
@@ -42,6 +43,7 @@ public class PartnerIntegrationService {
     private final ProductRepository productRepository;
     private final DocumentSequenceService sequenceService;
     private final PrintJobService printJobService;
+    private final SystemConfigurationService systemConfigurationService;
 
     @Value("${cafeqr.integrations.default-webhook-secret:${CAFEQR_WEBHOOK_SECRET:cafeqr_partner_secret_2026}}")
     private String defaultWebhookSecret;
@@ -236,7 +238,7 @@ public class PartnerIntegrationService {
 
         return StoreMenuExportDto.builder()
                 .storeId(store.getId())
-                .currency("INR")
+                .currency(systemConfigurationService.resolveDefaultCurrencyCode(store.getClientId(), store.getId()))
                 .categories(categoryDtos)
                 .build();
     }

@@ -167,10 +167,16 @@ public class ProductService {
         if (uomRepository.findByNameAndClientIdAndOrgIdOrGlobal(uom.getName(), clientId, orgId).isPresent()) {
             throw new BusinessException("UOM with this name already exists");
         }
+        validateUomPrecision(uom);
 
         uom.setClientId(clientId);
         uom.setOrgId(orgId);
-        return uomRepository.save(uom);
+        Uom saved = uomRepository.save(uom);
+        if (saved.isDefault()) {
+            clearOtherTenantDefaults(saved, clientId, orgId);
+        }
+        invalidatePosProducts(clientId, orgId);
+        return saved;
     }
 
     @Transactional
@@ -182,13 +188,37 @@ public class ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException("UOM not found"));
 
         validateOwnership(existing.getClientId(), existing.getOrgId(), "UOM");
+        validateUomPrecision(uom);
 
         existing.setName(uom.getName());
         existing.setShortName(uom.getShortName());
         existing.setActive(uom.isActive());
         existing.setDefault(uom.isDefault());
         existing.setUomPrecision(uom.getUomPrecision());
-        return uomRepository.save(existing);
+        Uom saved = uomRepository.save(existing);
+        if (saved.isDefault()) {
+            clearOtherTenantDefaults(saved, existing.getClientId(), existing.getOrgId());
+        }
+        productRepository.touchProductsByUom(saved.getId(), java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+        invalidatePosProducts(saved.getClientId(), saved.getOrgId());
+        return saved;
+    }
+
+    /**
+     * Only one UOM may be the default per tenant. Global (shared) UOMs are left untouched.
+     */
+    private void clearOtherTenantDefaults(Uom keep, UUID clientId, UUID orgId) {
+        if (clientId == null) {
+            return;
+        }
+        uomRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId).stream()
+                .filter(other -> !other.getId().equals(keep.getId()))
+                .filter(other -> clientId.equals(other.getClientId()))
+                .filter(Uom::isDefault)
+                .forEach(other -> {
+                    other.setDefault(false);
+                    uomRepository.save(other);
+                });
     }
 
     @Transactional
@@ -789,6 +819,9 @@ public class ProductService {
                 product.setUom(uomRepository.findById(product.getUom().getId()).orElse(null));
             }
         }
+        if (product.getUom() == null) {
+            product.setUom(findDefaultUom(clientId, orgId));
+        }
         if (product.getPricelistProducts() != null) {
             product.getPricelistProducts().removeIf(pp -> pp == null || (pp.getPricelist() == null && pp.getPricelistId() == null));
             product.getPricelistProducts().forEach(pp -> {
@@ -1220,9 +1253,22 @@ public class ProductService {
         throw new BusinessException("Category not found or invalid");
     }
 
+    private void validateUomPrecision(Uom uom) {
+        if (uom.getUomPrecision() < 0 || uom.getUomPrecision() > Uom.MAX_PRECISION) {
+            throw new BusinessException("UOM precision must be between 0 and " + Uom.MAX_PRECISION + " decimal places");
+        }
+    }
+
+    private Uom findDefaultUom(UUID clientId, UUID orgId) {
+        return uomRepository.findByClientIdAndOrgIdOrGlobalAndIsActiveTrue(clientId, orgId).stream()
+                .filter(Uom::isDefault)
+                .findFirst()
+                .orElse(null);
+    }
+
     private Uom resolveUomReference(Uom uom, UUID clientId, UUID orgId) {
         if (uom == null || (uom.getId() == null && uom.getName() == null)) {
-            return null;
+            return findDefaultUom(clientId, orgId);
         }
 
         if (uom.getId() != null) {
@@ -1313,12 +1359,14 @@ public class ProductService {
     }
 
     private void validateOwnership(UUID ownerClientId, UUID ownerOrgId, String entityName, boolean forModification) {
-        if (SecurityUtils.isSuperAdmin()) {
-            return;
-        }
-
         UUID currentClientId = TenantContext.getCurrentTenant();
         UUID currentOrgId = TenantContext.getCurrentOrg();
+        boolean branchSelected = currentOrgId != null && !new UUID(0L, 0L).equals(currentOrgId);
+
+        // Super admins bypass the checks, but a selected branch still limits them to that branch.
+        if (SecurityUtils.isSuperAdmin() && !branchSelected) {
+            return;
+        }
 
         // 1. Cross-Tenant Check
         if (currentClientId != null && ownerClientId != null && !currentClientId.equals(ownerClientId)) {
@@ -1327,7 +1375,7 @@ public class ProductService {
 
         // 2. Global Data Protection (Global records have NULL orgId or 00000000-0000-0000-0000-000000000000)
         boolean isGlobal = (ownerOrgId == null || new UUID(0L, 0L).equals(ownerOrgId));
-        boolean currentIsBranch = (currentOrgId != null && !new UUID(0L, 0L).equals(currentOrgId));
+        boolean currentIsBranch = branchSelected;
 
         if (forModification && isGlobal && currentIsBranch) {
             // Protect global data from being deleted/updated by org users.

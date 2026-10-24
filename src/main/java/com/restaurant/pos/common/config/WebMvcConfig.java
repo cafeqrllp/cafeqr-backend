@@ -37,6 +37,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
             "https://cafeqr-delivery-website.vercel.app," +
             "https://cafeqr-frontend.pages.dev," +
             "https://testcafeqrscanningapp.pages.dev," +
+            "https://cafeqr-scanning-app.pages.dev," +
             "https://test-cafeqr-founder-dashboard.pages.dev," +
             "https://cafeqr-founder-dashboard.pages.dev," +
             "https://pos.cafeqr.in," +
@@ -63,6 +64,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns(configuredOrigins)
                 .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .allowCredentials(true);
+                .allowCredentials(true)
+                .maxAge(7200L);
     }
 }

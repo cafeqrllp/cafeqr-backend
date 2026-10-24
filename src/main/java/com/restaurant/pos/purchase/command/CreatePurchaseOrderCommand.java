@@ -109,6 +109,9 @@ public class CreatePurchaseOrderCommand {
         @Schema(description = "Unit of measure (e.g. KG, PCS, BOX)", example = "KG")
         private String unitOfMeasure;
 
+        @Schema(description = "UOM precision (decimal places) of the product, 0-4")
+        private Integer uomPrecision;
+
         @Schema(description = "Tax rate percentage", example = "18.00")
         private BigDecimal taxRate;
 

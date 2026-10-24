@@ -96,6 +96,14 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
         return findChangedByClientIdAndOrgIdOrGlobalInternal(clientId, orgId, NIL_ORG_ID, updatedAfter);
     }
 
+    /**
+     * Marks products using this UOM as changed, so offline clients re-sync their
+     * denormalised uomPrecision/uomName after a UOM edit.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE Product p SET p.updatedAt = :now WHERE p.uom.id = :uomId")
+    int touchProductsByUom(@Param("uomId") UUID uomId, @Param("now") LocalDateTime now);
+
     @EntityGraph(attributePaths = {"category", "uom"})
     List<Product> findByIdIn(List<UUID> ids);
 

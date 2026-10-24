@@ -40,6 +40,9 @@ public class PosProductSummaryDto implements PosProductSummaryView {
     private Integer variantCount;
     private Boolean hasUpsells;
     private Integer upsellCount;
+    private String uomName;
+    private String uomShortName;
+    private Integer uomPrecision;
 
     public static PosProductSummaryDto from(PosProductSummaryView v) {
         return from(v, true);
@@ -72,6 +75,9 @@ public class PosProductSummaryDto implements PosProductSummaryView {
                 .variantCount(v.getVariantCount())
                 .hasUpsells(v.getHasUpsells())
                 .upsellCount(v.getUpsellCount())
+                .uomName(v.getUomName())
+                .uomShortName(v.getUomShortName())
+                .uomPrecision(v.getUomPrecision() != null ? v.getUomPrecision() : 0)
                 .build();
     }
 }

@@ -110,8 +110,14 @@ public class CreditGuard {
 
     // ── Normalizers ──────────────────────────────────────────────────────────
 
+    /** Rounds to 2 places. Retained for callers outside money-scale-aware code paths. */
     public BigDecimal money(BigDecimal value) {
-        return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP);
+        return money(value, 2);
+    }
+
+    /** Rounds a money amount to the currency's decimal places (see CurrencyScaleService). */
+    public BigDecimal money(BigDecimal value, int decimalPlaces) {
+        return (value == null ? BigDecimal.ZERO : value).setScale(decimalPlaces, RoundingMode.HALF_UP);
     }
 
     public String normalizePaymentMethod(String value) {

@@ -40,6 +40,9 @@ public class Uom extends AuditableEntity {
     @JsonProperty("isDefault")
     private boolean isDefault = false;
 
+    /** Highest allowed decimal places for a UOM (enforced in the service and the database). */
+    public static final int MAX_PRECISION = 4;
+
     @Builder.Default
     private int uomPrecision = 0;
 

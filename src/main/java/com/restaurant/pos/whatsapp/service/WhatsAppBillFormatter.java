@@ -53,6 +53,7 @@ public class WhatsAppBillFormatter {
 
         String storeName = getStoreName(org, client);
         String currency = resolveCurrencySymbol(order, org, client);
+        int dp = resolveCurrencyDecimals(order, org, client);
         String invNo = (invoice != null && invoice.getInvoiceNo() != null) ? invoice.getInvoiceNo() : order.getOrderNo();
         Integer dailyBillNo = (invoice != null && invoice.getDailyBillNo() != null)
                 ? invoice.getDailyBillNo()
@@ -68,7 +69,7 @@ public class WhatsAppBillFormatter {
         } else {
             sb.append("#").append(invNo);
         }
-        sb.append(" | *").append(formatMoney(grandTotal, currency)).append("* @").append(storeName).append("\n\n");
+        sb.append(" | *").append(formatMoney(grandTotal, currency, dp)).append("* @").append(storeName).append("\n\n");
 
         if (publicInvoiceUrl != null && !publicInvoiceUrl.isBlank()) {
             sb.append("👉 *Visit Bill:*\n").append(publicInvoiceUrl.trim()).append("\n\n");
@@ -90,6 +91,7 @@ public class WhatsAppBillFormatter {
 
         String storeName = getStoreName(org, client);
         String currency = resolveCurrencySymbol(order, org, client);
+        int dp = resolveCurrencyDecimals(order, org, client);
         SystemConfiguration sysConfig = resolveSystemConfiguration(order, org, client);
         String taxLabel = (sysConfig != null && sysConfig.getTaxLabelGlobal() != null && !sysConfig.getTaxLabelGlobal().isBlank())
                 ? sysConfig.getTaxLabelGlobal().trim()
@@ -150,10 +152,10 @@ public class WhatsAppBillFormatter {
                 BigDecimal lineTotal = line.getLineTotal() != null ? line.getLineTotal() : BigDecimal.ZERO;
 
                 sb.append("• ").append(formatQty(qty)).append(" × *").append(prodName.trim()).append("*");
-                sb.append("  ➜  ").append(formatMoney(lineTotal, currency)).append("\n");
+                sb.append("  ➜  ").append(formatMoney(lineTotal, currency, dp)).append("\n");
 
                 if (qty.compareTo(BigDecimal.ONE) > 0 && unitPrice != null) {
-                    sb.append("  _(Rate: ").append(formatMoney(unitPrice, currency)).append(" each)_\n");
+                    sb.append("  _(Rate: ").append(formatMoney(unitPrice, currency, dp)).append(" each)_\n");
                 }
                 if (note != null && !note.isBlank()) {
                     sb.append("  _(Note: ").append(note.trim()).append(")_\n");
@@ -176,19 +178,19 @@ public class WhatsAppBillFormatter {
         BigDecimal grandTotal = order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO;
 
         if (discount != null && discount.compareTo(BigDecimal.ZERO) > 0 && grossAmount != null) {
-            sb.append("*Gross Total:* ").append(formatMoney(grossAmount, currency)).append("\n");
-            sb.append("*Discount:* -").append(formatMoney(discount, currency)).append("\n");
+            sb.append("*Gross Total:* ").append(formatMoney(grossAmount, currency, dp)).append("\n");
+            sb.append("*Discount:* -").append(formatMoney(discount, currency, dp)).append("\n");
         }
 
-        sb.append("*Subtotal:* ").append(formatMoney(subtotal, currency)).append("\n");
+        sb.append("*Subtotal:* ").append(formatMoney(subtotal, currency, dp)).append("\n");
 
         if (totalTax != null && totalTax.compareTo(BigDecimal.ZERO) > 0) {
-            sb.append("*Includes Taxes / ").append(taxLabel).append(":* ").append(formatMoney(totalTax, currency)).append("\n");
+            sb.append("*Includes Taxes / ").append(taxLabel).append(":* ").append(formatMoney(totalTax, currency, dp)).append("\n");
 
             // 50/50 CGST & SGST breakdown for GST
             boolean isGst = "GST".equalsIgnoreCase(taxLabel);
             if (isGst) {
-                BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                 BigDecimal otherHalf = totalTax.subtract(halfTax);
 
                 BigDecimal firstRate = null;
@@ -203,24 +205,24 @@ public class WhatsAppBillFormatter {
 
                 if (firstRate != null && firstRate.compareTo(BigDecimal.ZERO) > 0) {
                     BigDecimal halfRate = firstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
-                    sb.append("  • CGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(halfTax, currency)).append("\n");
-                    sb.append("  • SGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(otherHalf, currency)).append("\n");
+                    sb.append("  • CGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(halfTax, currency, dp)).append("\n");
+                    sb.append("  • SGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(otherHalf, currency, dp)).append("\n");
                 } else {
-                    sb.append("  • CGST: ").append(formatMoney(halfTax, currency)).append("\n");
-                    sb.append("  • SGST: ").append(formatMoney(otherHalf, currency)).append("\n");
+                    sb.append("  • CGST: ").append(formatMoney(halfTax, currency, dp)).append("\n");
+                    sb.append("  • SGST: ").append(formatMoney(otherHalf, currency, dp)).append("\n");
                 }
             }
         }
 
         if (roundOff != null && roundOff.compareTo(BigDecimal.ZERO) != 0) {
             String sign = roundOff.compareTo(BigDecimal.ZERO) > 0 ? "+" : "-";
-            sb.append("*Round Off:* ").append(sign).append(formatMoney(roundOff.abs(), currency)).append("\n");
+            sb.append("*Round Off:* ").append(sign).append(formatMoney(roundOff.abs(), currency, dp)).append("\n");
         }
 
         sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
         // 4. Grand Total & Payment Mode (Final bill summary at bottom)
-        sb.append("*TOTAL PAID:* *").append(formatMoney(grandTotal, currency)).append("*\n");
+        sb.append("*TOTAL PAID:* *").append(formatMoney(grandTotal, currency, dp)).append("*\n");
 
         String payMethod = order.getReference() != null && !order.getReference().isBlank() 
                 ? order.getReference().toUpperCase() 
@@ -239,7 +241,7 @@ public class WhatsAppBillFormatter {
                         } else if ("MIXED".equalsIgnoreCase(p.getPaymentMethod()) && p.getAmountPaid() != null) {
                             if (splits == null) splits = new ArrayList<>();
                             BigDecimal total = p.getAmountPaid();
-                            BigDecimal half = total.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                            BigDecimal half = total.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
                             BigDecimal rem = total.subtract(half);
                             splits.add(PaymentSplit.builder().paymentMethod("CASH").amount(half).build());
                             splits.add(PaymentSplit.builder().paymentMethod("ONLINE").amount(rem).build());
@@ -260,7 +262,7 @@ public class WhatsAppBillFormatter {
             sb.append("*Payment Breakdown:*\n");
             for (PaymentSplit sp : splits) {
                 sb.append("  • ").append(sp.getPaymentMethod() != null ? sp.getPaymentMethod().toUpperCase() : "PAYMENT")
-                  .append(": ").append(formatMoney(sp.getAmount(), currency)).append("\n");
+                  .append(": ").append(formatMoney(sp.getAmount(), currency, dp)).append("\n");
             }
         } else {
             sb.append("*Payment Mode:* ").append(payMethod);
@@ -321,6 +323,42 @@ public class WhatsAppBillFormatter {
         sb.append("_Powered by Cafe QR POS_\n");
         sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         return sb.toString();
+    }
+
+    /**
+     * Decimal places of the currency used on the bill: order currency first, then the branch/client default.
+     * Falls back to 2 when Currency Master has no entry.
+     */
+    public Integer resolveCurrencyDecimals(Order order, Organization org, Client client) {
+        if (currencyRepository == null) {
+            return 2;
+        }
+        try {
+            if (order != null && order.getCurrencyId() != null) {
+                Optional<Currency> c = currencyRepository.findById(order.getCurrencyId());
+                if (c.isPresent() && c.get().getDecimalPlaces() != null) {
+                    return c.get().getDecimalPlaces();
+                }
+            }
+            UUID clientId = order != null && order.getClientId() != null
+                    ? order.getClientId()
+                    : (org != null && org.getClientId() != null ? org.getClientId() : (client != null ? client.getId() : null));
+            UUID orgId = order != null && order.getOrgId() != null
+                    ? order.getOrgId()
+                    : (org != null ? org.getId() : null);
+            if (clientId == null) {
+                return 2;
+            }
+            List<Currency> defaults = orgId != null
+                    ? currencyRepository.findByClientIdAndOrgIdAndIsDefaultTrue(clientId, orgId)
+                    : List.of();
+            if (defaults.isEmpty()) {
+                defaults = currencyRepository.findByClientIdAndIsDefaultTrue(clientId);
+            }
+            return defaults.stream().findFirst().map(Currency::getDecimalPlaces).orElse(2);
+        } catch (Exception e) {
+            return 2;
+        }
     }
 
     /**
@@ -445,18 +483,18 @@ public class WhatsAppBillFormatter {
         return "🥡 Takeaway";
     }
 
-    private String formatMoney(BigDecimal amount, String currency) {
+    private String formatMoney(BigDecimal amount, String currency, int dp) {
         if (amount == null) amount = BigDecimal.ZERO;
-        String formattedNum = fmt(amount);
+        String formattedNum = fmt(amount, dp);
         if (currency != null && !currency.isBlank()) {
             return currency + " " + formattedNum;
         }
         return formattedNum;
     }
 
-    private String fmt(BigDecimal value) {
-        if (value == null) return "0.00";
-        return value.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    private String fmt(BigDecimal value, int dp) {
+        if (value == null) return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP).toPlainString();
+        return value.setScale(dp, RoundingMode.HALF_UP).toPlainString();
     }
 
     private String fmtRate(BigDecimal rate) {

@@ -121,7 +121,7 @@ class AccountingServiceTest {
                 mock(InvoiceRepository.class),
                 orderRepository,
                 mock(BranchContextService.class),
-                timezoneResolver
+                timezoneResolver, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
         );
 
         AccountingSummaryDto summary = service.getSummary(
@@ -153,7 +153,7 @@ class AccountingServiceTest {
                 mock(InvoiceRepository.class),
                 mock(OrderRepository.class),
                 mock(BranchContextService.class),
-                mock(com.restaurant.pos.common.context.TimezoneResolver.class)
+                mock(com.restaurant.pos.common.context.TimezoneResolver.class), new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
         );
     }
 

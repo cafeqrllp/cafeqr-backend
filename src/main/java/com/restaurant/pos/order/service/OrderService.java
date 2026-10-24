@@ -12,6 +12,7 @@ import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.service.BranchContextService;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
@@ -134,6 +135,7 @@ public class OrderService {
     private final PushNotificationService pushNotificationService;
     private final TimezoneResolver timezoneResolver;
     private final CurrencyRepository currencyRepository;
+    private final CurrencyScaleService currencyScale;
     private final OrderCalculationService orderCalculationService;
     private final LoyaltyCommandService loyaltyCommandService;
     private final org.springframework.context.ApplicationContext applicationContext;
@@ -175,7 +177,7 @@ public class OrderService {
             if (currentTotal.compareTo(BigDecimal.ZERO) <= 0) {
                 currentTotal = order.getTotalAmount() != null && order.getTotalAmount().compareTo(BigDecimal.ZERO) > 0
                         ? order.getTotalAmount()
-                        : (order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO);
+                        : (order.getGrandTotal() != null ? preRoundOffTotal(order) : BigDecimal.ZERO);
             }
 
             BigDecimal disc = BigDecimal.ZERO;
@@ -187,13 +189,14 @@ public class OrderService {
                     disc = order.getOrderDiscountValue();
                 }
             }
-            order.setTotalDiscountAmount(disc.setScale(2, RoundingMode.HALF_UP));
+            order.setTotalDiscountAmount(disc.setScale(moneyScale(order), RoundingMode.HALF_UP));
 
-            if (order.getDiscountSource() == com.restaurant.pos.order.domain.DiscountSource.MANUAL || order.getLoyaltyAmount() != null) {
+            boolean hasRoundOff = order.getRoundOffAmount() != null && order.getRoundOffAmount().compareTo(BigDecimal.ZERO) != 0;
+            if (order.getDiscountSource() == com.restaurant.pos.order.domain.DiscountSource.MANUAL || order.getLoyaltyAmount() != null || hasRoundOff) {
                 BigDecimal roundOff = order.getRoundOffAmount() != null ? order.getRoundOffAmount() : BigDecimal.ZERO;
                 BigDecimal loyaltyAmt = order.getLoyaltyAmount() != null ? order.getLoyaltyAmount() : BigDecimal.ZERO;
                 BigDecimal finalPayable = currentTotal.subtract(disc).subtract(loyaltyAmt).add(roundOff).max(BigDecimal.ZERO);
-                order.setGrandTotal(finalPayable.setScale(2, RoundingMode.HALF_UP));
+                order.setGrandTotal(finalPayable.setScale(moneyScale(order), RoundingMode.HALF_UP));
             }
             return;
         }
@@ -458,6 +461,21 @@ public class OrderService {
             return order.getCreatedAt().atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(zoneId).toLocalDateTime();
         }
         return LocalDateTime.now();
+    }
+
+    // UTC counterpart of sourceBusinessDateTime, for stored invoice/payment dates (frontend reads them as UTC).
+    private LocalDateTime sourceUtcDateTime(Order order) {
+        if (order != null && order.getOrderDate() != null) {
+            return LocalDateTime.ofInstant(order.getOrderDate(), ZoneOffset.UTC);
+        }
+        if (order != null && order.getOfflineCreatedAt() != null) {
+            ZoneId zoneId = timezoneResolver.resolveTimezone(order.getClientId(), order.getOrgId());
+            return order.getOfflineCreatedAt().atZone(zoneId).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        }
+        if (order != null && order.getCreatedAt() != null) {
+            return order.getCreatedAt();
+        }
+        return LocalDateTime.now(ZoneOffset.UTC);
     }
 
     private boolean shouldGenerateInvoice(Order order) {
@@ -1066,7 +1084,7 @@ public class OrderService {
         }
 
         Customer newCustomer = Customer.builder()
-                .name(selection.name() != null && !selection.name().isBlank() ? selection.name().trim() : "Guest")
+                .name(selection.name() != null && !selection.name().isBlank() ? selection.name().trim() : "")
                 .phone(phone)
                 .customerCategory("REGULAR")
                 .build();
@@ -2546,7 +2564,7 @@ public class OrderService {
             List<Invoice> existingInvoices = invoiceRepository.findByOrderId(saved.getId());
             for (Invoice existingInv : existingInvoices) {
                 if (!"VOID".equalsIgnoreCase(existingInv.getStatus())) {
-                    existingInv.setTotalAmount(saved.getGrandTotal());
+                    existingInv.setTotalAmount(preRoundOffTotal(saved));
                     existingInv.setAmountDue(saved.getGrandTotal());
                     existingInv.setRoundOffAmount(saved.getRoundOffAmount());
                     existingInv.setTotalDiscountAmount(saved.getTotalDiscountAmount());
@@ -2900,7 +2918,7 @@ public class OrderService {
                             if (i == oldPayments.size() - 1) {
                                 newSplitAmt = newTotal.subtract(runningSum);
                             } else {
-                                newSplitAmt = oldPay.getAmountPaid().multiply(ratio).setScale(2, RoundingMode.HALF_UP);
+                                newSplitAmt = oldPay.getAmountPaid().multiply(ratio).setScale(moneyScale(saved), RoundingMode.HALF_UP);
                                 runningSum = runningSum.add(newSplitAmt);
                             }
                             OrderSettleRequest.PaymentSplitRequest req = new OrderSettleRequest.PaymentSplitRequest();
@@ -3078,7 +3096,7 @@ public class OrderService {
             }
         } else {
             customer = Customer.builder()
-                    .name(name == null || name.isBlank() ? "Guest" : name)
+                    .name(name == null || name.isBlank() ? "" : name)
                     .phone(normalizedPhone)
                     .email(email)
                     .address(address)
@@ -3271,7 +3289,7 @@ public class OrderService {
         List<Invoice> existingInvoices = invoiceRepository.findByOrderId(saved.getId());
         for (Invoice existingInv : existingInvoices) {
             if (!"VOID".equalsIgnoreCase(existingInv.getStatus())) {
-                existingInv.setTotalAmount(saved.getGrandTotal());
+                existingInv.setTotalAmount(preRoundOffTotal(saved));
                 existingInv.setAmountDue(saved.getGrandTotal());
                 existingInv.setRoundOffAmount(saved.getRoundOffAmount());
                 existingInv.setGrossAmount(saved.getGrossAmount());
@@ -3302,12 +3320,11 @@ public class OrderService {
             }
         }
 
-        // Validate payment invariant: amount_paid = invoice_total + round_off_amount
-        // (Invoice total amount already includes the round-off, so we must subtract it
-        // here to satisfy the validation logic).
+        // Validate payment invariant: amount_paid = invoice_total + round_off_amount.
+        // The invoice total is the pre-round-off amount, so it is used as-is.
         BigDecimal invoiceTotal = linkedInvoice != null
-                ? moneyValue(linkedInvoice.getTotalAmount()).subtract(settleRoundOff)
-                : moneyValue(saved.getGrandTotal()).subtract(settleRoundOff);
+                ? moneyValue(linkedInvoice.getTotalAmount())
+                : preRoundOffTotal(saved);
         validatePaymentInvariant(invoiceTotal, settleRoundOff, amountPaid);
 
         generatePayment(saved, paymentMethod, null, amountPaid, settlementDescription,
@@ -3414,7 +3431,7 @@ public class OrderService {
                 invoice.setCustomerId(saved.getCustomerId());
                 invoice.setCreditCustomerId(saved.getCreditCustomerId());
                 invoice.setIsCredit(true);
-                invoice.setTotalAmount(saved.getGrandTotal());
+                invoice.setTotalAmount(preRoundOffTotal(saved));
                 invoice.setAmountDue(saved.getGrandTotal());
                 invoice.setRoundOffAmount(saved.getRoundOffAmount());
                 invoice.setGrossAmount(saved.getGrossAmount());
@@ -3622,9 +3639,9 @@ public class OrderService {
                 .creditCustomerId(Boolean.TRUE.equals(order.getIsCredit()) ? order.getCreditCustomerId() : null)
                 .vendorId(order.getVendorId())
                 .invoiceNo(invNo)
-                .invoiceDate(invoiceDate)
+                .invoiceDate(sourceUtcDateTime(order))
                 .dailyBillNo(dailyBillNo)
-                .totalAmount(order.getGrandTotal())
+                .totalAmount(preRoundOffTotal(order))
                 .amountDue(order.getGrandTotal())
                 .roundOffAmount(order.getRoundOffAmount())
                 .redeemPoints(order.getRedeemPoints())
@@ -3837,15 +3854,15 @@ public class OrderService {
                 .customerId(order.getCustomerId())
                 .creditCustomerId(Boolean.TRUE.equals(order.getIsCredit()) ? order.getCreditCustomerId() : null)
                 .paymentMethod(normalizePaymentMethod(method))
-                .paymentDate(sourceBusinessDateTime(order))
+                .paymentDate(sourceUtcDateTime(order))
                 .amountPaid(moneyValue(amount))
                 .referenceNo(payNo)
                 .description(desc)
                 .invoiceTotal(
                         invoice != null ? moneyValue(invoice.getTotalAmount()) : moneyValue(order.getGrandTotal()))
-                .roundOffAmount(roundOff != null ? roundOff.setScale(2, RoundingMode.HALF_UP)
+                .roundOffAmount(roundOff != null ? roundOff.setScale(moneyScale(order), RoundingMode.HALF_UP)
                         : (order.getRoundOffAmount() != null
-                                ? order.getRoundOffAmount().setScale(2, RoundingMode.HALF_UP)
+                                ? order.getRoundOffAmount().setScale(moneyScale(order), RoundingMode.HALF_UP)
                                 : BigDecimal.ZERO))
                 .build();
 
@@ -4012,8 +4029,28 @@ public class OrderService {
                 && !"PAID".equalsIgnoreCase(order.getPaymentStatus());
     }
 
+    /**
+     * Decimal places of the default currency (Currency Master) for the order's client and org,
+     * falling back to the current tenant when the order carries no ids.
+     */
+    private int moneyScale(Order order) {
+        UUID clientId = order != null && order.getClientId() != null ? order.getClientId() : TenantContext.getCurrentTenant();
+        UUID orgId = order != null && order.getOrgId() != null ? order.getOrgId() : TenantContext.getCurrentOrg();
+        return currencyScale.decimalPlaces(clientId, orgId);
+    }
+
+    private int moneyScale() {
+        return moneyScale(null);
+    }
+
+    /** Invoice total is the pre-round-off amount; the round-off is carried separately on the invoice. */
+    private BigDecimal preRoundOffTotal(Order order) {
+        BigDecimal roundOff = order.getRoundOffAmount() != null ? order.getRoundOffAmount() : BigDecimal.ZERO;
+        return moneyValue(order.getGrandTotal()).subtract(roundOff);
+    }
+
     private BigDecimal moneyValue(BigDecimal value) {
-        return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP);
+        return (value == null ? BigDecimal.ZERO : value).setScale(moneyScale(), RoundingMode.HALF_UP);
     }
 
     /**
@@ -4027,7 +4064,7 @@ public class OrderService {
                 .filter(l -> l.getTaxableAmount() != null)
                 .map(OrderLine::getTaxableAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .setScale(2, RoundingMode.HALF_UP);
+                .setScale(moneyScale(), RoundingMode.HALF_UP);
     }
 
     /**
@@ -4081,8 +4118,8 @@ public class OrderService {
         if (invoiceTotal == null || amountPaid == null)
             return;
         BigDecimal safeRoundOff = (roundOff == null ? BigDecimal.ZERO : roundOff);
-        BigDecimal expected = invoiceTotal.add(safeRoundOff).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal actual = amountPaid.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal expected = invoiceTotal.add(safeRoundOff).setScale(moneyScale(), RoundingMode.HALF_UP);
+        BigDecimal actual = amountPaid.setScale(moneyScale(), RoundingMode.HALF_UP);
         BigDecimal diff = expected.subtract(actual).abs();
         if (diff.compareTo(new BigDecimal("0.05")) > 0) {
             throw new BusinessException(String.format(
@@ -4646,7 +4683,7 @@ public class OrderService {
                     List<PaymentSplit> splits = paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
                     if (splits.isEmpty() && "MIXED".equalsIgnoreCase(p.getPaymentMethod())) {
                         BigDecimal total = p.getAmountPaid() != null ? p.getAmountPaid() : BigDecimal.ZERO;
-                        BigDecimal half = total.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                        BigDecimal half = total.divide(BigDecimal.valueOf(2), moneyScale(), RoundingMode.HALF_UP);
                         BigDecimal remaining = total.subtract(half);
                         return List.of(
                                 PaymentSplit.builder().paymentId(p.getId()).paymentMethod("CASH").amount(half).build(),

@@ -67,7 +67,8 @@ class PayrollEngineServiceTest {
                 salaryAdvanceRepository,
                 hrSettingsService,
                 expenseRepository,
-                auditLogService
+                auditLogService,
+                new com.restaurant.pos.common.service.CurrencyScaleService(org.mockito.Mockito.mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
         );
 
 

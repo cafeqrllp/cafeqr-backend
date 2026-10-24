@@ -1,6 +1,7 @@
 package com.restaurant.pos.loyalty.command;
 
 import com.restaurant.pos.common.exception.BusinessException;
+import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.loyalty.domain.*;
@@ -43,6 +44,7 @@ public class LoyaltyCommandService {
     private final SystemConfigurationService configService;
     private final LoyaltyDtoMapper mapper;
     private final OrderRepository orderRepository;
+    private final CurrencyScaleService currencyScale;
 
     @Transactional
     public LoyaltyProgramDto createProgram(CreateLoyaltyProgramCommand cmd) {
@@ -256,9 +258,10 @@ public class LoyaltyCommandService {
         }
 
         int slabs = pointsToUse / rule.getPointsRequired();
+        int dp = currencyScale.decimalPlaces(clientId, orgId);
         BigDecimal discount = rule.getDiscountAmount()
                 .multiply(BigDecimal.valueOf(slabs))
-                .setScale(2, RoundingMode.HALF_UP);
+                .setScale(dp, RoundingMode.HALF_UP);
 
         account.setProgramId(program.getId());
         account.debitPoints(pointsToUse);

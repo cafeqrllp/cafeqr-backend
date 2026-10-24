@@ -24,7 +24,6 @@ public class ClientSummaryDto {
     private String phone;
     private String address;
     private String country;
-    private String currency;
     private String timezone;
     private String posType;
     private String website;

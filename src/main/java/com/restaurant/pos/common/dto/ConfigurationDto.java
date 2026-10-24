@@ -82,6 +82,7 @@ public class ConfigurationDto {
 
     // Locale
     private String currencySymbol;
+    private String currencyCode;
     private String currencyPosition;
     private Integer currencyDecimalPlaces;
 

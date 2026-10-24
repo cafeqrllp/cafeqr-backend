@@ -34,6 +34,7 @@ public class PublicDigitalInvoiceDto {
 
     // Currency & Tax settings
     private String currencySymbol;
+    private Integer currencyDecimals;
     private String taxLabel; // GST, VAT, etc.
 
     // Totals
