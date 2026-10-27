@@ -66,7 +66,7 @@ public class PurchaseOrderVendorBillListener {
 
             vendorBill.setVendorId(purchaseOrder.getVendorId());
             vendorBill.setCreditCustomerId(null);
-            vendorBill.setInvoiceDate(LocalDateTime.now());
+            vendorBill.setInvoiceDate(LocalDateTime.now(java.time.ZoneOffset.UTC));
             vendorBill.setTotalAmount(grandTotal);
             vendorBill.setAmountDue(isPaid && !isCredit ? BigDecimal.ZERO : grandTotal);
             vendorBill.setStatus(isPaid && !isCredit ? "PAID" : "COMPLETED");
@@ -124,7 +124,7 @@ public class PurchaseOrderVendorBillListener {
 
                 payment.setInvoiceId(savedBill.getId());
                 payment.setCreditCustomerId(purchaseOrder.getVendorId());
-                payment.setPaymentDate(LocalDateTime.now());
+                payment.setPaymentDate(LocalDateTime.now(java.time.ZoneOffset.UTC));
                 payment.setPaymentMethod(purchaseOrder.getPaymentMethod() != null ? purchaseOrder.getPaymentMethod().toUpperCase() : "CASH");
                 payment.setAmountPaid(grandTotal);
                 payment.setChangeGiven(BigDecimal.ZERO);

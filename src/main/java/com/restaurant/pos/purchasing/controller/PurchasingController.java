@@ -112,21 +112,18 @@ public class PurchasingController {
 
     @PostMapping("/currencies")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
-    @RequireModule(ModuleName.INVENTORY)
     public ResponseEntity<ApiResponse<Currency>> createCurrency(@RequestBody Currency currency) {
         return ResponseEntity.ok(ApiResponse.success(purchasingService.saveCurrency(currency)));
     }
 
     @PutMapping("/currencies/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
-    @RequireModule(ModuleName.INVENTORY)
     public ResponseEntity<ApiResponse<Currency>> updateCurrency(@PathVariable UUID id, @RequestBody Currency currency) {
         return ResponseEntity.ok(ApiResponse.success(purchasingService.updateCurrency(id, currency)));
     }
 
     @DeleteMapping("/currencies/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
-    @RequireModule(ModuleName.INVENTORY)
     public ResponseEntity<ApiResponse<Void>> deleteCurrency(@PathVariable UUID id) {
         purchasingService.deleteCurrency(id);
         return ResponseEntity.ok(ApiResponse.success(null));

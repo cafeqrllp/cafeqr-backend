@@ -14,6 +14,7 @@ import com.restaurant.pos.inventory.repository.StockAdjustmentRepository;
 import com.restaurant.pos.inventory.repository.StockLedgerRepository;
 import com.restaurant.pos.inventory.repository.StockSnapshotRepository;
 import com.restaurant.pos.inventory.repository.StockTransferRepository;
+import com.restaurant.pos.outbox.service.OutboxService;
 import com.restaurant.pos.sequence.domain.DocumentType;
 import com.restaurant.pos.sequence.service.DocumentSequenceService;
 import com.restaurant.pos.warehouse.domain.Warehouse;
@@ -26,6 +27,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,6 +46,7 @@ public class InventoryCommandService {
     private final WarehouseRepository warehouseRepository;
     private final com.restaurant.pos.product.repository.ProductRepository productRepository;
     private final com.restaurant.pos.common.service.SystemConfigurationService configurationService;
+    private final OutboxService outboxService;
 
     public Optional<StockSnapshot> findStockSnapshot(UUID warehouseId, UUID productId, UUID variantId) {
         java.util.List<StockSnapshot> list = stockSnapshotRepository
@@ -137,7 +140,8 @@ public class InventoryCommandService {
             snapshot.setOrgId(orgId);
         }
 
-        BigDecimal newBalance = snapshot.getCurrentQuantity().add(quantityChange);
+        BigDecimal previousBalance = snapshot.getCurrentQuantity();
+        BigDecimal newBalance = previousBalance.add(quantityChange);
 
         snapshot.setCurrentQuantity(newBalance);
         snapshot.setLastUpdated(LocalDateTime.now());
@@ -158,6 +162,39 @@ public class InventoryCommandService {
                 .build();
 
         stockLedgerRepository.save(ledger);
+
+        if (quantityChange.signum() < 0) {
+            enqueueLowStockIfCrossed(warehouseId, productId, variantId, previousBalance, newBalance, clientId, orgId);
+        }
+    }
+
+    /**
+     * Enqueues a low-stock notification only when a stock decrease takes the balance from above
+     * the product's min stock level to at or below it, so repeated sales below the level do not re-alert.
+     * Products with no min stock level set (null or 0) never alert.
+     */
+    private void enqueueLowStockIfCrossed(UUID warehouseId, UUID productId, UUID variantId,
+                                          BigDecimal previousBalance, BigDecimal newBalance,
+                                          UUID clientId, UUID orgId) {
+        if (productId == null) {
+            return;
+        }
+        com.restaurant.pos.product.domain.Product product = productRepository.findById(productId).orElse(null);
+        if (product == null || product.getMinStockLevel() == null || product.getMinStockLevel() <= 0) {
+            return;
+        }
+        BigDecimal minLevel = BigDecimal.valueOf(product.getMinStockLevel());
+        if (previousBalance.compareTo(minLevel) <= 0 || newBalance.compareTo(minLevel) > 0) {
+            return;
+        }
+        outboxService.enqueue("PRODUCT", productId, "LOW_STOCK_NOTIFICATION", clientId, orgId, Map.of(
+                "productId", productId.toString(),
+                "productName", product.getName() != null ? product.getName() : "",
+                "warehouseId", warehouseId != null ? warehouseId.toString() : "",
+                "variantId", variantId != null ? variantId.toString() : "",
+                "currentQuantity", newBalance.stripTrailingZeros().toPlainString(),
+                "minStockLevel", product.getMinStockLevel().toString()
+        ));
     }
 
     public StockAdjustment saveAdjustment(StockAdjustment adjustment) {

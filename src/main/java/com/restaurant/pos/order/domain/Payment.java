@@ -79,7 +79,7 @@ public class Payment extends BaseEntity {
 
     @Column(name = "payment_date")
     @Builder.Default
-    private LocalDateTime paymentDate = LocalDateTime.now();
+    private LocalDateTime paymentDate = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
     @Column(name = "payment_method", length = 50, nullable = false)
     private String paymentMethod;

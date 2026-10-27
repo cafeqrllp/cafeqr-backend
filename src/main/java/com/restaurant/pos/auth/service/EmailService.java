@@ -133,6 +133,37 @@ public class EmailService {
         sendPlainTextEmail(toEmail, "🎉 Welcome to CafeQR POS! Your Account Credentials", body, "Welcome Credentials Email");
     }
 
+    @Async
+    public void sendLeadInquiryAlert(String leadName, String businessName, String phone, String city, String notes) {
+        String toEmail = "cafeqrllp@gmail.com";
+        String subject = "🚀 New Demo Request: " + (businessName != null && !businessName.isBlank() ? businessName : leadName) + " (" + (city != null && !city.isBlank() ? city : "India") + ")";
+        String body = String.format("""
+                New CafeQR POS Demo Inquiry Received!
+                ---------------------------------------
+                Name:          %s
+                Business Name: %s
+                Mobile Phone:  %s
+                City / Town:   %s
+                Details:       %s
+                Timestamp:     %s
+                ---------------------------------------
+                This lead has been saved to your Founder Dashboard CRM with status NEW_INQUIRY.
+                """,
+                leadName != null && !leadName.isBlank() ? leadName : "Prospect",
+                businessName != null && !businessName.isBlank() ? businessName : "N/A",
+                phone != null && !phone.isBlank() ? phone : "N/A",
+                city != null && !city.isBlank() ? city : "N/A",
+                notes != null && !notes.isBlank() ? notes : "N/A",
+                java.time.LocalDateTime.now()
+        );
+        try {
+            sendPlainTextEmail(toEmail, subject, body, "Lead Inquiry Notification Email");
+            log.info("[EmailService] Lead inquiry alert sent successfully to {}", toEmail);
+        } catch (Exception ex) {
+            log.warn("[EmailService] Failed to send lead inquiry alert to {}: {}", toEmail, ex.getMessage());
+        }
+    }
+
     private void sendPlainTextEmail(String toEmail, String subject, String body, String logLabel) {
         if (shouldUseGmailApi()) {
             sendPlainTextEmailViaGmailApi(toEmail, subject, body, logLabel);
