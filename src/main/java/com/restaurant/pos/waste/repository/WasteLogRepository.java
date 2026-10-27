@@ -11,10 +11,12 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface WasteLogRepository extends JpaRepository<WasteLog, UUID> {
+    Optional<WasteLog> findByIdAndClientId(UUID id, UUID clientId);
     List<WasteLog> findByClientIdOrderByWasteDateDesc(UUID clientId);
     List<WasteLog> findByClientIdAndWasteDateBetweenOrderByWasteDateDesc(UUID clientId, LocalDateTime start, LocalDateTime end);
     Page<WasteLog> findByClientIdOrderByWasteDateDesc(UUID clientId, Pageable pageable);

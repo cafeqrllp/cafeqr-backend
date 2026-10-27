@@ -1,5 +1,6 @@
 package com.restaurant.pos.waste.service;
 
+import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.waste.domain.WasteCategory;
 import com.restaurant.pos.waste.domain.WasteLog;
@@ -34,7 +35,7 @@ public class WasteService {
 
     @Transactional
     public WasteCategory updateCategory(UUID id, WasteCategory u) {
-        WasteCategory c = categoryRepository.findById(id).orElseThrow(() -> new RuntimeException("Not found"));
+        WasteCategory c = findCategory(id);
         c.setName(u.getName());
         if (u.getIcon() != null) c.setIcon(u.getIcon());
         if (u.getSortOrder() != null) c.setSortOrder(u.getSortOrder());
@@ -45,7 +46,7 @@ public class WasteService {
 
     @Transactional
     public void deleteCategory(UUID id) {
-        WasteCategory c = categoryRepository.findById(id).orElseThrow(() -> new RuntimeException("Not found"));
+        WasteCategory c = findCategory(id);
         c.setIsactive("N");
         categoryRepository.save(c);
     }
@@ -72,7 +73,7 @@ public class WasteService {
 
     @Transactional
     public WasteLog updateLog(UUID id, WasteLog u) {
-        WasteLog log = wasteLogRepository.findById(id).orElseThrow(() -> new RuntimeException("Not found"));
+        WasteLog log = findLog(id);
         log.setWasteCategoryId(u.getWasteCategoryId());
         log.setProductName(u.getProductName());
         log.setWasteReason(u.getWasteReason());
@@ -87,7 +88,17 @@ public class WasteService {
     }
 
     @Transactional
-    public void deleteLog(UUID id) { wasteLogRepository.deleteById(id); }
+    public void deleteLog(UUID id) { wasteLogRepository.delete(findLog(id)); }
+
+    private WasteCategory findCategory(UUID id) {
+        return categoryRepository.findByIdAndClientId(id, TenantContext.getCurrentTenant())
+            .orElseThrow(() -> new ResourceNotFoundException("Waste category not found: " + id));
+    }
+
+    private WasteLog findLog(UUID id) {
+        return wasteLogRepository.findByIdAndClientId(id, TenantContext.getCurrentTenant())
+            .orElseThrow(() -> new ResourceNotFoundException("Waste log not found: " + id));
+    }
 
     public Map<String, Object> getAnalytics(LocalDateTime start, LocalDateTime end) {
         UUID clientId = TenantContext.getCurrentTenant();

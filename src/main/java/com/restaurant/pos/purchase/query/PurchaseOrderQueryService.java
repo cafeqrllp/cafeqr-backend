@@ -18,7 +18,9 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -51,7 +53,18 @@ public class PurchaseOrderQueryService {
 
         Specification<Order> spec = PurchaseOrderSpecifications.withFilters(request, clientId, orgId);
         Page<Order> pageResult = orderRepository.findAll(spec, pageable);
-        return pageResult.map(purchaseOrderDtoMapper::toSummaryDto);
+        List<UUID> orderIds = pageResult.getContent().stream().map(Order::getId).toList();
+        Map<UUID, Integer> itemCounts = new HashMap<>();
+        if (!orderIds.isEmpty()) {
+            for (Object[] row : orderRepository.countLinesByOrderIds(orderIds)) {
+                itemCounts.put((UUID) row[0], ((Number) row[1]).intValue());
+            }
+        }
+        return pageResult.map(order -> {
+            PurchaseOrderSummaryDto dto = purchaseOrderDtoMapper.toSummaryDto(order);
+            dto.setItemCount(itemCounts.getOrDefault(order.getId(), 0));
+            return dto;
+        });
     }
 
     @Transactional(readOnly = true)

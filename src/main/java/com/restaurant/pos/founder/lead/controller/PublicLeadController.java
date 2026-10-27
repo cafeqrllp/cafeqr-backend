@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 public class PublicLeadController {
 
     private final FounderLeadService leadService;
+    private final com.restaurant.pos.auth.service.EmailService emailService;
 
     @Data
     public static class PublicLeadInquiryRequest {
@@ -52,6 +53,20 @@ public class PublicLeadController {
                 .build();
 
         FounderLeadDto created = leadService.createLead(dto);
+
+        // Dispatch instant email alert to cafeqrllp@gmail.com
+        try {
+            emailService.sendLeadInquiryAlert(
+                    req.getName(),
+                    req.getBusinessName(),
+                    req.getPhone(),
+                    req.getCity(),
+                    req.getNotes()
+            );
+        } catch (Exception ex) {
+            log.warn("[PublicLead] Could not send lead notification email: {}", ex.getMessage());
+        }
+
         return ResponseEntity.ok(ApiResponse.success(created));
     }
 

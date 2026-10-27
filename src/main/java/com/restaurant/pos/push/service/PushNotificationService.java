@@ -162,6 +162,33 @@ public class PushNotificationService {
     }
 
     @Async
+    public void sendLowStockPush(UUID clientId, UUID orgId, String productId, String productName,
+                                 String currentQuantity, String minStockLevel) {
+        if (clientId == null) return;
+
+        List<String> tokens = pushDeviceTokenRepository.findByClientIdAndEnabled(clientId, true).stream()
+                .map(PushDeviceToken::getDeviceToken)
+                .toList();
+
+        if (tokens.isEmpty()) return;
+
+        String name = productName != null ? productName : "Item";
+        String title = "Low Stock";
+        String body = String.format("%s: %s left (min %s)", name, currentQuantity, minStockLevel);
+
+        Map<String, String> data = new HashMap<>();
+        data.put("type", "low_stock");
+        data.put("productId", productId != null ? productId : "");
+        data.put("productName", name);
+        data.put("currentQuantity", currentQuantity != null ? currentQuantity : "");
+        data.put("minStockLevel", minStockLevel != null ? minStockLevel : "");
+        data.put("restaurantId", orgId != null ? orgId.toString() : "");
+
+        BatchResponse response = firebaseAdminService.sendMulticast(title, body, data, tokens);
+        cleanInvalidTokens(tokens, response);
+    }
+
+    @Async
     public void sendOrderSettledPush(Order order) {
         if (order == null || order.getClientId() == null) return;
 

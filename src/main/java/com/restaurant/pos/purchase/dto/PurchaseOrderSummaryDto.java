@@ -76,6 +76,9 @@ public class PurchaseOrderSummaryDto {
     @Schema(description = "External reference or PO number")
     private String reference;
 
+    @Schema(description = "Number of line items on the order")
+    private Integer itemCount;
+
     @Schema(description = "Revision number — 0 for original, incremented on each edit")
     private Integer revisionNumber;
 

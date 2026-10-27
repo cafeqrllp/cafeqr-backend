@@ -53,6 +53,28 @@ public class NotificationEventConsumer {
         outboxProcessor.registerHandler("ORDER_CREATED_NOTIFICATION", this::handleOrderCreatedNotification);
         outboxProcessor.registerHandler("ORDER_SETTLED_NOTIFICATION", this::handleOrderSettledNotification);
         outboxProcessor.registerHandler("ORDER_STATUS_UPDATE", this::handleStatusUpdate);
+        outboxProcessor.registerHandler("LOW_STOCK_NOTIFICATION", this::handleLowStockNotification);
+    }
+
+    private void handleLowStockNotification(OutboxEvent event) {
+        if (isAlreadyProcessed(event)) return;
+
+        JsonNode payload = outboxProcessor.parsePayload(event);
+        try {
+            TenantContext.setCurrentTenant(event.getClientId());
+            TenantContext.setCurrentOrg(event.getOrgId());
+            pushNotificationService.sendLowStockPush(
+                    event.getClientId(),
+                    event.getOrgId(),
+                    textField(payload, "productId"),
+                    textField(payload, "productName"),
+                    textField(payload, "currentQuantity"),
+                    textField(payload, "minStockLevel"));
+            log.info("[NotificationConsumer] Sent low stock push for product {}", textField(payload, "productId"));
+            markProcessed(event);
+        } finally {
+            TenantContext.clear();
+        }
     }
 
     private void handleOrderCreatedNotification(OutboxEvent event) {

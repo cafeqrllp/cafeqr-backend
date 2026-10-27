@@ -109,6 +109,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     org.springframework.data.domain.Page<Order> findByClientIdAndOrgIdAndOrderStatusIn(UUID clientId, UUID orgId, List<String> statuses, org.springframework.data.domain.Pageable pageable);
 
     @EntityGraph(attributePaths = "lines")
+    @Query("SELECT l.order.id, COUNT(l) FROM OrderLine l WHERE l.order.id IN :orderIds GROUP BY l.order.id")
+    List<Object[]> countLinesByOrderIds(@Param("orderIds") Collection<UUID> orderIds);
+
     @Query("SELECT o FROM Order o WHERE o.id = :id")
     Optional<Order> findByIdWithLines(@Param("id") UUID id);
 

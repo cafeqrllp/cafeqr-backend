@@ -76,7 +76,7 @@ public class Invoice extends BaseEntity {
 
     @Column(name = "invoice_date")
     @Builder.Default
-    private LocalDateTime invoiceDate = LocalDateTime.now();
+    private LocalDateTime invoiceDate = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
     @Column(name = "due_date")
     private LocalDateTime dueDate;
