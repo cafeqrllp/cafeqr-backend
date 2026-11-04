@@ -99,6 +99,13 @@
             <version>9.4.3</version>
         </dependency>
 
+        <!-- Cryptography for ONDC (Blake2b-512 & Ed25519) -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
+
         <!-- Utilities -->
         <dependency>
             <groupId>org.projectlombok</groupId>

@@ -1,7 +1,9 @@
 package com.restaurant.pos.order.service;
 
-import com.restaurant.pos.common.context.TimezoneResolver;
 import com.restaurant.pos.common.service.CurrencyScaleService;
+import com.restaurant.pos.invoice.domain.Invoice;
+import com.restaurant.pos.invoice.domain.InvoiceType;
+import com.restaurant.pos.invoice.repository.InvoiceRepository;
 import com.restaurant.pos.common.tenant.TenantContext;
 import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.expense.domain.Expense;
@@ -23,15 +25,21 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * Dedicated Enterprise Service solely responsible for calculating and reporting
  * the financial movement, inflows, outflows, and net balances for each payment type.
+ *
+ * <p>Money is counted when it actually moves (payment date), so a credit sale settled
+ * later shows up in the tender it was settled with, on the day it was settled.
+ * CREDIT is not a tender: it tracks receivables raised vs settled and is kept out of
+ * the collected / paid-out totals.</p>
  */
 @Slf4j
 @Service
@@ -39,12 +47,17 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class PaymentBalanceReportService {
 
+    private static final String CREDIT_KEY = "CREDIT";
+
+    /** Order payments are stamped with the order date; anything later is a settlement. */
+    private static final Duration SETTLEMENT_GAP = Duration.ofMinutes(1);
+
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
     private final PaymentSplitRepository paymentSplitRepository;
     private final ExpenseRepository expenseRepository;
     private final PaymentTypeRepository paymentTypeRepository;
-    private final TimezoneResolver timezoneResolver;
+    private final InvoiceRepository invoiceRepository;
     private final CurrencyScaleService currencyScale;
 
     private static class Accumulator {
@@ -61,9 +74,12 @@ public class PaymentBalanceReportService {
 
         BigDecimal expenseAmount = BigDecimal.ZERO;
         BigDecimal purchaseAmount = BigDecimal.ZERO;
+        BigDecimal refundAmount = BigDecimal.ZERO;
         BigDecimal outflowAmount = BigDecimal.ZERO;
         long outflowCount = 0;
     }
+
+    private enum Flow { SALE, COLLECTION, EXPENSE, PURCHASE, REFUND }
 
     public PaymentBalanceReportDto getPaymentTypeBalances(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
@@ -99,127 +115,94 @@ public class PaymentBalanceReportService {
         // Standard fallback buckets if not yet configured
         ensureBucket(buckets, "CASH", "Cash", "OTHERS", 1);
         ensureBucket(buckets, "ONLINE", "Online", "OTHERS", 2);
-        ensureBucket(buckets, "CREDIT", "Credit", "CREDIT", 4);
+        ensureBucket(buckets, CREDIT_KEY, "Credit", "CREDIT", 4);
 
-        // 2. Fetch and aggregate Sales Inflows in the period
-        List<Order> orders = fetchSaleOrders(from, to, clientId, resolvedOrgId, terminalId);
-        List<UUID> orderIds = orders.stream().map(Order::getId).filter(Objects::nonNull).collect(Collectors.toList());
+        // 2. All active payments whose payment date falls in the period.
+        // payment_date is persisted as UTC wall-clock time, so convert the range with UTC (not the business zone).
+        LocalDateTime utcFrom = from != null ? LocalDateTime.ofInstant(from, ZoneOffset.UTC) : null;
+        LocalDateTime utcTo = to != null ? LocalDateTime.ofInstant(to, ZoneOffset.UTC) : null;
+        List<Payment> periodPayments = paymentRepository.findActivePaymentsInPeriod(clientId, resolvedOrgId, utcFrom, utcTo)
+                .stream()
+                .filter(p -> p != null && isActivePayment(p))
+                .filter(p -> terminalId == null || terminalId.equals(p.getTerminalId()))
+                .collect(Collectors.toList());
 
-        Map<UUID, List<Payment>> paymentsByOrder = new HashMap<>();
-        List<Payment> orderPayments = new ArrayList<>();
-        if (!orderIds.isEmpty()) {
-            paymentRepository.findByOrderIdIn(orderIds).forEach(pay -> {
-                if (pay.getOrderId() != null && isActivePayment(pay)) {
-                    paymentsByOrder.computeIfAbsent(pay.getOrderId(), k -> new ArrayList<>()).add(pay);
-                    orderPayments.add(pay);
-                }
-            });
-        }
+        Set<UUID> linkedOrderIds = periodPayments.stream().map(Payment::getOrderId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<UUID, Order> ordersById = linkedOrderIds.isEmpty() ? Map.of()
+                : orderRepository.findAllById(linkedOrderIds).stream()
+                .collect(Collectors.toMap(Order::getId, o -> o, (a, b) -> a));
 
-        Set<UUID> paymentIds = orderPayments.stream().map(Payment::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<UUID> paymentIds = periodPayments.stream().map(Payment::getId).filter(Objects::nonNull).collect(Collectors.toSet());
         Map<UUID, List<PaymentSplit>> splitsByPaymentId = paymentIds.isEmpty() ? Map.of()
                 : paymentSplitRepository.findByPaymentIdInOrderByCreatedAtAsc(paymentIds).stream()
                 .collect(Collectors.groupingBy(PaymentSplit::getPaymentId, LinkedHashMap::new, Collectors.toList()));
 
-        for (Order o : orders) {
-            List<Payment> payments = paymentsByOrder.getOrDefault(o.getId(), List.of());
-            if (payments.isEmpty()) {
-                if (Boolean.TRUE.equals(o.getIsCredit())) {
-                    recordInflow(buckets, "CREDIT", safe(o.getGrandTotal()), true, dp);
-                } else {
-                    recordInflow(buckets, "UNASSIGNED", safe(o.getGrandTotal()), true, dp);
-                }
-            } else {
-                for (Payment p : payments) {
-                    List<PaymentSplit> splits = splitsByPaymentId.getOrDefault(p.getId(), List.of());
-                    if (splits.isEmpty()) {
-                        String method = normalizeKey(p.getPaymentMethod());
-                        if (isMixedOrComposite(method)) {
-                            BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                            BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                            recordInflow(buckets, "CASH", half, true, dp);
-                            recordInflow(buckets, "ONLINE", rem, true, dp);
-                        } else {
-                            recordInflow(buckets, method, safe(p.getAmountPaid()), true, dp);
-                        }
-                    } else {
-                        for (PaymentSplit split : splits) {
-                            String splitMethod = normalizeKey(split.getPaymentMethod());
-                            if (isMixedOrComposite(splitMethod)) {
-                                BigDecimal half = safe(split.getAmount()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                                BigDecimal rem = safe(split.getAmount()).subtract(half);
-                                recordInflow(buckets, "CASH", half, true, dp);
-                                recordInflow(buckets, "ONLINE", rem, true, dp);
-                            } else {
-                                recordInflow(buckets, splitMethod, safe(split.getAmount()), true, dp);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Fetch and aggregate Standalone Inbound Collections (Customer debt settlements)
-        ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
-        LocalDateTime localFrom = from != null ? LocalDateTime.ofInstant(from, zoneId) : null;
-        LocalDateTime localTo = to != null ? LocalDateTime.ofInstant(to, zoneId) : null;
-
-        List<Payment> activePeriodPayments = paymentRepository.findActivePaymentsInPeriod(clientId, resolvedOrgId, localFrom, localTo);
-        Set<UUID> orderPaymentIdSet = orderPayments.stream().map(Payment::getId).filter(Objects::nonNull).collect(Collectors.toSet());
-
-        for (Payment p : activePeriodPayments) {
-            if (p == null || orderPaymentIdSet.contains(p.getId())) {
+        for (Payment p : periodPayments) {
+            Order order = p.getOrderId() != null ? ordersById.get(p.getOrderId()) : null;
+            Flow flow = classify(p, order);
+            if (flow == null) {
                 continue;
             }
-            if (p.getPaymentType() == null || p.getPaymentType() == com.restaurant.pos.order.domain.PaymentType.INBOUND) {
-                // Non-order inbound payment = credit customer settlement / collection
-                String method = normalizeKey(p.getPaymentMethod());
-                if (isMixedOrComposite(method)) {
-                    BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                    BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                    recordInflowCollection(buckets, "CASH", half, dp);
-                    recordInflowCollection(buckets, "ONLINE", rem, dp);
-                } else {
-                    recordInflowCollection(buckets, method, safe(p.getAmountPaid()), dp);
+            if (flow == Flow.EXPENSE && p.getExpenseId() != null) {
+                continue; // Expense-linked payments are taken from the expenses ledger below
+            }
+            List<PaymentSplit> splits = splitsByPaymentId.getOrDefault(p.getId(), List.of());
+            if (splits.isEmpty()) {
+                record(buckets, normalizeKey(p.getPaymentMethod()), safe(p.getAmountPaid()), flow, dp);
+            } else {
+                for (PaymentSplit split : splits) {
+                    record(buckets, normalizeKey(split.getPaymentMethod()), safe(split.getAmount()), flow, dp);
                 }
             }
         }
 
-        // 4. Fetch and aggregate Operating Expenses Outflows in the period
+        // 3. Credit sales raised in the period (receivable, not money in hand)
+        Map<UUID, BigDecimal> paidAtSaleByOrder = new HashMap<>();
+        Set<UUID> ordersWithCreditRow = new HashSet<>();
+        for (Payment p : periodPayments) {
+            Order order = p.getOrderId() != null ? ordersById.get(p.getOrderId()) : null;
+            if (classify(p, order) != Flow.SALE) {
+                continue;
+            }
+            if (CREDIT_KEY.equals(normalizeKey(p.getPaymentMethod()))) {
+                ordersWithCreditRow.add(p.getOrderId());
+            } else {
+                paidAtSaleByOrder.merge(p.getOrderId(), safe(p.getAmountPaid()), BigDecimal::add);
+            }
+        }
+        for (Order o : fetchCreditSaleOrders(from, to, clientId, resolvedOrgId, terminalId)) {
+            // Credit-method payment rows were already recorded against the CREDIT bucket in step 2
+            if (ordersWithCreditRow.contains(o.getId())) {
+                continue;
+            }
+            BigDecimal onAccount = safe(o.getGrandTotal()).subtract(paidAtSaleByOrder.getOrDefault(o.getId(), BigDecimal.ZERO));
+            record(buckets, CREDIT_KEY, onAccount, Flow.SALE, dp);
+        }
+
+        // 4. Credit settled in the period: every collection received against a credit customer
+        for (Payment p : periodPayments) {
+            Order order = p.getOrderId() != null ? ordersById.get(p.getOrderId()) : null;
+            if (classify(p, order) == Flow.COLLECTION && p.getCreditCustomerId() != null
+                    && !CREDIT_KEY.equals(normalizeKey(p.getPaymentMethod()))) {
+                Accumulator credit = buckets.get(CREDIT_KEY);
+                credit.collectionAmount = credit.collectionAmount.add(safe(p.getAmountPaid()));
+                credit.outflowAmount = credit.outflowAmount.add(safe(p.getAmountPaid()));
+                credit.outflowCount++;
+            }
+        }
+
+        // 5. Operating expenses from the expenses ledger
         List<Expense> expensesList = expenseRepository.findByClientIdAndOrgIdAndExpenseDateBetweenOrderByExpenseDateAsc(
                 clientId, resolvedOrgId, from, to);
-
         if (expensesList != null) {
             for (Expense e : expensesList) {
-                if (e != null && e.isActive() && !"VOID".equalsIgnoreCase(e.getDocStatus())) {
-                    String method = normalizeKey(e.getPaymentMethod());
-                    if (isMixedOrComposite(method)) {
-                        BigDecimal half = safe(e.getAmount()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                        BigDecimal rem = safe(e.getAmount()).subtract(half);
-                        recordExpenseOutflow(buckets, "CASH", half, dp);
-                        recordExpenseOutflow(buckets, "ONLINE", rem, dp);
-                    } else {
-                        recordExpenseOutflow(buckets, method, safe(e.getAmount()), dp);
-                    }
+                if (e == null || !e.isActive() || "VOID".equalsIgnoreCase(e.getDocStatus())) {
+                    continue;
                 }
-            }
-        }
-
-        // 5. Fetch and aggregate Vendor Purchase Outflows in the period
-        for (Payment p : activePeriodPayments) {
-            if (p != null && p.getPaymentType() == com.restaurant.pos.order.domain.PaymentType.OUTBOUND) {
-                // If linked to an expense, it was already accounted for in expensesList above
-                if (p.getExpenseId() == null) {
-                    String method = normalizeKey(p.getPaymentMethod());
-                    if (isMixedOrComposite(method)) {
-                        BigDecimal half = safe(p.getAmountPaid()).divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                        BigDecimal rem = safe(p.getAmountPaid()).subtract(half);
-                        recordPurchaseOutflow(buckets, "CASH", half, dp);
-                        recordPurchaseOutflow(buckets, "ONLINE", rem, dp);
-                    } else {
-                        recordPurchaseOutflow(buckets, method, safe(p.getAmountPaid()), dp);
-                    }
+                if (terminalId != null && !terminalId.equals(e.getTerminalId())) {
+                    continue;
                 }
+                record(buckets, normalizeKey(e.getPaymentMethod()), safe(e.getAmount()), Flow.EXPENSE, dp);
             }
         }
 
@@ -234,10 +217,13 @@ public class PaymentBalanceReportService {
             if (isMixedOrComposite(acc.paymentMethod) || isMixedOrComposite(acc.displayName)) {
                 continue; // Do not display composite/split payments as a separate tender
             }
-            grandInflow = grandInflow.add(acc.inflowAmount);
-            grandOutflow = grandOutflow.add(acc.outflowAmount);
-            totalInflowCount += acc.inflowCount;
-            totalOutflowCount += acc.outflowCount;
+            boolean receivable = isReceivable(acc);
+            if (!receivable) {
+                grandInflow = grandInflow.add(acc.inflowAmount);
+                grandOutflow = grandOutflow.add(acc.outflowAmount);
+                totalInflowCount += acc.inflowCount;
+                totalOutflowCount += acc.outflowCount;
+            }
 
             BigDecimal netBal = acc.inflowAmount.subtract(acc.outflowAmount);
             String status = "SETTLED";
@@ -256,6 +242,7 @@ public class PaymentBalanceReportService {
                     .displayName(acc.displayName != null ? acc.displayName : formatDisplayName(acc.paymentMethod))
                     .category(acc.category)
                     .isConfigured(acc.isConfigured)
+                    .isReceivable(receivable)
                     .sortOrder(acc.sortOrder)
                     .inflowAmount(acc.inflowAmount)
                     .inflowCount(acc.inflowCount)
@@ -265,6 +252,7 @@ public class PaymentBalanceReportService {
                     .outflowCount(acc.outflowCount)
                     .expenseAmount(acc.expenseAmount)
                     .purchaseAmount(acc.purchaseAmount)
+                    .refundAmount(acc.refundAmount)
                     .netBalance(netBal)
                     .status(status)
                     .averageTransaction(avgTxn)
@@ -273,10 +261,10 @@ public class PaymentBalanceReportService {
             dtoList.add(dto);
         }
 
-        // Calculate inflow percentage per method
+        // Share of money collected per tender (receivables have no share of cash collected)
         final BigDecimal totalInflowRef = grandInflow;
         for (PaymentTypeBalanceDto dto : dtoList) {
-            if (totalInflowRef.compareTo(BigDecimal.ZERO) > 0) {
+            if (!dto.isReceivable() && totalInflowRef.compareTo(BigDecimal.ZERO) > 0) {
                 dto.setPercentage(dto.getInflowAmount()
                         .multiply(BigDecimal.valueOf(100))
                         .divide(totalInflowRef, 1, RoundingMode.HALF_UP));
@@ -285,7 +273,7 @@ public class PaymentBalanceReportService {
             }
         }
 
-        // Sort: configured types by sortOrder, followed by non-configured types by net balance
+        // Sort: configured types by sortOrder, followed by non-configured types by inflow
         dtoList.sort((a, b) -> {
             if (a.isConfigured() != b.isConfigured()) {
                 return a.isConfigured() ? -1 : 1;
@@ -298,6 +286,8 @@ public class PaymentBalanceReportService {
             return b.getInflowAmount().compareTo(a.getInflowAmount());
         });
 
+        CreditTotals credit = creditTotals(clientId, resolvedOrgId, utcFrom, utcTo, dp);
+
         return PaymentBalanceReportDto.builder()
                 .from(from)
                 .to(to)
@@ -306,10 +296,107 @@ public class PaymentBalanceReportService {
                 .totalInflow(grandInflow)
                 .totalOutflow(grandOutflow)
                 .netBalance(grandInflow.subtract(grandOutflow))
+                .creditGiven(credit.given())
+                .creditCollected(credit.collected())
+                .creditBalance(credit.balance())
                 .totalInflowCount(totalInflowCount)
                 .totalOutflowCount(totalOutflowCount)
                 .balances(dtoList)
                 .build();
+    }
+
+    /**
+     * Decides what a payment represents. Returns null for payments that should not be counted
+     * (e.g. against a sale that never completed or was cancelled).
+     */
+    private Flow classify(Payment p, Order order) {
+        boolean outbound = p.getPaymentType() == com.restaurant.pos.order.domain.PaymentType.OUTBOUND;
+        if (outbound) {
+            if (p.getExpenseId() != null) return Flow.EXPENSE;
+            if (order == null) return Flow.PURCHASE; // Vendor settlement without a linked bill
+            if (order.getOrderType() == OrderType.SALE) return Flow.REFUND;
+            if (order.getOrderType() == OrderType.EXPENSE) return Flow.EXPENSE;
+            return Flow.PURCHASE;
+        }
+        if (order == null || order.getOrderType() != OrderType.SALE) {
+            return Flow.COLLECTION;
+        }
+        if (isLaterSettlement(p, order)) {
+            return Flow.COLLECTION;
+        }
+        boolean completed = "COMPLETED".equalsIgnoreCase(order.getOrderStatus()) && order.isActive();
+        return completed ? Flow.SALE : null;
+    }
+
+    /** A payment against a sale dated after the sale itself was a later settlement of that bill. */
+    private boolean isLaterSettlement(Payment p, Order order) {
+        if (p.getPaymentDate() == null || order.getOrderDate() == null) {
+            return false;
+        }
+        LocalDateTime orderUtc = LocalDateTime.ofInstant(order.getOrderDate(), ZoneOffset.UTC);
+        return Duration.between(orderUtc, p.getPaymentDate()).compareTo(SETTLEMENT_GAP) > 0;
+    }
+
+    private record CreditTotals(BigDecimal given, BigDecimal collected, BigDecimal balance) {}
+
+    /**
+     * Credit figures for the selected dates, using the same rules as the Credit report
+     * (credit-sale invoices of credit customers vs inbound payments from credit customers):
+     * given / collected = within the period, balance = given - collected for that period.
+     * Invoice and payment dates are stored as UTC wall-clock time.
+     */
+    private CreditTotals creditTotals(UUID clientId, UUID orgId, LocalDateTime utcFrom, LocalDateTime utcTo, int dp) {
+        List<Invoice> invoices = invoiceRepository.findAll((root, query, cb) -> {
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), orgId));
+            }
+            predicates.add(cb.equal(root.get("invoiceType"), InvoiceType.CUSTOMER_INVOICE));
+            predicates.add(cb.isNotNull(root.get("creditCustomerId")));
+            predicates.add(cb.isTrue(root.get("isCredit")));
+            predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
+            predicates.add(cb.not(cb.upper(cb.coalesce(root.get("status"), "UNPAID")).in("VOID", "VOIDED", "CANCELLED", "INACTIVE")));
+            if (utcFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("invoiceDate"), utcFrom));
+            }
+            if (utcTo != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("invoiceDate"), utcTo));
+            }
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+
+        List<Payment> payments = paymentRepository.findAll((root, query, cb) -> {
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), orgId));
+            }
+            predicates.add(cb.isNotNull(root.get("creditCustomerId")));
+            // Customer settlements only; vendor payouts also carry creditCustomerId but are OUTBOUND.
+            predicates.add(cb.equal(root.get("paymentType"), com.restaurant.pos.order.domain.PaymentType.INBOUND));
+            predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
+            predicates.add(cb.not(cb.upper(cb.coalesce(root.get("docStatus"), "COMPLETED")).in("VOID", "VOIDED", "CANCELLED", "INACTIVE")));
+            if (utcFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("paymentDate"), utcFrom));
+            }
+            if (utcTo != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("paymentDate"), utcTo));
+            }
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        });
+
+        BigDecimal given = invoices.stream().map(Invoice::getTotalAmount).map(this::safe).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal collected = payments.stream().map(Payment::getAmountPaid).map(this::safe).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal balance = given.subtract(collected);
+        return new CreditTotals(
+                given.setScale(dp, RoundingMode.HALF_UP),
+                collected.setScale(dp, RoundingMode.HALF_UP),
+                balance.setScale(dp, RoundingMode.HALF_UP));
+    }
+
+    private boolean isReceivable(Accumulator acc) {
+        return CREDIT_KEY.equals(acc.paymentMethod) || "CREDIT".equalsIgnoreCase(acc.category);
     }
 
     private void ensureBucket(Map<String, Accumulator> buckets, String key, String name, String category, int sort) {
@@ -324,13 +411,14 @@ public class PaymentBalanceReportService {
         }
     }
 
-    private void recordInflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, boolean isSales, int dp) {
+    private void record(Map<String, Accumulator> buckets, String key, BigDecimal amount, Flow flow, int dp) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (isMixedOrComposite(key)) {
+            // Legacy MIXED rows without split detail: divide evenly between Cash and Online
             BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
             BigDecimal rem = amount.subtract(half);
-            recordInflow(buckets, "CASH", half, isSales, dp);
-            recordInflow(buckets, "ONLINE", rem, isSales, dp);
+            record(buckets, "CASH", half, flow, dp);
+            record(buckets, "ONLINE", rem, flow, dp);
             return;
         }
         Accumulator acc = buckets.computeIfAbsent(key, k -> {
@@ -339,80 +427,42 @@ public class PaymentBalanceReportService {
             a.displayName = formatDisplayName(k);
             return a;
         });
-        if (isSales) {
-            acc.salesAmount = acc.salesAmount.add(amount);
+        switch (flow) {
+            case SALE -> {
+                acc.salesAmount = acc.salesAmount.add(amount);
+                acc.inflowAmount = acc.inflowAmount.add(amount);
+                acc.inflowCount++;
+            }
+            case COLLECTION -> {
+                acc.collectionAmount = acc.collectionAmount.add(amount);
+                acc.inflowAmount = acc.inflowAmount.add(amount);
+                acc.inflowCount++;
+            }
+            case EXPENSE -> {
+                acc.expenseAmount = acc.expenseAmount.add(amount);
+                acc.outflowAmount = acc.outflowAmount.add(amount);
+                acc.outflowCount++;
+            }
+            case PURCHASE -> {
+                acc.purchaseAmount = acc.purchaseAmount.add(amount);
+                acc.outflowAmount = acc.outflowAmount.add(amount);
+                acc.outflowCount++;
+            }
+            case REFUND -> {
+                acc.refundAmount = acc.refundAmount.add(amount);
+                acc.outflowAmount = acc.outflowAmount.add(amount);
+                acc.outflowCount++;
+            }
         }
-        acc.inflowAmount = acc.inflowAmount.add(amount);
-        acc.inflowCount++;
-    }
-
-    private void recordInflowCollection(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
-        if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-            BigDecimal rem = amount.subtract(half);
-            recordInflowCollection(buckets, "CASH", half, dp);
-            recordInflowCollection(buckets, "ONLINE", rem, dp);
-            return;
-        }
-        Accumulator acc = buckets.computeIfAbsent(key, k -> {
-            Accumulator a = new Accumulator();
-            a.paymentMethod = k;
-            a.displayName = formatDisplayName(k);
-            return a;
-        });
-        acc.collectionAmount = acc.collectionAmount.add(amount);
-        acc.inflowAmount = acc.inflowAmount.add(amount);
-        acc.inflowCount++;
-    }
-
-    private void recordExpenseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
-        if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-            BigDecimal rem = amount.subtract(half);
-            recordExpenseOutflow(buckets, "CASH", half, dp);
-            recordExpenseOutflow(buckets, "ONLINE", rem, dp);
-            return;
-        }
-        Accumulator acc = buckets.computeIfAbsent(key, k -> {
-            Accumulator a = new Accumulator();
-            a.paymentMethod = k;
-            a.displayName = formatDisplayName(k);
-            return a;
-        });
-        acc.expenseAmount = acc.expenseAmount.add(amount);
-        acc.outflowAmount = acc.outflowAmount.add(amount);
-        acc.outflowCount++;
-    }
-
-    private void recordPurchaseOutflow(Map<String, Accumulator> buckets, String key, BigDecimal amount, int dp) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
-        if (isMixedOrComposite(key)) {
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-            BigDecimal rem = amount.subtract(half);
-            recordPurchaseOutflow(buckets, "CASH", half, dp);
-            recordPurchaseOutflow(buckets, "ONLINE", rem, dp);
-            return;
-        }
-        Accumulator acc = buckets.computeIfAbsent(key, k -> {
-            Accumulator a = new Accumulator();
-            a.paymentMethod = k;
-            a.displayName = formatDisplayName(k);
-            return a;
-        });
-        acc.purchaseAmount = acc.purchaseAmount.add(amount);
-        acc.outflowAmount = acc.outflowAmount.add(amount);
-        acc.outflowCount++;
     }
 
     private boolean isMixedOrComposite(String method) {
         if (method == null || method.isBlank()) return false;
         String m = method.trim().toUpperCase(Locale.ROOT);
-        return m.equals("MIXED") || m.equals("SPLIT") || m.equals("MIXED_PAYMENT") || m.contains("MIXED") || m.contains("SPLIT");
+        return m.contains("MIXED") || m.contains("SPLIT");
     }
 
-    private List<Order> fetchSaleOrders(Instant from, Instant to, UUID clientId, UUID resolvedOrgId, UUID terminalId) {
+    private List<Order> fetchCreditSaleOrders(Instant from, Instant to, UUID clientId, UUID resolvedOrgId, UUID terminalId) {
         return orderRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
@@ -425,13 +475,13 @@ public class PaymentBalanceReportService {
             predicates.add(cb.equal(root.get("orderType"), OrderType.SALE));
             predicates.add(cb.equal(root.get("orderStatus"), "COMPLETED"));
             predicates.add(cb.equal(root.get("isactive"), "Y"));
+            predicates.add(cb.isTrue(root.get("isCredit")));
             if (from != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("orderDate"), from));
             }
             if (to != null) {
                 predicates.add(cb.lessThanOrEqualTo(root.get("orderDate"), to));
             }
-            query.orderBy(cb.desc(root.get("orderDate")));
             return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
         });
     }

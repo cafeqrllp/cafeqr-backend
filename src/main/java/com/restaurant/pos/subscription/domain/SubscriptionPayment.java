@@ -35,6 +35,18 @@ public class SubscriptionPayment {
 
     private String currency;
 
+    @Column(name = "payment_method")
+    private String paymentMethod;
+
+    @Column(name = "description")
+    private String description;
+
+    @Column(name = "billing_cycle")
+    private String billingCycle;
+
+    @Column(name = "status")
+    private String status;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

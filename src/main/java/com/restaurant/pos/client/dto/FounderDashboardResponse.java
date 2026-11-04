@@ -34,6 +34,9 @@ public class FounderDashboardResponse {
         private long activeCafesToday;
         private long activeCafes7Days;
         private long mrrPaise;
+        private long contractedArrPaise;
+        private long contractedMrrPaise;
+        private long unbilledVariancePaise;
         private long arpuPaise;
         private int activationRatePercent;
     }

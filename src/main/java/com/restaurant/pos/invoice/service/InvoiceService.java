@@ -95,8 +95,10 @@ public class InvoiceService {
             invoice.setOrgId(TenantContext.getCurrentOrg());
         }
 
-        // Generate daily bill number resetting everyday
-        if (invoice.getDailyBillNo() == null || invoice.getDailyBillNo() <= 0) {
+        // Generate daily bill number resetting everyday (customer sales only; expenses and vendor bills do not consume numbers)
+        boolean isCustomerInvoice = invoice.getInvoiceType() == null
+                || invoice.getInvoiceType() == com.restaurant.pos.invoice.domain.InvoiceType.CUSTOMER_INVOICE;
+        if (isCustomerInvoice && (invoice.getDailyBillNo() == null || invoice.getDailyBillNo() <= 0)) {
             LocalDateTime date = invoice.getInvoiceDate();
             if (date == null) {
                 date = LocalDateTime.now(java.time.ZoneOffset.UTC);

@@ -244,8 +244,11 @@ public class OrderController {
     })
     public ResponseEntity<ApiResponse<List<OrderResponseDto>>> getOrderRevisions(
             @Parameter(description = "Unique UUID of the order", required = true) @PathVariable UUID id) {
-        List<OrderResponseDto> revisions = orderService.getOrderRevisions(id)
-                .stream().map(orderDtoMapper::toResponseDto).toList();
+        List<OrderResponseDto> revisions = orderService.getOrderRevisions(id).stream().map(rev -> {
+            OrderResponseDto dto = orderDtoMapper.toResponseDto(rev);
+            dto.setRevisionPaymentSplits(orderService.getRevisionPaymentSplits(rev.getId()));
+            return dto;
+        }).toList();
         return ResponseEntity.ok(ApiResponse.success(revisions));
     }
 

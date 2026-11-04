@@ -413,9 +413,18 @@ public class OrderCalculationService {
     /** Computes round-off, honouring explicit request mode before falling back to config. */
     private BigDecimal computeRoundOff(CalculationRequest request, ConfigurationDto config,
                                        BigDecimal sumTotal, int dp) {
+        // Manual limit comes from the configuration (the POS dialog enforces the same value, inclusive).
+        // Without a configured limit, keep the legacy exclusive (-1.00, 1.00) bound.
+        boolean hasConfiguredLimit = config != null && config.getRoundOffManualLimit() != null
+                && config.getRoundOffManualLimit().compareTo(BigDecimal.ZERO) > 0;
+        BigDecimal manualLimit = hasConfiguredLimit ? config.getRoundOffManualLimit() : BigDecimal.ONE;
+
         if (request.getRequestedRoundOff() != null && request.getRequestedRoundOff().compareTo(BigDecimal.ZERO) != 0) {
             BigDecimal req = request.getRequestedRoundOff();
-            if (req.abs().compareTo(BigDecimal.ONE) < 0) {
+            boolean withinLimit = hasConfiguredLimit
+                    ? req.abs().compareTo(manualLimit) <= 0
+                    : req.abs().compareTo(BigDecimal.ONE) < 0;
+            if (withinLimit) {
                 return req;
             }
         }
@@ -431,8 +440,13 @@ public class OrderCalculationService {
         if ("MANUAL".equals(mode)) {
             if (request.getRequestedRoundOff() == null) return BigDecimal.ZERO;
             BigDecimal req = request.getRequestedRoundOff();
-            if (req.abs().compareTo(BigDecimal.ONE) >= 0) {
-                throw new BusinessException("Manual round-off must be within (-1.00, 1.00).");
+            boolean withinLimit = hasConfiguredLimit
+                    ? req.abs().compareTo(manualLimit) <= 0
+                    : req.abs().compareTo(BigDecimal.ONE) < 0;
+            if (!withinLimit) {
+                throw new BusinessException(hasConfiguredLimit
+                        ? "Manual round-off must be within -" + manualLimit.toPlainString() + " and " + manualLimit.toPlainString() + "."
+                        : "Manual round-off must be within (-1.00, 1.00).");
             }
             return req;
         }

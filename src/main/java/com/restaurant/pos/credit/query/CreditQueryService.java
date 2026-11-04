@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -262,6 +263,11 @@ public class CreditQueryService {
 
     @Transactional(readOnly = true)
     public CreditReportDto report(Instant from, Instant to) {
+        return report(from, to, null);
+    }
+
+    @Transactional(readOnly = true)
+    public CreditReportDto report(Instant from, Instant to, UUID customerId) {
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
         UUID orgId = TenantContext.getCurrentOrg();
@@ -290,6 +296,11 @@ public class CreditQueryService {
             }
             predicates.add(cb.equal(root.get("invoiceType"), InvoiceType.CUSTOMER_INVOICE));
             predicates.add(cb.isNotNull(root.get("creditCustomerId")));
+            // Only sales completed on credit; a credit customer attached to a paid sale is not a credit sale.
+            predicates.add(cb.isTrue(root.get("isCredit")));
+            if (customerId != null) {
+                predicates.add(cb.equal(root.get("creditCustomerId"), customerId));
+            }
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
             predicates.add(cb.not(cb.upper(root.get("status").as(String.class)).in("VOID", "VOIDED")));
             if (finalFromDate != null) {
@@ -309,6 +320,11 @@ public class CreditQueryService {
                 predicates.add(cb.equal(root.get("orgId"), orgId));
             }
             predicates.add(cb.isNotNull(root.get("creditCustomerId")));
+            // Customer credit settlements only; vendor payouts also carry creditCustomerId but are OUTBOUND.
+            predicates.add(cb.equal(root.get("paymentType"), PaymentType.INBOUND));
+            if (customerId != null) {
+                predicates.add(cb.equal(root.get("creditCustomerId"), customerId));
+            }
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
             predicates.add(cb.or(cb.isNull(root.get("docStatus")), cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED"))));
             if (finalFromDate != null) {
@@ -333,13 +349,17 @@ public class CreditQueryService {
                 .map(amount -> creditGuard.money(amount, dp))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // Currency scale is one or two DB lookups (uncached without Redis); resolve once per branch, not per row.
+        Map<UUID, Integer> dpByOrg = new HashMap<>();
         List<CreditOrderDto> orderRows = invoices.stream()
-                .map(invoice -> toOrderDto(invoice, customersById.get(invoice.getCreditCustomerId()), ordersById.get(invoice.getOrderId())))
+                .map(invoice -> toOrderDto(invoice, customersById.get(invoice.getCreditCustomerId()), ordersById.get(invoice.getOrderId()),
+                        dpByOrg.computeIfAbsent(invoice.getOrgId(), org -> currencyScale.decimalPlaces(clientId, org))))
                 .collect(Collectors.toList());
 
         BatchPaymentData batchPaymentData = batchLoadForPayments(payments);
         List<CreditReportDto.PaymentTransactionDto> paymentRows = payments.stream()
-                .map(payment -> toPaymentTransaction(payment, customersById.get(payment.getCreditCustomerId()), batchPaymentData.ordersById(), batchPaymentData.invoicesById()))
+                .map(payment -> toPaymentTransaction(payment, customersById.get(payment.getCreditCustomerId()), batchPaymentData.ordersById(), batchPaymentData.invoicesById(),
+                        dpByOrg.computeIfAbsent(payment.getOrgId(), org -> currencyScale.decimalPlaces(clientId, org))))
                 .collect(Collectors.toList());
 
         BigDecimal totalOpeningBalance = customersById.values().stream()
@@ -468,7 +488,10 @@ public class CreditQueryService {
     }
 
     private CreditOrderDto toOrderDto(Invoice invoice, CreditCustomer customer, Order order) {
-        int dp = currencyScale.decimalPlaces(invoice.getClientId(), invoice.getOrgId());
+        return toOrderDto(invoice, customer, order, currencyScale.decimalPlaces(invoice.getClientId(), invoice.getOrgId()));
+    }
+
+    private CreditOrderDto toOrderDto(Invoice invoice, CreditCustomer customer, Order order, int dp) {
         BigDecimal total = creditGuard.money(invoice.getTotalAmount(), dp);
         BigDecimal tax = order != null ? creditGuard.money(order.getTotalTaxAmount(), dp) : BigDecimal.ZERO;
         BigDecimal due = creditGuard.money(invoice.getAmountDue(), dp);
@@ -524,7 +547,10 @@ public class CreditQueryService {
     }
 
     private CreditReportDto.PaymentTransactionDto toPaymentTransaction(Payment payment, CreditCustomer customer, Map<UUID, Order> ordersById, Map<UUID, Invoice> invoicesById) {
-        int dp = currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId());
+        return toPaymentTransaction(payment, customer, ordersById, invoicesById, currencyScale.decimalPlaces(payment.getClientId(), payment.getOrgId()));
+    }
+
+    private CreditReportDto.PaymentTransactionDto toPaymentTransaction(Payment payment, CreditCustomer customer, Map<UUID, Order> ordersById, Map<UUID, Invoice> invoicesById, int dp) {
         String orderNo = null;
         Order order = payment.getOrderId() != null ? ordersById.get(payment.getOrderId()) : null;
         if (order == null && payment.getInvoiceId() != null) {

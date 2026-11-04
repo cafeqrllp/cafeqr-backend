@@ -528,6 +528,37 @@ class OrderCalculationServiceTest {
                 .hasMessageContaining("within");
     }
 
+    @Test
+    void tc16_manualRoundOffWithinConfiguredLimitIsApplied() {
+        // Dialog allows manual round-off up to the configured limit (default 10.00).
+        ConfigurationDto config = ConfigurationDto.builder()
+                .taxEnabled(false)
+                .pricesIncludeTax(false)
+                .currencyDecimalPlaces(2)
+                .roundOffEnabled(true)
+                .roundOffMode("manual")
+                .roundOffManualLimit(new BigDecimal("10.00"))
+                .build();
+
+        CalculationLineRequest line = CalculationLineRequest.builder()
+                .productId(UUID.randomUUID())
+                .quantity(BigDecimal.ONE)
+                .unitPrice(new BigDecimal("100.00"))
+                .taxRate(BigDecimal.ZERO)
+                .taxType("NONE")
+                .build();
+
+        CalculationRequest request = CalculationRequest.builder()
+                .lines(List.of(line))
+                .requestedRoundOff(new BigDecimal("-2.50"))
+                .build();
+
+        var result = calculationService.calculate(request, config);
+
+        assertThat(result.getRoundOffAmount()).isEqualByComparingTo("-2.50");
+        assertThat(result.getGrandTotal()).isEqualByComparingTo("97.50");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // TC-15  clientLineId is preserved through the pipeline
     // ─────────────────────────────────────────────────────────────────────────

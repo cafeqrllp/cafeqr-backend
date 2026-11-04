@@ -24,10 +24,14 @@ public class OrderSpecification {
             }
 
             // Multi-Branch Security Logic
-            if (!SecurityUtils.isSuperAdmin() && orgId != null) {
-                predicates.add(cb.equal(root.get("orgId"), orgId));
-            } else if (criteria.getBranchId() != null) {
-                predicates.add(cb.equal(root.get("orgId"), criteria.getBranchId()));
+            // Normal users: always their logged-in org.
+            // Super admin: explicit branchId filter, else the org selected in the branch switcher
+            // (null only when "All Branches" is selected).
+            UUID effectiveOrgId = SecurityUtils.isSuperAdmin() && criteria.getBranchId() != null
+                    ? criteria.getBranchId()
+                    : orgId;
+            if (effectiveOrgId != null) {
+                predicates.add(cb.equal(root.get("orgId"), effectiveOrgId));
             }
 
             // Date Range

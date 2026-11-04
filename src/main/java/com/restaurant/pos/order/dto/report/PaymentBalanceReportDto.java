@@ -38,6 +38,18 @@ public class PaymentBalanceReportDto {
     @Builder.Default
     private BigDecimal netBalance = BigDecimal.ZERO;
 
+    /** Credit given to credit customers within the report period (credit-sale invoices) */
+    @Builder.Default
+    private BigDecimal creditGiven = BigDecimal.ZERO;
+
+    /** Payments received from credit customers within the report period */
+    @Builder.Default
+    private BigDecimal creditCollected = BigDecimal.ZERO;
+
+    /** Credit balance for the period: creditGiven - creditCollected */
+    @Builder.Default
+    private BigDecimal creditBalance = BigDecimal.ZERO;
+
     /** Total number of inbound transactions */
     @Builder.Default
     private long totalInflowCount = 0;

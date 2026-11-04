@@ -1,5 +1,6 @@
 package com.restaurant.pos.order.dto.report;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,7 +28,15 @@ public class PaymentTypeBalanceDto {
     private String category;
 
     /** Whether this payment type is configured in the Payment Types module */
+    @JsonProperty("isConfigured")
     private boolean isConfigured;
+
+    /**
+     * True for on-account tenders (Credit): inflow = credit sales raised, outflow = credit settled,
+     * net = receivable added. Excluded from the report's collected / paid-out totals.
+     */
+    @JsonProperty("isReceivable")
+    private boolean isReceivable;
 
     /** Sort order from Payment Types configuration */
     private Integer sortOrder;
@@ -63,6 +72,10 @@ public class PaymentTypeBalanceDto {
     /** Portion of outflows from vendor purchases / bills */
     @Builder.Default
     private BigDecimal purchaseAmount = BigDecimal.ZERO;
+
+    /** Portion of outflows refunded to customers against sales */
+    @Builder.Default
+    private BigDecimal refundAmount = BigDecimal.ZERO;
 
     /** Net Period Balance = Inflow - Outflow */
     @Builder.Default
