@@ -46,6 +46,7 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
             WHERE i.clientId = :clientId
               AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceDate BETWEEN :start AND :end
+              AND (i.invoiceType IS NULL OR i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.CUSTOMER_INVOICE)
             """)
     int findMaxDailyBillNo(
         @Param("clientId") UUID clientId,

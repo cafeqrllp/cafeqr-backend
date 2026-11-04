@@ -74,6 +74,11 @@ public class ClientSummaryDto {
     private String effectiveSubscriptionStatus;
     private LocalDateTime effectiveExpiryDate;
     private int effectiveDaysLeft;
+    private long contractedArrPaise;
+    private long contractedMrrPaise;
+    private long unbilledVariancePaise;
+    private long directPaidPaise;
+    private long gatewayPaidPaise;
 
     @Data
     @Builder
@@ -84,6 +89,8 @@ public class ClientSummaryDto {
         private String status;
         private LocalDateTime expiryDate;
         private boolean autoRenew;
+        private UUID orgId;
+        private String branchName;
     }
 
     @Data
@@ -92,10 +99,17 @@ public class ClientSummaryDto {
     @AllArgsConstructor
     public static class PaymentInfo {
         private UUID id;
+        private UUID orgId;
+        private String branchName;
+        private String branchCode;
         private String paymentId;
         private String orderId;
         private long amount;
         private String currency;
+        private String paymentMethod;
+        private String description;
+        private String billingCycle;
+        private String status;
         private LocalDateTime createdAt;
     }
 
@@ -117,5 +131,9 @@ public class ClientSummaryDto {
         private LocalDateTime subscriptionExpiryDate;
         private int daysLeft;
         private List<ModuleInfo> modules;
+        private long totalPaidPaise;
+        private int paymentCount;
+        private long expectedTermValuePaise;
+        private long unbilledVariancePaise;
     }
 }

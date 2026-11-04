@@ -141,6 +141,9 @@ public class OrderResponseDto {
     @Schema(description = "Associated payment method")
     private String paymentMethod;
 
+    @Schema(description = "Payment splits recorded against this order or revision, including voided payments. Populated for revision history only.")
+    private List<PaymentSplitResponseDto> revisionPaymentSplits;
+
     @Schema(description = "Cash split amount if mixed payment")
     private BigDecimal cashAmount;
 

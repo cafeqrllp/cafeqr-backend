@@ -345,6 +345,20 @@ public class OrderDtoMapper {
                 if (!methods.isEmpty()) {
                     return String.join(", ", methods);
                 }
+                if ("VOID".equalsIgnoreCase(order.getOrderStatus())) {
+                    // A voided revision's payments were voided when the order was revised, but each
+                    // row still records the method that revision was paid with. Use that, not the
+                    // stale orders.payment_method column.
+                    java.util.Set<String> historical = new java.util.LinkedHashSet<>();
+                    for (com.restaurant.pos.order.domain.Payment p : payments) {
+                        if (p != null && p.getPaymentMethod() != null && !p.getPaymentMethod().isBlank()) {
+                            historical.add(p.getPaymentMethod().trim());
+                        }
+                    }
+                    if (!historical.isEmpty()) {
+                        return String.join(", ", historical);
+                    }
+                }
             }
         } catch (Exception ignored) {
         }

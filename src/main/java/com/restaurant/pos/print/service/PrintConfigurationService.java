@@ -53,8 +53,8 @@ public class PrintConfigurationService {
             settings.remove("regularTemplate");
         }
 
-        settings = sanitizeSettings(settings);
         validateSettings(settings);
+        settings = sanitizeSettings(settings);
 
         PrintConfiguration entity = findScope(clientId, scopeType, scopeId)
                 .orElseGet(PrintConfiguration::new);
@@ -97,19 +97,18 @@ public class PrintConfigurationService {
 
         int currentRevision = existingLayer.map(PrintConfiguration::getRevision).orElse(0);
         Integer expectedRevision = request.getCloudRevision();
-        // TEMPORARY: Bypass conflict check to allow stuck Windows Services to recover
-        // if (expectedRevision != null && expectedRevision > 0 && expectedRevision != currentRevision) {
-        //     throw new PrintConfigurationConflictException(
-        //             "Printing configuration changed in the cloud. Local printing remains active; review and retry synchronization.");
-        // }
+        if (expectedRevision != null && expectedRevision > 0 && expectedRevision != currentRevision) {
+            throw new PrintConfigurationConflictException(
+                    "Printing configuration changed in the cloud. Local printing remains active; review and retry synchronization.");
+        }
 
         Map<String, Object> settings = new java.util.LinkedHashMap<>(request.getSettings());
         settings.remove("kotTemplate");
         settings.remove("receiptTemplate");
         settings.remove("thermalTemplate");
         settings.remove("regularTemplate");
-        settings = sanitizeSettings(settings);
         validateSettings(settings);
+        settings = sanitizeSettings(settings);
         PrintConfiguration entity = existingLayer.orElseGet(PrintConfiguration::new);
         entity.setClientId(station.getClientId());
         entity.setOrgId(station.getOrgId());

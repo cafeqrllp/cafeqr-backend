@@ -107,7 +107,8 @@ public class CreditQueryController {
     })
     public ResponseEntity<ApiResponse<CreditReportDto>> report(
             @Parameter(description = "Start instant filter (ISO-8601)") @RequestParam(required = false) Instant from,
-            @Parameter(description = "End instant filter (ISO-8601)") @RequestParam(required = false) Instant to) {
-        return ResponseEntity.ok(ApiResponse.success(queryService.report(from, to)));
+            @Parameter(description = "End instant filter (ISO-8601)") @RequestParam(required = false) Instant to,
+            @Parameter(description = "Optional credit customer UUID to restrict the report to") @RequestParam(required = false) UUID customerId) {
+        return ResponseEntity.ok(ApiResponse.success(queryService.report(from, to, customerId)));
     }
 }

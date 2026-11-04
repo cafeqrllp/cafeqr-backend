@@ -17,6 +17,8 @@ public class ClientService {
     private final ClientRepository clientRepository;
     private final com.restaurant.pos.product.service.DefaultUomService defaultUomService;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
+    @org.springframework.context.annotation.Lazy
+    private final com.restaurant.pos.founder.lead.service.FounderLeadService founderLeadService;
 
     public List<Client> getAllClients() {
         return clientRepository.findAll();
@@ -78,6 +80,11 @@ public class ClientService {
         
         Client saved = clientRepository.save(client);
         timezoneResolver.evictCache(saved.getId(), null);
+        if (saved.getPhone() != null && !saved.getPhone().isBlank()) {
+            try {
+                founderLeadService.autoCaptureLeadFromSignup(saved.getId(), null, saved.getName(), saved.getOwnerName(), saved.getPhone(), saved.getEmail());
+            } catch (Exception ignored) {}
+        }
         return saved;
     }
 

@@ -37,6 +37,10 @@ public class FounderLeadDto {
 
     // Associated branch/client details resolved automatically
     private String matchedBranchName;
+    private String matchedBranchCode;
     private String matchedClientName;
     private String matchedSubscriptionStatus;
+    private LocalDateTime matchedBranchExpiry;
+    private Integer matchedDaysLeft;
+    private java.util.List<String> matchedActiveModules;
 }

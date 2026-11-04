@@ -164,4 +164,24 @@ class InvoiceServiceTest {
         assertThat(end.getValue()).isEqualTo(java.time.LocalDateTime.of(2026, 10, 11, 18, 30).minusNanos(1));
         assertThat(invoice.getDailyBillNo()).isEqualTo(5);
     }
+
+    @Test
+    void expenseInvoiceDoesNotIncrementOrAssignDailyBillNo() {
+        when(invoiceRepository.save(org.mockito.ArgumentMatchers.any(Invoice.class))).thenAnswer(i -> i.getArgument(0));
+
+        Invoice expenseInvoice = Invoice.builder()
+                .invoiceType(com.restaurant.pos.invoice.domain.InvoiceType.EXPENSE_RECEIPT)
+                .invoiceDate(java.time.LocalDateTime.of(2026, 10, 10, 12, 0))
+                .totalAmount(BigDecimal.valueOf(150))
+                .amountDue(BigDecimal.ZERO)
+                .build();
+        expenseInvoice.setClientId(clientId);
+        expenseInvoice.setOrgId(orgId);
+
+        Invoice result = invoiceService.createInvoice(expenseInvoice);
+
+        org.mockito.Mockito.verify(invoiceRepository, org.mockito.Mockito.never())
+                .findMaxDailyBillNo(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertThat(result.getDailyBillNo()).isNull();
+    }
 }

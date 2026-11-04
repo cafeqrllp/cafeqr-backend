@@ -13,7 +13,9 @@ import com.restaurant.pos.founder.lead.repository.FounderLeadActivityRepository;
 import com.restaurant.pos.founder.lead.repository.FounderLeadRepository;
 import com.restaurant.pos.subscription.domain.ClientSubscriptionModule;
 import com.restaurant.pos.subscription.domain.ModuleName;
+import com.restaurant.pos.subscription.domain.SubscriptionPayment;
 import com.restaurant.pos.subscription.repository.ClientSubscriptionModuleRepository;
+import com.restaurant.pos.subscription.repository.SubscriptionPaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +38,7 @@ public class FounderLeadService {
     private final ClientRepository clientRepository;
     private final UserRepository userRepository;
     private final ClientSubscriptionModuleRepository moduleRepository;
+    private final SubscriptionPaymentRepository subscriptionPaymentRepository;
 
     // ── Phone Normalization Utility ──────────────────────────────────────────
     public static String normalizePhone(String raw) {
@@ -443,6 +446,8 @@ public class FounderLeadService {
                     ? now
                     : org.getSubscriptionExpiryDate();
             targetExpiry = base.plusDays(req.getDaysToAdd());
+        } else if (org.getSubscriptionExpiryDate() != null && org.getSubscriptionExpiryDate().isAfter(now)) {
+            targetExpiry = org.getSubscriptionExpiryDate();
         } else {
             targetExpiry = now.plusDays(30);
         }
@@ -501,6 +506,44 @@ public class FounderLeadService {
             }
         }
 
+        // Record payment in subscription_payments if requested
+        String paymentSummary = "";
+        if (req.isRecordPayment() && req.getPaymentAmountPaise() != null && req.getPaymentAmountPaise() > 0 && org.getClientId() != null) {
+            long count = subscriptionPaymentRepository.count() + 1;
+            String invoiceNo = String.format("CQ-INV-%05d", count);
+            String orderNo = String.format("CQ-ORD-%05d", count);
+            String method = (req.getPaymentMethod() != null && !req.getPaymentMethod().isBlank())
+                    ? req.getPaymentMethod().toUpperCase().trim()
+                    : "UPI";
+            String pStatus = "PENDING_INVOICE".equalsIgnoreCase(method) ? "PENDING" : "PAID";
+
+            String moduleSummary = (req.getActiveModules() != null && !req.getActiveModules().isEmpty())
+                    ? String.join(", ", req.getActiveModules())
+                    : "Base POS";
+            String branchLabel = org.getBranchCode() != null ? "[" + org.getBranchCode() + "] " : "";
+            String desc = branchLabel + org.getName() + " - " + moduleSummary + " (until " + targetExpiry.toLocalDate() + ")";
+            if (req.getPaymentNotes() != null && !req.getPaymentNotes().isBlank()) {
+                desc += " - " + req.getPaymentNotes().trim();
+            }
+
+            SubscriptionPayment payment = SubscriptionPayment.builder()
+                    .clientId(org.getClientId())
+                    .orgId(org.getId())
+                    .amount(req.getPaymentAmountPaise())
+                    .currency("INR")
+                    .paymentId(invoiceNo)
+                    .orderId(orderNo)
+                    .paymentMethod(method)
+                    .description(desc)
+                    .billingCycle("ANNUAL")
+                    .status(pStatus)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            subscriptionPaymentRepository.save(payment);
+            paymentSummary = " (₹" + (req.getPaymentAmountPaise() / 100) + " recorded via " + method + ")";
+        }
+
+        final String finalPaymentSummary = paymentSummary;
         // Automatically update any linked lead to PAID_ACTIVE
         leadRepository.findByAssignedOrgId(org.getId()).ifPresent(lead -> {
             lead.setStatus("PAID_ACTIVE");
@@ -508,28 +551,102 @@ public class FounderLeadService {
             activityRepository.save(FounderLeadActivity.builder()
                     .leadId(lead.getId())
                     .activityType("PAYMENT_RECORDED")
-                    .description("Subscription activated until " + targetExpiry.toLocalDate())
+                    .description("Subscription & modules activated until " + targetExpiry.toLocalDate() + finalPaymentSummary)
                     .build());
         });
     }
 
+    // ── Automated Tenant Registration CRM Lead Capture ───────────────────────
+    @Transactional
+    public void autoCaptureLeadFromSignup(UUID clientId, UUID orgId, String businessName, String ownerName, String phone, String email) {
+        if (phone == null || phone.isBlank()) return;
+        String cleanPhone = normalizePhone(phone);
+        List<FounderLead> existing = leadRepository.findAllByAnyPhone(cleanPhone);
+        if (!existing.isEmpty()) {
+            FounderLead lead = existing.get(0);
+            lead.setAssignedClientId(clientId);
+            lead.setAssignedOrgId(orgId);
+            if (businessName != null && !businessName.isBlank()) lead.setBusinessName(businessName);
+            lead.setStatus("ONBOARDED_TRIAL");
+            leadRepository.save(lead);
+            activityRepository.save(FounderLeadActivity.builder()
+                    .leadId(lead.getId())
+                    .activityType("STATUS_CHANGE")
+                    .description("Prospect registered tenant account on CafeQR (Status -> ONBOARDED_TRIAL)")
+                    .build());
+        } else {
+            FounderLead newLead = FounderLead.builder()
+                    .name(ownerName != null && !ownerName.isBlank() ? ownerName.trim() : (businessName != null ? businessName : "New Merchant"))
+                    .businessName(businessName)
+                    .primaryPhone(cleanPhone)
+                    .whatsappNumber(cleanPhone)
+                    .email(email)
+                    .source("WEBSITE")
+                    .status("ONBOARDED_TRIAL")
+                    .temperature("HOT")
+                    .assignedClientId(clientId)
+                    .assignedOrgId(orgId)
+                    .notes("Self-registered tenant account")
+                    .lastContactedAt(LocalDateTime.now())
+                    .build();
+            FounderLead saved = leadRepository.save(newLead);
+            activityRepository.save(FounderLeadActivity.builder()
+                    .leadId(saved.getId())
+                    .activityType("STATUS_CHANGE")
+                    .description("Self-registered new tenant on CafeQR (Status -> ONBOARDED_TRIAL)")
+                    .build());
+        }
+    }
+
     private FounderLeadDto mapToDto(FounderLead l) {
         String branchName = null;
+        String branchCode = null;
         String clientName = null;
         String subStatus = null;
+        LocalDateTime branchExpiry = null;
+        Integer daysLeft = null;
+        List<String> activeModules = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
 
         if (l.getAssignedOrgId() != null) {
             Optional<Organization> org = organizationRepository.findById(l.getAssignedOrgId());
             if (org.isPresent()) {
-                branchName = org.get().getName();
-                subStatus = org.get().getSubscriptionStatus();
+                Organization o = org.get();
+                branchName = o.getName();
+                branchCode = o.getBranchCode();
+                subStatus = o.getSubscriptionStatus();
+                branchExpiry = o.getSubscriptionExpiryDate();
+                if (branchExpiry != null && branchExpiry.isAfter(now)) {
+                    daysLeft = (int) java.time.temporal.ChronoUnit.DAYS.between(now, branchExpiry);
+                    subStatus = "ACTIVE";
+                }
+                List<ClientSubscriptionModule> orgMods = moduleRepository.findByOrgId(o.getId());
+                activeModules = orgMods.stream()
+                        .filter(m -> "ACTIVE".equalsIgnoreCase(m.getStatus()) && (m.getExpiryDate() == null || m.getExpiryDate().isAfter(now)))
+                        .map(m -> m.getModuleName().name())
+                        .collect(Collectors.toList());
             }
         }
         if (l.getAssignedClientId() != null) {
             Optional<Client> client = clientRepository.findById(l.getAssignedClientId());
             if (client.isPresent()) {
-                clientName = client.get().getName();
-                if (subStatus == null) subStatus = client.get().getSubscriptionStatus();
+                Client c = client.get();
+                clientName = c.getName();
+                if (subStatus == null) {
+                    subStatus = c.getSubscriptionStatus();
+                    if (c.getSubscriptionExpiryDate() != null && c.getSubscriptionExpiryDate().isAfter(now)) {
+                        daysLeft = (int) java.time.temporal.ChronoUnit.DAYS.between(now, c.getSubscriptionExpiryDate());
+                        subStatus = "ACTIVE";
+                    }
+                }
+                if (activeModules.isEmpty()) {
+                    List<ClientSubscriptionModule> clientMods = moduleRepository.findByClientId(c.getId());
+                    activeModules = clientMods.stream()
+                            .filter(m -> "ACTIVE".equalsIgnoreCase(m.getStatus()) && (m.getExpiryDate() == null || m.getExpiryDate().isAfter(now)))
+                            .map(m -> m.getModuleName().name())
+                            .distinct()
+                            .collect(Collectors.toList());
+                }
             }
         }
 
@@ -556,8 +673,12 @@ public class FounderLeadService {
                 .createdAt(l.getCreatedAt())
                 .updatedAt(l.getUpdatedAt())
                 .matchedBranchName(branchName)
+                .matchedBranchCode(branchCode)
                 .matchedClientName(clientName)
                 .matchedSubscriptionStatus(subStatus)
+                .matchedBranchExpiry(branchExpiry)
+                .matchedDaysLeft(daysLeft)
+                .matchedActiveModules(activeModules)
                 .build();
     }
 }

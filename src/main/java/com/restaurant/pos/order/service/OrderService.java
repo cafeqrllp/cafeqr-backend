@@ -3617,7 +3617,7 @@ public class OrderService {
         }
 
         LocalDateTime invoiceDate = sourceBusinessDateTime(order);
-        if (dailyBillNo == null) {
+        if (dailyBillNo == null && invoiceType == InvoiceType.CUSTOMER_INVOICE) {
             LocalDateTime start = invoiceDate.toLocalDate().atStartOfDay();
             LocalDateTime end = invoiceDate.toLocalDate().atTime(23, 59, 59, 999999999);
             int maxNo = invoiceRepository.findMaxDailyBillNo(clientId, orgId, start, end);
@@ -4673,6 +4673,28 @@ public class OrderService {
         } else {
             publishTask.run();
         }
+    }
+
+    /**
+     * Every payment split recorded against this order, including voided payments.
+     * Used by revision history, where the payments of a voided revision were voided
+     * when the order was revised but still show how that revision was paid.
+     */
+    public List<com.restaurant.pos.order.dto.PaymentSplitResponseDto> getRevisionPaymentSplits(UUID orderId) {
+        List<com.restaurant.pos.order.dto.PaymentSplitResponseDto> out = new ArrayList<>();
+        for (Payment p : paymentRepository.findByOrderId(orderId)) {
+            List<PaymentSplit> splits = paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
+            if (splits.isEmpty()) {
+                out.add(new com.restaurant.pos.order.dto.PaymentSplitResponseDto(
+                        p.getId(), p.getPaymentMethod(), p.getAmountPaid(), p.getReferenceNo()));
+            } else {
+                for (PaymentSplit s : splits) {
+                    out.add(new com.restaurant.pos.order.dto.PaymentSplitResponseDto(
+                            s.getId(), s.getPaymentMethod(), s.getAmount(), s.getReferenceNo()));
+                }
+            }
+        }
+        return out;
     }
 
     public List<PaymentSplit> getPaymentSplits(UUID orderId) {
