@@ -88,6 +88,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             System.out.println("===> [DEBUG] JWT Filter: Found JWT (first 15 chars): " + jwt.substring(0, Math.min(jwt.length(), 15)) + "...");
             final String userEmail = jwtService.extractUsername(jwt);
             System.out.println("===> [DEBUG] JWT Filter: Extracted user: " + userEmail);
+
+            // AI assistant / MCP tokens are read-only and limited to the assistant's own report endpoints.
+            if (JwtService.AI_READ_SCOPE.equals(jwtService.extractScope(jwt))
+                    && !com.restaurant.pos.ai.AiTokenPolicy.isAllowed(method, path)) {
+                sendErrorResponse(request, response,
+                        isReadOnlyMethod(method) ? "AI assistant tokens cannot access this endpoint"
+                                : "AI assistant tokens are read-only",
+                        HttpServletResponse.SC_FORBIDDEN);
+                return;
+            }
             
             // Extract clientId and orgId from JWT claims
             try {
@@ -218,6 +228,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             current = current.getCause();
         }
         return false;
+    }
+
+    private boolean isReadOnlyMethod(String method) {
+        return "GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method);
     }
 
     private boolean isPublicPath(String path) {

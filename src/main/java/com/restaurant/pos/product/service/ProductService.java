@@ -901,6 +901,15 @@ public class ProductService {
                 categoryNameMap.putIfAbsent(c.getName().trim().toLowerCase(), c);
             }
         }
+        Map<String, Uom> uomNameMap = new java.util.HashMap<>();
+        for (Uom u : uomRepository.findByClientIdAndOrgIdOrGlobal(clientId, orgId)) {
+            if (u.getName() != null && !u.getName().isBlank()) {
+                uomNameMap.putIfAbsent(u.getName().trim().toLowerCase(), u);
+            }
+            if (u.getShortName() != null && !u.getShortName().isBlank()) {
+                uomNameMap.putIfAbsent(u.getShortName().trim().toLowerCase(), u);
+            }
+        }
 
         for (Product product : products) {
             boolean isClientWise = Boolean.TRUE.equals(product.getIsClientWise());
@@ -936,6 +945,31 @@ public class ProductService {
                     validCategoryIds.add(category.getId());
                 }
                 product.setCategory(category);
+            }
+
+            // Resolve UOM efficiently (by name, shortName, or by ID) before setting relationships
+            if (product.getUom() != null && product.getUom().getId() == null
+                    && product.getUom().getName() != null && !product.getUom().getName().isBlank()) {
+                String uomRawName = product.getUom().getName().trim();
+                Uom uom = uomNameMap.get(uomRawName.toLowerCase());
+                if (uom == null) {
+                    uom = new Uom();
+                    uom.setName(uomRawName);
+                    uom.setShortName(product.getUom().getShortName() != null && !product.getUom().getShortName().isBlank()
+                            ? product.getUom().getShortName().trim()
+                            : uomRawName);
+                    uom.setClientId(clientId);
+                    uom.setOrgId(effectiveOrgId);
+                    uom.setActive(true);
+                    uom.setDefault(false);
+                    uom = uomRepository.save(uom);
+                    uomNameMap.put(uomRawName.toLowerCase(), uom);
+                    if (uom.getShortName() != null && !uom.getShortName().isBlank()) {
+                        uomNameMap.put(uom.getShortName().toLowerCase(), uom);
+                    }
+                    validUomIds.add(uom.getId());
+                }
+                product.setUom(uom);
             }
 
             // Perform integrity check against pre-fetched sets for O(1) speed

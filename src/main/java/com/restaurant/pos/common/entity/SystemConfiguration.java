@@ -68,6 +68,10 @@ public class SystemConfiguration {
     @Builder.Default
     @Column(name = "payroll_enabled")
     private boolean payrollEnabled = false;
+    /** "Enable MCP": lets super admins use the Ask CafeQR assistant and connect AI apps (read-only). */
+    @Builder.Default
+    @Column(name = "mcp_enabled")
+    private boolean mcpEnabled = false;
     private boolean takeawayAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;

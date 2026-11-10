@@ -843,7 +843,7 @@ public class ReportService {
                 .createdAt(createdAt)
                 .voidable(invoice != null && !isVoidStatus(invoice.getStatus()) && !isVoidStatus(invoice.getDocStatus()))
                 .voidReason(voidReason)
-                .lines(toSalesInvoiceLines(order))
+                .lines(toSalesInvoiceLines(order, invoice))
                 .build();
     }
 
@@ -878,24 +878,57 @@ public class ReportService {
         });
     }
 
-    private List<SalesInvoiceReportDto.LineDto> toSalesInvoiceLines(Order order) {
-        if (order == null || order.getLines() == null) {
-            return List.of();
+    private List<SalesInvoiceReportDto.LineDto> toSalesInvoiceLines(Order order, Invoice invoice) {
+        if (order != null && order.getLines() != null && !order.getLines().isEmpty()) {
+            return order.getLines().stream()
+                    .filter(OrderLine::isActive)
+                    .map(line -> SalesInvoiceReportDto.LineDto.builder()
+                            .productId(line.getProductId())
+                            .productName(line.getProductName())
+                            .categoryName(line.getCategoryName())
+                            .quantity(safe(line.getQuantity()))
+                            .unitPrice(safe(line.getUnitPrice()))
+                            .taxRate(safe(line.getTaxRate()))
+                            .taxAmount(safe(line.getTaxAmount()))
+                            .discountAmount(safe(line.getDiscountAmount()))
+                            .lineTotal(safe(line.getLineTotal()))
+                            .taxCode(resolveLineTaxCode(line.getTaxCode(), line.getProductId()))
+                            .build())
+                    .collect(Collectors.toList());
         }
-        return order.getLines().stream()
-                .filter(OrderLine::isActive)
-                .map(line -> SalesInvoiceReportDto.LineDto.builder()
-                        .productId(line.getProductId())
-                        .productName(line.getProductName())
-                        .categoryName(line.getCategoryName())
-                        .quantity(safe(line.getQuantity()))
-                        .unitPrice(safe(line.getUnitPrice()))
-                        .taxRate(safe(line.getTaxRate()))
-                        .taxAmount(safe(line.getTaxAmount()))
-                        .discountAmount(safe(line.getDiscountAmount()))
-                        .lineTotal(safe(line.getLineTotal()))
-                        .build())
-                .collect(Collectors.toList());
+        if (invoice != null && invoice.getLines() != null && !invoice.getLines().isEmpty()) {
+            return invoice.getLines().stream()
+                    .filter(il -> "Y".equalsIgnoreCase(il.getIsactive()))
+                    .map(line -> SalesInvoiceReportDto.LineDto.builder()
+                            .productId(line.getProductId())
+                            .productName(line.getProductName())
+                            .categoryName(line.getCategoryName())
+                            .quantity(safe(line.getQuantity()))
+                            .unitPrice(safe(line.getUnitPrice()))
+                            .taxRate(safe(line.getTaxRate()))
+                            .taxAmount(safe(line.getTaxAmount()))
+                            .discountAmount(safe(line.getDiscountAmount()))
+                            .lineTotal(safe(line.getLineTotal()))
+                            .taxCode(resolveLineTaxCode(line.getTaxCode(), line.getProductId()))
+                            .build())
+                    .collect(Collectors.toList());
+        }
+        return List.of();
+    }
+
+    private String resolveLineTaxCode(String taxCode, UUID productId) {
+        if (taxCode != null && !taxCode.isBlank() && !taxCode.startsWith("GST_") && !taxCode.startsWith("TAX_")) {
+            return taxCode;
+        }
+        if (productId != null && productRepository != null) {
+            try {
+                return productRepository.findById(productId)
+                        .map(com.restaurant.pos.product.domain.Product::getTaxCode)
+                        .filter(tc -> tc != null && !tc.isBlank() && !tc.startsWith("GST_") && !tc.startsWith("TAX_"))
+                        .orElse(taxCode);
+            } catch (Exception ignored) {}
+        }
+        return taxCode;
     }
 
     private List<OrderCustomerDto> linkedCustomers(Order order) {

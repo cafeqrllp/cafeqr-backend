@@ -24,6 +24,11 @@ import java.util.function.Function;
 @Service
 public class JwtService {
 
+    /** Claim carrying the token scope. Absent on normal login tokens. */
+    public static final String SCOPE_CLAIM = "scope";
+    /** Scope of short-lived, read-only tokens issued to the CafeQR AI assistant / MCP server. */
+    public static final String AI_READ_SCOPE = "ai:read";
+
     @Value("${jwt.private-key}")
     private String privateKeyStr;
 
@@ -94,6 +99,24 @@ public class JwtService {
 
     public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails) {
         return buildToken(extraClaims, userDetails, jwtExpiration);
+    }
+
+    /** Issues a token with a custom lifetime (used for short-lived scoped tokens such as {@link #AI_READ_SCOPE}). */
+    public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails, long expirationMs) {
+        return buildToken(extraClaims, userDetails, expirationMs);
+    }
+
+    /** Extracts the scope claim, or null for normal (unscoped) tokens. */
+    public String extractScope(String token) {
+        return extractClaim(token, claims -> {
+            Object scope = claims.get(SCOPE_CLAIM);
+            return scope != null ? scope.toString() : null;
+        });
+    }
+
+    /** Base64 (X.509) encoded RSA public key, so other services can verify tokens without the signing key. */
+    public String getPublicKeyBase64() {
+        return java.util.Base64.getEncoder().encodeToString(publicKey.getEncoded());
     }
 
     public String generateRefreshToken(UserDetails userDetails) {
