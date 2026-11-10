@@ -62,5 +62,7 @@ public class SalesInvoiceReportDto {
         private BigDecimal taxAmount;
         private BigDecimal discountAmount;
         private BigDecimal lineTotal;
+        @com.fasterxml.jackson.annotation.JsonAlias({"tax_code", "hsnCode", "hsn_code"})
+        private String taxCode;
     }
 }

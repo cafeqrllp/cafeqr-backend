@@ -35,6 +35,12 @@ import java.util.UUID;
 @Slf4j
 public class SystemConfigurationService {
 
+    /**
+     * Settings > Enable MCP (Ask CafeQR) is not released yet: it is always reported and saved as off,
+     * so no AI tokens can be issued. Set to true when the feature goes live.
+     */
+    static final boolean MCP_AVAILABLE = false;
+
     private final SystemConfigurationRepository repository;
     private final ObjectMapper objectMapper;
     private final ClientRepository clientRepository;
@@ -264,6 +270,7 @@ public class SystemConfigurationService {
                 .purchaseEnabled(true)
                 .barcodeScannerEnabled(false)
                 .payrollEnabled(false)
+                .mcpEnabled(false)
                 .takeawayAutoPrintKotOnSettle(false)
                 .takeawayHideKitchenMode(false)
                 .dineInAutoPrintKotOnSettle(false)
@@ -316,6 +323,7 @@ public class SystemConfigurationService {
                 .discountEnabled(source.isDiscountEnabled())
                 .barcodeScannerEnabled(source.isBarcodeScannerEnabled())
                 .payrollEnabled(source.isPayrollEnabled())
+                .mcpEnabled(source.isMcpEnabled())
                 .takeawayAutoPrintKotOnSettle(source.isTakeawayAutoPrintKotOnSettle())
                 .takeawayHideKitchenMode(source.isTakeawayHideKitchenMode())
                 .dineInAutoPrintKotOnSettle(source.isDineInAutoPrintKotOnSettle())
@@ -486,6 +494,7 @@ public class SystemConfigurationService {
                 .discountEnabled(entity.isDiscountEnabled())
                 .barcodeScannerEnabled(isFeatureEnabled(entity.getClientId(), orgId, ModuleName.BARCODE_SCANNER, entity.isBarcodeScannerEnabled()))
                 .payrollEnabled(entity.isPayrollEnabled())
+                .mcpEnabled(MCP_AVAILABLE && entity.isMcpEnabled())
                 .takeawayAutoPrintKotOnSettle(entity.isTakeawayAutoPrintKotOnSettle())
                 .takeawayHideKitchenMode(entity.isTakeawayHideKitchenMode())
                 .dineInAutoPrintKotOnSettle(entity.isDineInAutoPrintKotOnSettle())
@@ -567,6 +576,7 @@ public class SystemConfigurationService {
         entity.setDiscountEnabled(dto.isDiscountEnabled());
         entity.setBarcodeScannerEnabled(dto.isBarcodeScannerEnabled());
         entity.setPayrollEnabled(dto.isPayrollEnabled());
+        entity.setMcpEnabled(MCP_AVAILABLE && dto.isMcpEnabled());
         entity.setTakeawayAutoPrintKotOnSettle(dto.isTakeawayAutoPrintKotOnSettle());
         entity.setTakeawayHideKitchenMode(dto.isTakeawayHideKitchenMode());
         entity.setDineInAutoPrintKotOnSettle(dto.isDineInAutoPrintKotOnSettle());
