@@ -159,7 +159,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 512M
 
   # ── WhatsApp Companion Gateway Adapter ──
   whatsapp-gateway:
