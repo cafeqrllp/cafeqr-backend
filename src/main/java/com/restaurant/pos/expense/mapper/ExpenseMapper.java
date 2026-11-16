@@ -4,6 +4,8 @@ import com.restaurant.pos.expense.domain.Expense;
 import com.restaurant.pos.expense.dto.ExpenseResponse;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+
 /**
  * Maps between Expense entities and their DTOs.
  */
@@ -28,6 +30,15 @@ public class ExpenseMapper {
                 .paymentStatus(expense.getPaymentStatus())
                 .createdAt(expense.getCreatedAt())
                 .updatedAt(expense.getUpdatedAt())
+                .supplierName(expense.getSupplierName())
+                .supplierGstin(expense.getSupplierGstin())
+                .billNo(expense.getBillNo())
+                .hsnSac(expense.getHsnSac())
+                .gstRate(expense.getGstRate())
+                .taxAmount(expense.getTaxAmount())
+                .taxableAmount(expense.getAmount() != null
+                        ? expense.getAmount().subtract(expense.getTaxAmount() != null ? expense.getTaxAmount() : BigDecimal.ZERO)
+                        : null)
                 .build();
     }
 

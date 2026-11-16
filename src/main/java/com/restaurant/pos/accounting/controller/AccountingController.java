@@ -50,6 +50,7 @@ public class AccountingController {
         if (effectiveOrgId != null) {
             defaultsService.ensureDefaultAccounts(effectiveOrgId);
         }
+        accountingService.ensureOpeningBalanceJournals(effectiveOrgId);
         return ResponseEntity.ok(ApiResponse.success(accountingService.getPeriodAccounts(
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),
@@ -134,6 +135,7 @@ public class AccountingController {
         if (effectiveOrgId != null) {
             defaultsService.ensureDefaultAccounts(effectiveOrgId);
         }
+        accountingService.ensureOpeningBalanceJournals(effectiveOrgId);
         return ResponseEntity.ok(ApiResponse.success(accountingService.getSummary(
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),

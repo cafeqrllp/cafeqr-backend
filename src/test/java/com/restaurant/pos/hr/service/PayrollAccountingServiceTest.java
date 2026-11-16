@@ -4,8 +4,8 @@ import com.restaurant.pos.category.domain.ExpenseCategory;
 import com.restaurant.pos.category.repository.ExpenseCategoryRepository;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
-import com.restaurant.pos.expense.domain.Expense;
-import com.restaurant.pos.expense.repository.ExpenseRepository;
+import com.restaurant.pos.expense.dto.CreateExpenseRequest;
+import com.restaurant.pos.expense.service.ExpenseService;
 import com.restaurant.pos.hr.entity.PayrollRun;
 import com.restaurant.pos.hr.entity.SalarySlip;
 import com.restaurant.pos.hr.repository.PayrollRunRepository;
@@ -28,7 +28,7 @@ import static org.mockito.Mockito.*;
 
 class PayrollAccountingServiceTest {
 
-    private ExpenseRepository expenseRepository;
+    private ExpenseService expenseService;
     private PayrollRunRepository payrollRunRepository;
     private SalarySlipRepository salarySlipRepository;
     private ExpenseCategoryRepository expenseCategoryRepository;
@@ -40,13 +40,13 @@ class PayrollAccountingServiceTest {
 
     @BeforeEach
     void setUp() {
-        expenseRepository = mock(ExpenseRepository.class);
+        expenseService = mock(ExpenseService.class);
         payrollRunRepository = mock(PayrollRunRepository.class);
         salarySlipRepository = mock(SalarySlipRepository.class);
         expenseCategoryRepository = mock(ExpenseCategoryRepository.class);
 
         payrollAccountingService = new PayrollAccountingService(
-                expenseRepository,
+                expenseService,
                 payrollRunRepository,
                 salarySlipRepository,
                 expenseCategoryRepository
@@ -100,9 +100,13 @@ class PayrollAccountingServiceTest {
 
         SalarySlip slip1 = new SalarySlip();
         slip1.setGrossPay(new BigDecimal("2500.00"));
+        slip1.setTotalDeductions(new BigDecimal("200.00"));
+        slip1.setNetPay(new BigDecimal("2300.00"));
 
         SalarySlip slip2 = new SalarySlip();
         slip2.setGrossPay(new BigDecimal("1500.00"));
+        slip2.setTotalDeductions(new BigDecimal("100.00"));
+        slip2.setNetPay(new BigDecimal("1400.00"));
 
         ExpenseCategory category = ExpenseCategory.builder()
                 .name("Payroll")
@@ -118,13 +122,16 @@ class PayrollAccountingServiceTest {
 
         payrollAccountingService.syncPayrollToAccounting(runId, "BANK_TRANSFER");
 
-        ArgumentCaptor<Expense> expenseCaptor = ArgumentCaptor.forClass(Expense.class);
-        verify(expenseRepository).save(expenseCaptor.capture());
-        Expense savedExpense = expenseCaptor.getValue();
+        // The payroll must go through the expense service (which posts the invoice, payment and
+        // journals), for the net pay actually paid out, with a payment method expenses accept.
+        ArgumentCaptor<CreateExpenseRequest> requestCaptor = ArgumentCaptor.forClass(CreateExpenseRequest.class);
+        verify(expenseService).createExpense(eq("payroll-run-" + runId), requestCaptor.capture());
+        CreateExpenseRequest request = requestCaptor.getValue();
 
-        assertThat(savedExpense.getAmount()).isEqualByComparingTo("4000.00");
-        assertThat(savedExpense.getPaymentMethod()).isEqualTo("BANK_TRANSFER");
-        assertThat(savedExpense.getPaymentStatus()).isEqualTo("PAID");
+        assertThat(request.getAmount()).isEqualByComparingTo("3700.00");
+        assertThat(request.getPaymentMethod()).isEqualTo("BANK");
+        assertThat(request.getCategoryId()).isEqualTo(category.getId());
+        assertThat(request.getBranchId()).isEqualTo(orgId);
 
         assertThat(run.getStatus()).isEqualTo("PAID");
         assertThat(slip1.getStatus()).isEqualTo("PAID");

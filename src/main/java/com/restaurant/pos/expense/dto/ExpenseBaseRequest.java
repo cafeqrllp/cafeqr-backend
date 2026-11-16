@@ -17,4 +17,12 @@ public interface ExpenseBaseRequest {
     String getPaymentMethod();
     UUID getBranchId();
     String getScope();
+
+    // Optional India GST details
+    default String getSupplierName() { return null; }
+    default String getSupplierGstin() { return null; }
+    default String getBillNo() { return null; }
+    default String getHsnSac() { return null; }
+    default BigDecimal getGstRate() { return null; }
+    default BigDecimal getTaxAmount() { return null; }
 }

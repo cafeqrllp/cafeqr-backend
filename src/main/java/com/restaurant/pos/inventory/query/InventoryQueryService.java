@@ -49,6 +49,7 @@ public class InventoryQueryService {
     private final VariantPricingRepository variantPricingRepository;
     private final UserRepository userRepository;
     private final BranchContextService branchContext;
+    private final com.restaurant.pos.costing.query.CostingQueryService costingQueryService;
 
     private String resolveUserName(String userIdStr) {
         if (userIdStr == null || userIdStr.isBlank() || "SYSTEM".equalsIgnoreCase(userIdStr)) {
@@ -232,6 +233,7 @@ public class InventoryQueryService {
     }
 
     private List<StockSnapshot> enrichWithVariantNames(List<StockSnapshot> snapshots) {
+        enrichWithCurrentCost(snapshots);
         List<UUID> variantIds = snapshots.stream()
                 .filter(s -> s.getVariantId() != null)
                 .map(StockSnapshot::getVariantId)
@@ -270,6 +272,22 @@ public class InventoryQueryService {
             }
         });
         return snapshots;
+    }
+
+    /** Fills the transient currentCost from product_costs (org-level cost) for stock valuation. */
+    private void enrichWithCurrentCost(List<StockSnapshot> snapshots) {
+        if (snapshots == null || snapshots.isEmpty()) {
+            return;
+        }
+        Map<UUID, List<StockSnapshot>> byClient = snapshots.stream()
+                .filter(s -> s.getClientId() != null && s.getProductId() != null && s.getOrgId() != null)
+                .collect(Collectors.groupingBy(StockSnapshot::getClientId));
+        byClient.forEach((clientId, list) -> {
+            List<UUID> productIds = list.stream().map(StockSnapshot::getProductId).distinct().collect(Collectors.toList());
+            Map<String, java.math.BigDecimal> costs = costingQueryService.currentCostsForClient(clientId, productIds);
+            list.forEach(s -> s.setCurrentCost(costs.get(com.restaurant.pos.costing.query.CostingQueryService
+                    .key(s.getOrgId(), s.getProductId(), s.getVariantId()))));
+        });
     }
 
     private List<StockSnapshot> appendRecipeProductsStock(List<StockSnapshot> snapshots, UUID clientId, UUID orgId, UUID warehouseId, boolean isConsolidated) {

@@ -21,6 +21,9 @@ public class LoyaltyTransactionDto {
     private String orderNumber;
     private UUID programId;
     private String programName;
+    /** Branch where the points were earned/redeemed (points are shared across branches). */
+    private UUID orgId;
+    private String branchName;
     private LoyaltyTransactionType transactionType;
     private int points;
     private int balanceAfter;

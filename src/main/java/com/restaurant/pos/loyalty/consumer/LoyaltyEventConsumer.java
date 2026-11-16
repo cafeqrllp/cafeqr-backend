@@ -16,14 +16,14 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Outbox consumer responsible for executing loyalty operations (earn/redeem/reverse)
+ * Outbox consumer responsible for executing loyalty operations (earn/reverse)
  * after the order transaction has committed.
  * <p>
  * Idempotent: uses {@code processed_events} to prevent duplicate loyalty transactions.
  * <p>
  * Handles event types:
  * <ul>
- *     <li>{@code ORDER_SETTLED} — earn points and/or redeem points</li>
+ *     <li>{@code ORDER_SETTLED} — earn points (redemption is synchronous in OrderService)</li>
  *     <li>{@code ORDER_CANCELLED} — reverse loyalty transactions</li>
  * </ul>
  */
@@ -64,16 +64,15 @@ public class LoyaltyEventConsumer {
         TenantContext.setCurrentTenant(event.getClientId());
         TenantContext.setCurrentOrg(event.getOrgId());
         try {
-            // 1. Process REDEEM if points were redeemed
-            Integer redeemPoints = intField(payload, "redeemPoints");
-            if (redeemPoints != null && redeemPoints > 0) {
-                loyaltyCommandService.redeemPoints(customerId, orderId, redeemPoints);
-                log.info("[LoyaltyConsumer] Redeemed {} points for customer={} order={}",
-                        redeemPoints, customerId, orderId);
-            }
+            // Redemption is NOT done here: it runs synchronously in the order transaction
+            // (OrderService), so a failed redemption fails the sale with a clear reason.
 
-            // 2. Process EARN for eligible amount
+            // EARN for the eligible amount. "eligibleAmount" is the legacy key written by older
+            // QR events still sitting in the outbox.
             BigDecimal eligibleAmount = decimalField(payload, "loyaltyEligibleAmount");
+            if (eligibleAmount == null) {
+                eligibleAmount = decimalField(payload, "eligibleAmount");
+            }
             if (eligibleAmount != null && eligibleAmount.compareTo(BigDecimal.ZERO) > 0) {
                 loyaltyCommandService.earnPoints(customerId, orderId, eligibleAmount);
                 log.info("[LoyaltyConsumer] Earned points for customer={} order={} eligible={}",
@@ -131,11 +130,6 @@ public class LoyaltyEventConsumer {
     private UUID uuidField(JsonNode node, String field) {
         JsonNode val = node.get(field);
         return (val != null && !val.isNull()) ? UUID.fromString(val.asText()) : null;
-    }
-
-    private Integer intField(JsonNode node, String field) {
-        JsonNode val = node.get(field);
-        return (val != null && !val.isNull()) ? val.asInt() : null;
     }
 
     private BigDecimal decimalField(JsonNode node, String field) {

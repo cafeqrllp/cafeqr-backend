@@ -150,6 +150,9 @@ public class CreateOrderRequest {
     @Schema(description = "Base64-encoded PDF invoice attachment to dispatch with WhatsApp bill")
     private String pdfBase64;
 
+    @Schema(description = "If true, the server does not send the WhatsApp bill; the POS sends it with the invoice PDF via /api/v1/whatsapp/send-order-bill")
+    private Boolean deferWhatsAppDispatch = false;
+
     @Schema(description = "Whether to bypass warning-level stock shortage checks if confirmed by cashier")
     private Boolean confirmStockWarning = false;
 

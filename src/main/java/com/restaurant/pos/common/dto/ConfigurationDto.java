@@ -48,6 +48,15 @@ public class ConfigurationDto {
     @Builder.Default
     private boolean mcpEnabled = false;
     private boolean takeawayAutoPrintKotOnSettle;
+    private boolean cashDrawerEnabled;
+    @Builder.Default
+    private boolean cashDrawerAutoOpenOnSale = true;
+    @Builder.Default
+    private boolean cashDrawerAutoOpenOnOrderSettle = true;
+    @Builder.Default
+    private String cashDrawerOpenTenders = "CASH";
+    @Builder.Default
+    private boolean cashDrawerManualReasonRequired = true;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;
@@ -61,6 +70,8 @@ public class ConfigurationDto {
     private String nonStockSalesPolicy = "NONE";
     @Builder.Default
     private String nonStockTransferPolicy = "NONE";
+    @Builder.Default
+    private String costingMethod = "AVERAGE_PO";
 
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;

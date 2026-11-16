@@ -50,4 +50,27 @@ public class UpdateExpenseRequest implements ExpenseBaseRequest {
 
     @Schema(description = "Online amount for mixed payment", example = "1000.00")
     private BigDecimal onlineAmount;
+
+    @Schema(description = "Supplier / vendor name on the bill", example = "Kerala State Electricity Board")
+    private String supplierName;
+
+    @jakarta.validation.constraints.Pattern(regexp = "^$|^[0-9]{2}[A-Za-z0-9]{13}$", message = "Supplier GSTIN must be 15 characters starting with a 2-digit state code")
+    @Schema(description = "Supplier GSTIN (15 characters)", example = "32AAACK1234F1Z5")
+    private String supplierGstin;
+
+    @Schema(description = "Supplier bill / invoice number", example = "EB-2026-1102")
+    private String billNo;
+
+    @jakarta.validation.constraints.Pattern(regexp = "^$|^[0-9]{4,8}$", message = "HSN/SAC must be 4-8 digits")
+    @Schema(description = "HSN (goods) or SAC (services) code", example = "996911")
+    private String hsnSac;
+
+    @jakarta.validation.constraints.DecimalMin(value = "0", message = "GST rate cannot be negative")
+    @jakarta.validation.constraints.DecimalMax(value = "100", message = "GST rate cannot exceed 100")
+    @Schema(description = "GST rate in percent", example = "18")
+    private BigDecimal gstRate;
+
+    @jakarta.validation.constraints.PositiveOrZero(message = "Tax amount cannot be negative")
+    @Schema(description = "GST included in amount; computed from rate when omitted", example = "228.81")
+    private BigDecimal taxAmount;
 }

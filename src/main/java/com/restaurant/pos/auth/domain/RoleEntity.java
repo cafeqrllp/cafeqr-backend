@@ -52,6 +52,21 @@ public class RoleEntity extends BaseEntity {
     @Builder.Default
     private Boolean canPrintOrder = true;
 
+    /** Manual "No Sale" drawer open from the POS. */
+    @Column(name = "can_open_cash_drawer")
+    @Builder.Default
+    private Boolean canOpenCashDrawer = false;
+
+    /** Drawer kicks automatically when this role settles a drawer-opening tender. */
+    @Column(name = "can_auto_open_cash_drawer")
+    @Builder.Default
+    private Boolean canAutoOpenCashDrawer = true;
+
+    /** Access to the cash drawer history / audit report. */
+    @Column(name = "can_view_cash_drawer_history")
+    @Builder.Default
+    private Boolean canViewCashDrawerHistory = false;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
         name = "role_permissions",

@@ -1,5 +1,6 @@
 package com.restaurant.pos.purchase.listener;
 
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.invoice.domain.Invoice;
 import com.restaurant.pos.invoice.domain.InvoiceLine;
 import com.restaurant.pos.invoice.domain.InvoiceType;
@@ -96,6 +97,7 @@ public class PurchaseOrderVendorBillListener {
                             .discountAmount(ol.getDiscountAmount())
                             .lineTotal(ol.getLineTotal())
                             .unitOfMeasure(ol.getUnitOfMeasure())
+                            .uomPrecision(ol.getUomPrecision())
                             .build();
                     vendorBill.addLine(il);
                 }
@@ -171,7 +173,14 @@ public class PurchaseOrderVendorBillListener {
                 }
             }
         } catch (Exception e) {
+            // Rethrow so the whole PO completion rolls back. Swallowing here left the transaction
+            // rollback-only (-> UnexpectedRollbackException) or completed the PO without its bill.
             log.error("EventListener: Failed to generate Vendor Bill / Payment for PO {}: {}", purchaseOrder.getOrderNo(), e.getMessage(), e);
+            if (e instanceof BusinessException be) {
+                throw be;
+            }
+            throw new BusinessException("Could not generate vendor bill for PO " + purchaseOrder.getOrderNo()
+                    + ": " + e.getMessage());
         }
     }
 }

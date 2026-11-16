@@ -132,7 +132,7 @@ public class AuthService {
                     roleMenus.addAll(allMenus);
                 } else if ("ADMIN".equals(name) || "MANAGER".equals(name)) {
                     allMenus.stream()
-                            .filter(m -> Arrays.asList("Sales", "Product Management", "Dashboard").contains(m.getName()))
+                            .filter(m -> Arrays.asList("Sales", "Product Management", "Dashboard", "Cash Drawer History").contains(m.getName()))
                             .forEach(roleMenus::add);
                 } else if ("STAFF".equals(name)) {
                     allMenus.stream()
@@ -140,12 +140,17 @@ public class AuthService {
                             .forEach(roleMenus::add);
                 }
 
+                // Same cash drawer defaults as migration V1_202 gave existing roles:
+                // admin/manager roles may open the drawer manually and view its history.
+                boolean drawerSupervisor = !"STAFF".equals(name);
                 RoleEntity role = RoleEntity.builder()
                         .name(name)
                         .description("Default " + name + " role")
                         .isactive("Y")
                         .permissions(name.equals("STAFF") ? new HashSet<>() : allPermissions)
                         .menus(roleMenus)
+                        .canOpenCashDrawer(drawerSupervisor)
+                        .canViewCashDrawerHistory(drawerSupervisor)
                         .build();
                 role.setCreatedBy(createdBy);
                 role.setClientId(clientId);
@@ -257,6 +262,9 @@ public class AuthService {
                 .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
                 .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
                 .canPrintOrder(user.getRoleEntity() != null && user.getRoleEntity().getCanPrintOrder() != null ? user.getRoleEntity().getCanPrintOrder() : true)
+                .canOpenCashDrawer(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanOpenCashDrawer()))
+                .canAutoOpenCashDrawer(user.getRoleEntity() == null || !Boolean.FALSE.equals(user.getRoleEntity().getCanAutoOpenCashDrawer()))
+                .canViewCashDrawerHistory(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanViewCashDrawerHistory()))
                 .timezone(user.getOrganization() != null && user.getOrganization().getTimezone() != null ? user.getOrganization().getTimezone() : client.getTimezone())
                 .termsAcceptedVersion(user.getTermsAcceptedVersion())
                 .termsAcceptedAt(user.getTermsAcceptedAt())

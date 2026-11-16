@@ -2130,17 +2130,11 @@ public class OrderService {
                     if (custId == null && saved.getCustomers() != null && !saved.getCustomers().isEmpty()) {
                         custId = saved.getCustomers().get(0).getId();
                     }
-                    if (custId != null) {
-                        try {
-                            loyaltyCommandService.redeemPoints(custId, saved.getId(), order.getRedeemPoints());
-                            log.info(
-                                    "Successfully redeemed loyalty points on order create | orderId={} | points={} | customerId={}",
-                                    saved.getId(), order.getRedeemPoints(), custId);
-                        } catch (Exception ex) {
-                            log.error("Failed to redeem loyalty points on order create | orderId={} | customerId={}",
-                                    saved.getId(), custId, ex);
-                        }
-                    }
+                    // Failure throws BusinessException: the whole order rolls back and the POS shows the reason.
+                    applyLoyaltyRedemption(saved, custId, order.getRedeemPoints(), order.getLoyaltyAmount(),
+                            paymentMethod);
+                } else if (isPositive(order.getLoyaltyAmount())) {
+                    throw new BusinessException("A loyalty discount was applied without redeeming any points.");
                 }
             }
 
@@ -2154,7 +2148,9 @@ public class OrderService {
             if ("COMPLETED".equalsIgnoreCase(saved.getOrderStatus())
                     && "PAID".equalsIgnoreCase(saved.getPaymentStatus())) {
                 try {
-                    if (whatsAppService != null && (hydrated.getInvoicePdfBase64() != null || hydrated.getSourceLocalRef() == null)) {
+                    if (whatsAppService != null && Boolean.TRUE.equals(order.getDeferWhatsAppDispatch())) {
+                        whatsAppService.reserveForClientDispatch(hydrated.getId());
+                    } else if (whatsAppService != null && (hydrated.getInvoicePdfBase64() != null || hydrated.getSourceLocalRef() == null)) {
                         whatsAppService.sendOrderSettledBillAsync(hydrated);
                     }
                 } catch (Exception ex) {
@@ -3256,21 +3252,12 @@ public class OrderService {
             if (custId == null && order.getCustomers() != null && !order.getCustomers().isEmpty()) {
                 custId = order.getCustomers().get(0).getId();
             }
-            if (custId == null && order.getCreditCustomerId() != null) {
-                CreditCustomer cc = creditCustomerRepository.findById(order.getCreditCustomerId()).orElse(null);
-                if (cc != null)
-                    custId = cc.getLinkedCustomerId();
-            }
-            if (custId != null) {
-                try {
-                    loyaltyCommandService.redeemPoints(custId, order.getId(), safeRequest.getRedeemPoints());
-                    log.info("Successfully redeemed loyalty points on settle | orderId={} | points={} | customerId={}",
-                            order.getId(), safeRequest.getRedeemPoints(), custId);
-                } catch (Exception ex) {
-                    log.error("Failed to redeem loyalty points during order settlement | orderId={} | customerId={}",
-                            order.getId(), custId, ex);
-                }
-            }
+            // Failure throws BusinessException: settlement rolls back and the POS shows the reason.
+            applyLoyaltyRedemption(order, custId, safeRequest.getRedeemPoints(), order.getLoyaltyAmount(),
+                    paymentMethod);
+        } else if (isPositive(order.getLoyaltyAmount())
+                && (order.getRedeemPoints() == null || order.getRedeemPoints() <= 0)) {
+            throw new BusinessException("A loyalty discount was applied without redeeming any points.");
         }
 
         order.setReference(paymentMethod);
@@ -3360,7 +3347,9 @@ public class OrderService {
 
         try {
             boolean deferWhatsApp = Boolean.TRUE.equals(safeRequest.getDeferWhatsAppDispatch());
-            if (whatsAppService != null && !deferWhatsApp) {
+            if (whatsAppService != null && deferWhatsApp) {
+                whatsAppService.reserveForClientDispatch(hydrated.getId());
+            } else if (whatsAppService != null) {
                 whatsAppService.sendOrderSettledBillAsync(hydrated);
             }
         } catch (Exception ex) {
@@ -3464,7 +3453,9 @@ public class OrderService {
 
         try {
             boolean deferWhatsApp = Boolean.TRUE.equals(safeRequest.getDeferWhatsAppDispatch());
-            if (whatsAppService != null && !deferWhatsApp) {
+            if (whatsAppService != null && deferWhatsApp) {
+                whatsAppService.reserveForClientDispatch(hydrated.getId());
+            } else if (whatsAppService != null) {
                 whatsAppService.sendOrderSettledBillAsync(hydrated);
             }
         } catch (Exception ex) {
@@ -3695,6 +3686,7 @@ public class OrderService {
                         .manualDiscountAmount(ol.getManualDiscountAmount())
                         .manualDiscountPercent(ol.getManualDiscountPercent())
                         .allocatedOrderDiscount(ol.getAllocatedOrderDiscount())
+                        .uomPrecision(ol.getUomPrecision())
                         .build();
                 invoice.addLine(il);
             }
@@ -3813,9 +3805,14 @@ public class OrderService {
                     null, roundOffAmount, paymentType));
         }
 
-        // Update Invoice status if it exists
+        // Update Invoice status if it exists.
+        // invoice.totalAmount is pre-round-off, while amountPaid is the rounded grand total.
+        // Add the round-off back before comparing, otherwise a fully paid bill shows PARTIAL with a wrong due.
         if (invoice != null) {
-            BigDecimal due = moneyValue(invoice.getTotalAmount()).subtract(moneyValue(amountPaid));
+            BigDecimal effectiveRoundOff = roundOffAmount != null ? roundOffAmount
+                    : (order.getRoundOffAmount() != null ? order.getRoundOffAmount() : BigDecimal.ZERO);
+            BigDecimal payableTotal = moneyValue(invoice.getTotalAmount()).add(moneyValue(effectiveRoundOff));
+            BigDecimal due = payableTotal.subtract(moneyValue(amountPaid));
             if (due.compareTo(BigDecimal.ZERO) <= 0) {
                 invoice.setStatus("PAID");
                 invoice.setIsPaid(true);
@@ -4152,6 +4149,13 @@ public class OrderService {
             return;
         }
 
+        // Idempotency: update/settle of a COMPLETED purchase re-enters here; and the purchase
+        // module's PurchaseOrderInventoryListener may already have received this order.
+        if (isPositive(inventoryService.netPurchaseReceivedQty(order.getId()))) {
+            log.info("processInventoryForOrder: stock already received for order {}", order.getId());
+            return;
+        }
+
         if (order.getLines() != null) {
             for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
                 if (line.getProductId() == null) {
@@ -4167,7 +4171,7 @@ public class OrderService {
                         line.getQuantity() != null ? line.getQuantity() : java.math.BigDecimal.ONE,
                         "PURCHASE",
                         order.getId(),
-                        line.getUnitPrice() != null ? line.getUnitPrice() : java.math.BigDecimal.ZERO,
+                        inventoryService.purchaseUnitCost(order, line),
                         order.getOrgId());
             }
         }
@@ -4614,6 +4618,12 @@ public class OrderService {
             return;
         }
 
+        // Only reverse stock that was actually received and not already reversed.
+        if (!isPositive(inventoryService.netPurchaseReceivedQty(order.getId()))) {
+            log.info("No received stock to reverse for PO {}", order.getOrderNo());
+            return;
+        }
+
         for (com.restaurant.pos.order.domain.OrderLine line : order.getLines()) {
             if (line.getProductId() == null) {
                 continue;
@@ -4630,7 +4640,7 @@ public class OrderService {
                         qty.negate(),
                         "PURCHASE_VOID",
                         order.getId(),
-                        line.getUnitPrice() != null ? line.getUnitPrice() : BigDecimal.ZERO,
+                        inventoryService.purchaseUnitCost(order, line),
                         orgId);
                 log.info("Reversed purchase stock intake {} for item {} in PO {}", qty, line.getProductId(), order.getOrderNo());
             } catch (Exception e) {
@@ -4880,8 +4890,15 @@ public class OrderService {
         if (order == null)
             return BigDecimal.ZERO;
 
-        // Credit orders do not earn loyalty points
+        // Only sales earn loyalty points (never purchases or expenses)
+        if (!isSaleOrder(order)) {
+            return BigDecimal.ZERO;
+        }
+
+        // Credit orders do not earn loyalty points — including orders linked to a
+        // credit customer that were paid by another method (matches PosSaleCommandService).
         boolean isCredit = Boolean.TRUE.equals(order.getIsCredit())
+                || order.getCreditCustomerId() != null
                 || "CREDIT".equalsIgnoreCase(order.getPaymentMethod())
                 || "CREDIT".equalsIgnoreCase(order.getReference());
         if (isCredit) {
@@ -4918,14 +4935,58 @@ public class OrderService {
         return gross.subtract(orderDisc).subtract(loyaltyAmt).max(BigDecimal.ZERO);
     }
 
+    /**
+     * Redeems loyalty points for a sale inside the order transaction. Any problem throws
+     * {@link BusinessException} with a cashier-readable reason, so the order is not saved.
+     * The discount on the bill must equal what the points are worth on the server; the client
+     * value is never trusted on its own.
+     */
+    private void applyLoyaltyRedemption(Order order, UUID customerId, Integer points, BigDecimal clientDiscount,
+            String paymentMethod) {
+        if (points == null || points <= 0) {
+            return;
+        }
+        if (!isSaleOrder(order)) {
+            throw new BusinessException("Loyalty points can only be redeemed on sales.");
+        }
+        boolean isCredit = Boolean.TRUE.equals(order.getIsCredit())
+                || "CREDIT".equalsIgnoreCase(paymentMethod)
+                || "CREDIT".equalsIgnoreCase(order.getPaymentMethod());
+        if (isCredit) {
+            throw new BusinessException("Loyalty points cannot be redeemed on credit sales.");
+        }
+        if (customerId == null) {
+            throw new BusinessException("Select a customer to redeem loyalty points.");
+        }
+
+        com.restaurant.pos.loyalty.command.RedemptionResult result =
+                loyaltyCommandService.redeemPoints(customerId, order.getId(), points);
+        if (result.alreadyApplied()) {
+            log.info("Loyalty redemption already recorded for orderId={}, skipping", order.getId());
+            return;
+        }
+
+        BigDecimal serverDiscount = result.discount();
+        BigDecimal applied = clientDiscount != null ? clientDiscount : BigDecimal.ZERO;
+        // Allow one unit of the last decimal place for client-side rounding.
+        BigDecimal tolerance = BigDecimal.ONE.movePointLeft(Math.max(serverDiscount.scale(), 0));
+        if (serverDiscount.subtract(applied).abs().compareTo(tolerance) > 0) {
+            throw new BusinessException("Loyalty discount mismatch: " + points + " points are worth "
+                    + serverDiscount.toPlainString() + ", but " + applied.toPlainString()
+                    + " was applied. Please re-apply the points and try again.");
+        }
+        log.info("Redeemed loyalty points | orderId={} | points={} | customerId={} | discount={}",
+                order.getId(), points, customerId, serverDiscount);
+    }
+
     private void publishLoyaltyEventIfApplicable(Order hydrated) {
         if (hydrated == null)
             return;
 
         boolean isSale = hydrated.getOrderType() == null || hydrated.getOrderType() == OrderType.SALE;
+        // Credit sales never earn loyalty points, so only fully paid sales qualify.
         boolean isCompletedAndPaid = "COMPLETED".equalsIgnoreCase(hydrated.getOrderStatus())
-                && ("PAID".equalsIgnoreCase(hydrated.getPaymentStatus())
-                        || Boolean.TRUE.equals(hydrated.getIsCredit()));
+                && "PAID".equalsIgnoreCase(hydrated.getPaymentStatus());
 
         if (!isSale || !isCompletedAndPaid) {
             log.info("Loyalty publish skipped: orderId={} | isSale={} | status={} | paymentStatus={}",
@@ -4948,21 +5009,23 @@ public class OrderService {
         if (custId == null && hydrated.getCustomers() != null && !hydrated.getCustomers().isEmpty()) {
             custId = hydrated.getCustomers().get(0).getId();
         }
-        if (custId == null && hydrated.getCreditCustomerId() != null) {
-            CreditCustomer cc = creditCustomerRepository.findById(hydrated.getCreditCustomerId()).orElse(null);
-            if (cc != null)
-                custId = cc.getLinkedCustomerId();
-        }
-
         if (custId == null) {
             log.info("Loyalty publish skipped (no customer attached): orderId={}", hydrated.getId());
             return;
         }
 
         BigDecimal eligible = computeLoyaltyEligibleAmount(hydrated);
+        if (eligible == null || eligible.signum() <= 0) {
+            log.info("Loyalty publish skipped (nothing eligible, e.g. credit sale): orderId={}", hydrated.getId());
+            return;
+        }
         log.info("Publishing LoyaltyOrderSettledEvent | orderId={} | customerId={} | eligible={}",
                 hydrated.getId(), custId, eligible);
 
         eventPublisher.publishEvent(new LoyaltyOrderSettledEvent(this, hydrated, custId, eligible));
+    }
+
+    private static boolean isPositive(BigDecimal value) {
+        return value != null && value.signum() > 0;
     }
 }

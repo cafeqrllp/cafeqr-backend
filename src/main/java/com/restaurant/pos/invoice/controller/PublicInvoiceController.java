@@ -8,6 +8,7 @@ import com.restaurant.pos.common.dto.ApiResponse;
 import com.restaurant.pos.common.entity.SystemConfiguration;
 import com.restaurant.pos.common.exception.ResourceNotFoundException;
 import com.restaurant.pos.common.repository.SystemConfigurationRepository;
+import com.restaurant.pos.common.tax.TaxSplitCalculator;
 import com.restaurant.pos.invoice.domain.Invoice;
 import com.restaurant.pos.invoice.dto.PublicDigitalInvoiceDto;
 import com.restaurant.pos.invoice.repository.InvoiceRepository;
@@ -22,6 +23,7 @@ import com.restaurant.pos.whatsapp.service.WhatsAppBillFormatter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -49,6 +51,7 @@ public class PublicInvoiceController {
      * Public, unauthenticated endpoint to view a digital invoice e-receipt.
      * Polymorphically accepts either invoice ID or order ID.
      */
+    @Transactional(readOnly = true)
     @GetMapping("/view/{id}")
     public ResponseEntity<ApiResponse<PublicDigitalInvoiceDto>> getPublicInvoiceView(@PathVariable UUID id) {
         if (id == null) {
@@ -141,13 +144,9 @@ public class PublicInvoiceController {
 
         // Line Items
         List<PublicDigitalInvoiceDto.LineItemDto> lineDtos = new ArrayList<>();
-        BigDecimal detectedTaxRate = null;
         if (order != null && order.getLines() != null) {
             for (OrderLine l : order.getLines()) {
                 if (l == null) continue;
-                if (detectedTaxRate == null && l.getTaxRate() != null && l.getTaxRate().compareTo(BigDecimal.ZERO) > 0) {
-                    detectedTaxRate = l.getTaxRate();
-                }
                 lineDtos.add(PublicDigitalInvoiceDto.LineItemDto.builder()
                         .productId(l.getProductId())
                         .productName(l.getProductName() != null ? l.getProductName().trim() : "Item")
@@ -172,21 +171,23 @@ public class PublicInvoiceController {
                 ? order.getGrandTotal()
                 : (invoice != null && invoice.getTotalAmount() != null ? invoice.getTotalAmount() : BigDecimal.ZERO);
 
-        BigDecimal cgstRate = null;
-        BigDecimal cgstAmount = null;
-        BigDecimal sgstRate = null;
-        BigDecimal sgstAmount = null;
-
-        if (totalTax != null && totalTax.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-            BigDecimal otherHalf = totalTax.subtract(halfTax);
-            cgstAmount = halfTax;
-            sgstAmount = otherHalf;
-            if (detectedTaxRate != null && detectedTaxRate.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal halfRate = detectedTaxRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
-                cgstRate = halfRate;
-                sgstRate = halfRate;
+        // Tax breakdown: component names/percentages come from Tax Settings (split only when enabled)
+        List<TaxSplitCalculator.TaxLine> taxLines = new ArrayList<>();
+        if (order != null && order.getLines() != null) {
+            for (OrderLine l : order.getLines()) {
+                if (l == null) continue;
+                taxLines.add(new TaxSplitCalculator.TaxLine(l.getTaxRate(), l.getTaxableAmount(), l.getTaxAmount()));
             }
+        }
+        TaxSplitCalculator.Breakdown breakdown = TaxSplitCalculator.build(
+                taxLines, totalTax,
+                sysConfig != null ? sysConfig.getTaxRatesJson() : null,
+                sysConfig != null && sysConfig.isTaxSplitEnabled(),
+                taxLabel, dp);
+        List<PublicDigitalInvoiceDto.TaxSummaryLineDto> taxSummary = new ArrayList<>();
+        for (TaxSplitCalculator.SummaryLine sl : breakdown.summaryLines()) {
+            taxSummary.add(PublicDigitalInvoiceDto.TaxSummaryLineDto.builder()
+                    .label(sl.label()).name(sl.name()).rate(sl.rate()).amount(sl.amount()).build());
         }
 
         String invNo = invoice != null && invoice.getInvoiceNo() != null
@@ -292,10 +293,8 @@ public class PublicInvoiceController {
                 .totalDiscountAmount(discount)
                 .subtotal(subtotal)
                 .totalTaxAmount(totalTax)
-                .cgstRate(cgstRate)
-                .cgstAmount(cgstAmount)
-                .sgstRate(sgstRate)
-                .sgstAmount(sgstAmount)
+                .taxSummary(taxSummary.isEmpty() ? null : taxSummary)
+                .taxSplit(breakdown.split())
                 .roundOffAmount(roundOff)
                 .grandTotal(grandTotal)
                 .lines(lineDtos)

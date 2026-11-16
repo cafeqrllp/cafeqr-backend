@@ -47,6 +47,26 @@ public class InventoryCommandService {
     private final com.restaurant.pos.product.repository.ProductRepository productRepository;
     private final com.restaurant.pos.common.service.SystemConfigurationService configurationService;
     private final OutboxService outboxService;
+    private final com.restaurant.pos.costing.command.CostingService costingService;
+
+    private static final java.util.Set<String> PURCHASE_STOCK_TYPES =
+            java.util.Set.of("PURCHASE", "PURCHASE_RECEIPT", "PURCHASE_VOID");
+
+    /**
+     * Net quantity of purchase stock currently received for a purchase order
+     * (receipts minus voids). Zero means nothing is on hand from this order.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal netPurchaseReceivedQty(UUID purchaseOrderId) {
+        if (purchaseOrderId == null) {
+            return BigDecimal.ZERO;
+        }
+        return stockLedgerRepository.findByReferenceIdAndTransactionTypeIn(purchaseOrderId, PURCHASE_STOCK_TYPES)
+                .stream()
+                .map(StockLedger::getQuantityChange)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
 
     public Optional<StockSnapshot> findStockSnapshot(UUID warehouseId, UUID productId, UUID variantId) {
         java.util.List<StockSnapshot> list = stockSnapshotRepository
@@ -147,6 +167,10 @@ public class InventoryCommandService {
         snapshot.setLastUpdated(LocalDateTime.now());
         stockSnapshotRepository.save(snapshot);
 
+        // Inventory costing: update the running product cost and get the cost for this movement.
+        com.restaurant.pos.costing.domain.CostResult cost = costingService.applyMovement(
+                clientId, orgId, productId, variantId, quantityChange, transactionType, referenceId, unitCost);
+
         StockLedger ledger = StockLedger.builder()
                 .clientId(clientId)
                 .orgId(orgId)
@@ -157,8 +181,11 @@ public class InventoryCommandService {
                 .referenceId(referenceId)
                 .quantityChange(quantityChange)
                 .balanceAfterTransaction(newBalance)
-                .unitCost(unitCost)
-                .createdBy(SecurityUtils.getCurrentUserId())
+                .unitCost(cost.unitCost())
+                .totalCost(cost.totalCost())
+                .costBefore(cost.costBefore())
+                .costAfter(cost.costAfter())
+                .createdBy(SecurityUtils.getCurrentUserId() != null ? SecurityUtils.getCurrentUserId().toString() : null)
                 .build();
 
         stockLedgerRepository.save(ledger);
@@ -232,13 +259,36 @@ public class InventoryCommandService {
             boolean alreadyCompleted = "COMPLETED".equalsIgnoreCase(previousStatus);
             if (!alreadyCompleted) {
                 for (StockAdjustmentLine line : saved.getLines()) {
+                    // Stock going out is valued at the current stock cost, so the adjustment's
+                    // accounting journal matches the cost taken out of inventory.
+                    // Stock coming in without a cost entered is valued at the current stock cost too.
+                    boolean stockOut = line.getQuantityChange() != null && line.getQuantityChange().signum() < 0;
+                    boolean noCostEntered = line.getUnitCost() == null || line.getUnitCost().signum() <= 0;
+                    if (stockOut || noCostEntered) {
+                        BigDecimal current = costingService.getCurrentCost(saved.getOrgId(), line.getProductId(), line.getVariantId());
+                        if (current != null && current.signum() > 0) {
+                            line.setUnitCost(current);
+                        }
+                    }
                     updateStock(saved.getWarehouseId(), line.getProductId(), line.getVariantId(), 
                             line.getQuantityChange(), "ADJUSTMENT", saved.getId(), line.getUnitCost(),
                             saved.getOrgId(), saved.getClientId());
                 }
             }
+        } else if (("CANCELLED".equalsIgnoreCase(saved.getStatus()) || "VOIDED".equalsIgnoreCase(saved.getStatus()))
+                && "COMPLETED".equalsIgnoreCase(previousStatus) && saved.getLines() != null) {
+            // Voiding a completed adjustment puts the stock (and its cost) back the way it was.
+            for (StockAdjustmentLine line : saved.getLines()) {
+                if (line.getQuantityChange() == null || line.getQuantityChange().signum() == 0) {
+                    continue;
+                }
+                updateStock(saved.getWarehouseId(), line.getProductId(), line.getVariantId(),
+                        line.getQuantityChange().negate(), "ADJUSTMENT_VOID", saved.getId(), line.getUnitCost(),
+                        saved.getOrgId(), saved.getClientId());
+            }
+            accountingPostingService.reverseSource("STOCK_ADJUSTMENT", saved.getId(), "Stock adjustment voided");
         }
-        
+
         accountingPostingService.postStockAdjustment(saved);
         return saved;
     }

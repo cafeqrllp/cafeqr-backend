@@ -272,6 +272,11 @@ public class SystemConfigurationService {
                 .payrollEnabled(false)
                 .mcpEnabled(false)
                 .takeawayAutoPrintKotOnSettle(false)
+                .cashDrawerEnabled(false)
+                .cashDrawerAutoOpenOnSale(true)
+                .cashDrawerAutoOpenOnOrderSettle(true)
+                .cashDrawerOpenTenders("CASH")
+                .cashDrawerManualReasonRequired(true)
                 .takeawayHideKitchenMode(false)
                 .dineInAutoPrintKotOnSettle(false)
                 .defaultBillingUiMode("board")
@@ -279,6 +284,7 @@ public class SystemConfigurationService {
                 .posV2Enabled(false)
                 .nonStockSalesPolicy("NONE")
                 .nonStockTransferPolicy("NONE")
+                .costingMethod("AVERAGE_PO")
                 .offlineSyncEnabled(false)
                 .offlineSyncInterval(60)
                 .offlineLeaseBlockSize(100)
@@ -325,12 +331,18 @@ public class SystemConfigurationService {
                 .payrollEnabled(source.isPayrollEnabled())
                 .mcpEnabled(source.isMcpEnabled())
                 .takeawayAutoPrintKotOnSettle(source.isTakeawayAutoPrintKotOnSettle())
+                .cashDrawerEnabled(source.isCashDrawerEnabled())
+                .cashDrawerAutoOpenOnSale(source.isCashDrawerAutoOpenOnSale())
+                .cashDrawerAutoOpenOnOrderSettle(source.isCashDrawerAutoOpenOnOrderSettle())
+                .cashDrawerOpenTenders(source.getCashDrawerOpenTenders())
+                .cashDrawerManualReasonRequired(source.isCashDrawerManualReasonRequired())
                 .takeawayHideKitchenMode(source.isTakeawayHideKitchenMode())
                 .dineInAutoPrintKotOnSettle(source.isDineInAutoPrintKotOnSettle())
                 .dineInHideKitchenMode(source.isDineInHideKitchenMode())
                 .defaultBillingUiMode(source.getDefaultBillingUiMode())
                 .nonStockSalesPolicy(source.getNonStockSalesPolicy() != null ? source.getNonStockSalesPolicy() : "NONE")
                 .nonStockTransferPolicy(source.getNonStockTransferPolicy() != null ? source.getNonStockTransferPolicy() : "NONE")
+                .costingMethod(source.getCostingMethod() != null ? source.getCostingMethod() : "AVERAGE_PO")
                 .offlineSyncEnabled(source.isOfflineSyncEnabled())
                 .offlineSyncInterval(source.getOfflineSyncInterval())
                 .offlineLeaseBlockSize(source.getOfflineLeaseBlockSize())
@@ -496,6 +508,11 @@ public class SystemConfigurationService {
                 .payrollEnabled(entity.isPayrollEnabled())
                 .mcpEnabled(MCP_AVAILABLE && entity.isMcpEnabled())
                 .takeawayAutoPrintKotOnSettle(entity.isTakeawayAutoPrintKotOnSettle())
+                .cashDrawerEnabled(entity.isCashDrawerEnabled())
+                .cashDrawerAutoOpenOnSale(entity.isCashDrawerAutoOpenOnSale())
+                .cashDrawerAutoOpenOnOrderSettle(entity.isCashDrawerAutoOpenOnOrderSettle())
+                .cashDrawerOpenTenders(entity.getCashDrawerOpenTenders() != null ? entity.getCashDrawerOpenTenders() : "CASH")
+                .cashDrawerManualReasonRequired(entity.isCashDrawerManualReasonRequired())
                 .takeawayHideKitchenMode(entity.isTakeawayHideKitchenMode())
                 .dineInAutoPrintKotOnSettle(entity.isDineInAutoPrintKotOnSettle())
                 .dineInHideKitchenMode(entity.isDineInHideKitchenMode())
@@ -504,6 +521,7 @@ public class SystemConfigurationService {
                 .posV2Enabled(entity.getSalesVersion() != null && "v2".equalsIgnoreCase(entity.getSalesVersion()))
                 .nonStockSalesPolicy(entity.getNonStockSalesPolicy() != null ? entity.getNonStockSalesPolicy() : "NONE")
                 .nonStockTransferPolicy(entity.getNonStockTransferPolicy() != null ? entity.getNonStockTransferPolicy() : "NONE")
+                .costingMethod(entity.getCostingMethod() != null ? entity.getCostingMethod() : "AVERAGE_PO")
                 .offlineSyncEnabled(entity.isOfflineSyncEnabled())
                 .offlineSyncInterval(entity.getOfflineSyncInterval())
                 .offlineLeaseBlockSize(entity.getOfflineLeaseBlockSize())
@@ -578,6 +596,11 @@ public class SystemConfigurationService {
         entity.setPayrollEnabled(dto.isPayrollEnabled());
         entity.setMcpEnabled(MCP_AVAILABLE && dto.isMcpEnabled());
         entity.setTakeawayAutoPrintKotOnSettle(dto.isTakeawayAutoPrintKotOnSettle());
+        entity.setCashDrawerEnabled(dto.isCashDrawerEnabled());
+        entity.setCashDrawerAutoOpenOnSale(dto.isCashDrawerAutoOpenOnSale());
+        entity.setCashDrawerAutoOpenOnOrderSettle(dto.isCashDrawerAutoOpenOnOrderSettle());
+        entity.setCashDrawerOpenTenders(com.restaurant.pos.cashdrawer.domain.CashDrawerTenders.normalize(dto.getCashDrawerOpenTenders()));
+        entity.setCashDrawerManualReasonRequired(dto.isCashDrawerManualReasonRequired());
         entity.setTakeawayHideKitchenMode(dto.isTakeawayHideKitchenMode());
         entity.setDineInAutoPrintKotOnSettle(dto.isDineInAutoPrintKotOnSettle());
         entity.setDineInHideKitchenMode(dto.isDineInHideKitchenMode());
@@ -594,6 +617,10 @@ public class SystemConfigurationService {
         }
         if (dto.getNonStockTransferPolicy() != null) {
             entity.setNonStockTransferPolicy(dto.getNonStockTransferPolicy().trim().toUpperCase());
+        }
+        if (dto.getCostingMethod() != null) {
+            entity.setCostingMethod(com.restaurant.pos.costing.domain.CostingMethod
+                    .fromString(dto.getCostingMethod()).name());
         }
         entity.setOfflineSyncEnabled(dto.isOfflineSyncEnabled());
         entity.setOfflineSyncInterval(dto.getOfflineSyncInterval());

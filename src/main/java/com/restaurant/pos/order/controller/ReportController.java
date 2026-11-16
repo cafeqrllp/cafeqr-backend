@@ -88,6 +88,17 @@ public class ReportController {
         return ResponseEntity.ok(ApiResponse.success(reportService.getTaxSummary(from, to, orgId, terminalId)));
     }
 
+    @GetMapping("/sales-gst-register")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    public ResponseEntity<ApiResponse<List<com.restaurant.pos.order.dto.report.SalesGstRegisterRowDto>>> getSalesGstRegister(
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID terminalId) {
+        validateReportRange(from, to);
+        return ResponseEntity.ok(ApiResponse.success(reportService.getSalesGstRegister(from, to, orgId, terminalId)));
+    }
+
     @GetMapping("/tax-report-details")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     public ResponseEntity<ApiResponse<TaxReportDetailsDto>> getTaxReportDetails(

@@ -2,15 +2,9 @@ package com.restaurant.pos.whatsapp.service;
 
 import com.restaurant.pos.client.domain.Client;
 import com.restaurant.pos.client.domain.Organization;
-import com.restaurant.pos.common.entity.SystemConfiguration;
-import com.restaurant.pos.common.repository.SystemConfigurationRepository;
+import com.restaurant.pos.common.context.TimezoneResolver;
 import com.restaurant.pos.invoice.domain.Invoice;
 import com.restaurant.pos.order.domain.Order;
-import com.restaurant.pos.order.domain.OrderLine;
-import com.restaurant.pos.order.domain.Payment;
-import com.restaurant.pos.order.domain.PaymentSplit;
-import com.restaurant.pos.order.repository.PaymentRepository;
-import com.restaurant.pos.order.repository.PaymentSplitRepository;
 import com.restaurant.pos.purchasing.domain.Currency;
 import com.restaurant.pos.purchasing.repository.CurrencyRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -20,9 +14,12 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -30,299 +27,149 @@ import java.util.UUID;
 @Component
 public class WhatsAppBillFormatter {
 
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a");
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.ENGLISH);
+
+    /**
+     * ISO-3166 alpha-2 country → { international dialling code, national mobile number length (0 = variable) }.
+     * Covers the countries offered at signup; unknown countries fall back to legacy behaviour.
+     */
+    private static final Map<String, String[]> DIAL_CODES = Map.ofEntries(
+            Map.entry("IN", new String[]{"91", "10"}),
+            Map.entry("AE", new String[]{"971", "9"}),
+            Map.entry("SA", new String[]{"966", "9"}),
+            Map.entry("QA", new String[]{"974", "8"}),
+            Map.entry("OM", new String[]{"968", "8"}),
+            Map.entry("KW", new String[]{"965", "8"}),
+            Map.entry("BH", new String[]{"973", "8"}),
+            Map.entry("ZA", new String[]{"27", "9"}),
+            Map.entry("US", new String[]{"1", "10"}),
+            Map.entry("CA", new String[]{"1", "10"}),
+            Map.entry("GB", new String[]{"44", "10"}),
+            Map.entry("AU", new String[]{"61", "9"}),
+            Map.entry("SG", new String[]{"65", "8"}),
+            Map.entry("MY", new String[]{"60", "0"}),
+            Map.entry("DE", new String[]{"49", "0"}),
+            Map.entry("FR", new String[]{"33", "9"}),
+            Map.entry("IT", new String[]{"39", "0"}),
+            Map.entry("ES", new String[]{"34", "9"}),
+            Map.entry("NL", new String[]{"31", "9"}),
+            Map.entry("CH", new String[]{"41", "9"}),
+            Map.entry("JP", new String[]{"81", "0"}),
+            Map.entry("KR", new String[]{"82", "0"}),
+            Map.entry("CN", new String[]{"86", "11"}),
+            Map.entry("BR", new String[]{"55", "0"})
+    );
+
+    /** Fallback zones for single-timezone countries when the store has no timezone configured. */
+    private static final Map<String, String> COUNTRY_ZONES = Map.ofEntries(
+            Map.entry("IN", "Asia/Kolkata"),
+            Map.entry("AE", "Asia/Dubai"),
+            Map.entry("SA", "Asia/Riyadh"),
+            Map.entry("QA", "Asia/Qatar"),
+            Map.entry("OM", "Asia/Muscat"),
+            Map.entry("KW", "Asia/Kuwait"),
+            Map.entry("BH", "Asia/Bahrain"),
+            Map.entry("ZA", "Africa/Johannesburg"),
+            Map.entry("SG", "Asia/Singapore"),
+            Map.entry("GB", "Europe/London")
+    );
 
     @Autowired(required = false)
     private CurrencyRepository currencyRepository;
 
     @Autowired(required = false)
-    private SystemConfigurationRepository systemConfigurationRepository;
-
-    @Autowired(required = false)
-    private PaymentRepository paymentRepository;
-
-    @Autowired(required = false)
-    private PaymentSplitRepository paymentSplitRepository;
+    private TimezoneResolver timezoneResolver;
 
     /**
-     * Formats Order, Invoice, and Store details into the Zeev-style minimalist smart digital e-bill notification.
-     * Matches the industry standard model with direct "Visit Bill" link.
+     * Formats the short digital-bill WhatsApp message: store, customer greeting, bill number, token, date,
+     * total with paid / due status. Sent as the caption of the attached invoice PDF (no web link).
      */
-    public String formatZeevStyleBill(Order order, Invoice invoice, Organization org, Client client, String publicInvoiceUrl) {
+    public String formatDigitalBill(Order order, Invoice invoice, Organization org, Client client) {
         if (order == null) return "";
 
-        String storeName = getStoreName(org, client);
+        String storeName = plain(getStoreName(org, client));
         String currency = resolveCurrencySymbol(order, org, client);
         int dp = resolveCurrencyDecimals(order, org, client);
-        String invNo = (invoice != null && invoice.getInvoiceNo() != null) ? invoice.getInvoiceNo() : order.getOrderNo();
-        Integer dailyBillNo = (invoice != null && invoice.getDailyBillNo() != null)
+        String billNo = (invoice != null && invoice.getInvoiceNo() != null && !invoice.getInvoiceNo().isBlank())
+                ? invoice.getInvoiceNo().trim()
+                : (order.getOrderNo() != null && !order.getOrderNo().isBlank() ? order.getOrderNo().trim() : null);
+        Integer token = (invoice != null && invoice.getDailyBillNo() != null)
                 ? invoice.getDailyBillNo()
                 : order.getDailyBillNo();
+        LocalDateTime date = (invoice != null && invoice.getInvoiceDate() != null)
+                ? invoice.getInvoiceDate()
+                : order.getCreatedAt();
         BigDecimal grandTotal = order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO;
 
         StringBuilder sb = new StringBuilder();
-        sb.append("New Bill Loaded 🧾\n\n");
-        sb.append("Thank you for your recent order at *").append(storeName).append("*.\n\n");
+        sb.append("🧾 *Your bill from ").append(storeName).append("*\n\n");
 
-        if (dailyBillNo != null) {
-            sb.append("*Token #").append(dailyBillNo).append("* | #").append(invNo);
+        String customerName = plain(order.getCustomerName());
+        if (!customerName.isBlank() && !isGenericGuest(customerName)) {
+            sb.append("Hi ").append(customerName).append(", thanks for visiting!\n\n");
         } else {
-            sb.append("#").append(invNo);
-        }
-        sb.append(" | *").append(formatMoney(grandTotal, currency, dp)).append("* @").append(storeName).append("\n\n");
-
-        if (publicInvoiceUrl != null && !publicInvoiceUrl.isBlank()) {
-            sb.append("👉 *Visit Bill:*\n").append(publicInvoiceUrl.trim()).append("\n\n");
+            sb.append("Thanks for visiting!\n\n");
         }
 
-        sb.append("Go Green – say no to paper bills 🌱\n\n");
-        sb.append("*Powered by Cafe QR POS* ⚡");
+        if (billNo != null) {
+            sb.append("Bill No: ").append(billNo).append("\n");
+        }
+        if (token != null) {
+            sb.append("Token: #").append(token).append("\n");
+        }
+        if (date != null) {
+            sb.append("Date: ").append(toStoreTime(date, order, org, client).format(DATE_FMT)).append("\n");
+        }
+        sb.append("Total: *").append(formatMoney(grandTotal, currency, dp)).append("*");
+        String status = paymentStatusLabel(order);
+        if (status != null) {
+            sb.append(" (").append(status).append(")");
+        }
+        sb.append("\n");
 
+        sb.append("\n_Powered by Cafe QR POS_");
         return sb.toString();
     }
 
     /**
-     * Formats Order, Invoice, and Store details into the concrete industry-standard WhatsApp Digital Tax Invoice.
+     * Stored timestamps are UTC (JVM + Hibernate run in UTC). Converts to the store's timezone, resolved the same
+     * way as the rest of the backend (branch → client), so the message shows the same time as the invoice PDF.
      */
-    public String formatBillMessage(Order order, Invoice invoice, Organization org, Client client) {
-        if (order == null) return "";
-
-        StringBuilder sb = new StringBuilder();
-
-        String storeName = getStoreName(org, client);
-        String currency = resolveCurrencySymbol(order, org, client);
-        int dp = resolveCurrencyDecimals(order, org, client);
-        SystemConfiguration sysConfig = resolveSystemConfiguration(order, org, client);
-        String taxLabel = (sysConfig != null && sysConfig.getTaxLabelGlobal() != null && !sysConfig.getTaxLabelGlobal().isBlank())
-                ? sysConfig.getTaxLabelGlobal().trim()
-                : "GST";
-
-        // 1. Header & Store Branding
-        sb.append("🧾 *TAX INVOICE*\n");
-        sb.append("🍽️ *").append(storeName.toUpperCase()).append("*\n");
-        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-        // Customer Greeting
-        String customerName = order.getCustomerName();
-        if (customerName != null && !customerName.isBlank() && !isGenericGuest(customerName)) {
-            sb.append("Hi *").append(customerName.trim()).append("*, thank you for dining with us! 😊\n\n");
-        } else {
-            sb.append("Thank you for dining with us! 😊\n\n");
-        }
-
-        // Bill Meta Info
-        String invNo = (invoice != null && invoice.getInvoiceNo() != null) ? invoice.getInvoiceNo() : order.getOrderNo();
-        Integer dailyBillNo = (invoice != null && invoice.getDailyBillNo() != null) 
-                ? invoice.getDailyBillNo() 
-                : order.getDailyBillNo();
-
-        if (dailyBillNo != null) {
-            sb.append("*Token / Bill:* #").append(dailyBillNo).append("  |  *Invoice No:* #").append(invNo).append("\n");
-        } else {
-            sb.append("*Invoice No:* #").append(invNo).append("\n");
-        }
-
-        if (order.getOrderNo() != null && !order.getOrderNo().equals(invNo)) {
-            sb.append("*Order Ref:* #").append(order.getOrderNo()).append("\n");
-        }
-
-        LocalDateTime date = (invoice != null && invoice.getInvoiceDate() != null) 
-                ? invoice.getInvoiceDate() 
-                : (order.getCreatedAt() != null ? order.getCreatedAt() : LocalDateTime.now());
-        sb.append("*Date & Time:* ").append(date.format(DATE_FMT)).append("\n");
-
-        // Order Type & Table
-        String fulfillment = formatFulfillment(order);
-        if (!fulfillment.isBlank()) {
-            sb.append("*Type:* ").append(fulfillment).append("\n");
-        }
-
-        sb.append("\n*ITEMS ORDERED:*\n");
-        sb.append("────────────────────────────\n");
-
-        // 2. Line Items
-        List<OrderLine> lines = order.getLines();
-        if (lines != null && !lines.isEmpty()) {
-            for (OrderLine line : lines) {
-                if (line == null) continue;
-                String prodName = line.getProductName() != null ? line.getProductName() : "Item";
-                String note = line.getDescription();
-                BigDecimal qty = line.getQuantity() != null ? line.getQuantity() : BigDecimal.ONE;
-                BigDecimal unitPrice = line.getUnitPrice();
-                BigDecimal lineTotal = line.getLineTotal() != null ? line.getLineTotal() : BigDecimal.ZERO;
-
-                sb.append("• ").append(formatQty(qty)).append(" × *").append(prodName.trim()).append("*");
-                sb.append("  ➜  ").append(formatMoney(lineTotal, currency, dp)).append("\n");
-
-                if (qty.compareTo(BigDecimal.ONE) > 0 && unitPrice != null) {
-                    sb.append("  _(Rate: ").append(formatMoney(unitPrice, currency, dp)).append(" each)_\n");
-                }
-                if (note != null && !note.isBlank()) {
-                    sb.append("  _(Note: ").append(note.trim()).append(")_\n");
-                }
-            }
-        } else {
-            sb.append("• Order Items\n");
-        }
-
-        sb.append("────────────────────────────\n");
-
-        // 3. Totals Breakdown (Option B: Gross Subtotal with tax specified right below)
-        BigDecimal grossAmount = order.getGrossAmount();
-        BigDecimal discount = order.getTotalDiscountAmount();
-        BigDecimal subtotal = order.getTotalAmount() != null 
-                ? order.getTotalAmount() 
-                : (grossAmount != null ? grossAmount : order.getGrandTotal());
-        BigDecimal totalTax = order.getTotalTaxAmount();
-        BigDecimal roundOff = order.getRoundOffAmount();
-        BigDecimal grandTotal = order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO;
-
-        if (discount != null && discount.compareTo(BigDecimal.ZERO) > 0 && grossAmount != null) {
-            sb.append("*Gross Total:* ").append(formatMoney(grossAmount, currency, dp)).append("\n");
-            sb.append("*Discount:* -").append(formatMoney(discount, currency, dp)).append("\n");
-        }
-
-        sb.append("*Subtotal:* ").append(formatMoney(subtotal, currency, dp)).append("\n");
-
-        if (totalTax != null && totalTax.compareTo(BigDecimal.ZERO) > 0) {
-            sb.append("*Includes Taxes / ").append(taxLabel).append(":* ").append(formatMoney(totalTax, currency, dp)).append("\n");
-
-            // 50/50 CGST & SGST breakdown for GST
-            boolean isGst = "GST".equalsIgnoreCase(taxLabel);
-            if (isGst) {
-                BigDecimal halfTax = totalTax.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                BigDecimal otherHalf = totalTax.subtract(halfTax);
-
-                BigDecimal firstRate = null;
-                if (lines != null) {
-                    for (OrderLine l : lines) {
-                        if (l != null && l.getTaxRate() != null && l.getTaxRate().compareTo(BigDecimal.ZERO) > 0) {
-                            firstRate = l.getTaxRate();
-                            break;
-                        }
-                    }
-                }
-
-                if (firstRate != null && firstRate.compareTo(BigDecimal.ZERO) > 0) {
-                    BigDecimal halfRate = firstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
-                    sb.append("  • CGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(halfTax, currency, dp)).append("\n");
-                    sb.append("  • SGST (").append(fmtRate(halfRate)).append("%): ").append(formatMoney(otherHalf, currency, dp)).append("\n");
-                } else {
-                    sb.append("  • CGST: ").append(formatMoney(halfTax, currency, dp)).append("\n");
-                    sb.append("  • SGST: ").append(formatMoney(otherHalf, currency, dp)).append("\n");
-                }
-            }
-        }
-
-        if (roundOff != null && roundOff.compareTo(BigDecimal.ZERO) != 0) {
-            String sign = roundOff.compareTo(BigDecimal.ZERO) > 0 ? "+" : "-";
-            sb.append("*Round Off:* ").append(sign).append(formatMoney(roundOff.abs(), currency, dp)).append("\n");
-        }
-
-        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-        // 4. Grand Total & Payment Mode (Final bill summary at bottom)
-        sb.append("*TOTAL PAID:* *").append(formatMoney(grandTotal, currency, dp)).append("*\n");
-
-        String payMethod = order.getReference() != null && !order.getReference().isBlank() 
-                ? order.getReference().toUpperCase() 
-                : (order.getPaymentMethod() != null ? order.getPaymentMethod().toUpperCase() : "CASH");
-
-        List<PaymentSplit> splits = null;
-        if (paymentRepository != null && paymentSplitRepository != null && order.getId() != null) {
+    LocalDateTime toStoreTime(LocalDateTime utc, Order order, Organization org, Client client) {
+        ZoneId zone = null;
+        UUID clientId = order.getClientId() != null ? order.getClientId() : (client != null ? client.getId() : null);
+        UUID orgId = order.getOrgId() != null ? order.getOrgId() : (org != null ? org.getId() : null);
+        if (timezoneResolver != null && (clientId != null || orgId != null)) {
             try {
-                List<Payment> payments = paymentRepository.findByOrderId(order.getId());
-                for (Payment p : payments) {
-                    if ("Y".equalsIgnoreCase(p.getIsactive()) && !"VOID".equalsIgnoreCase(p.getDocStatus())) {
-                        List<PaymentSplit> psList = paymentSplitRepository.findByPaymentIdOrderByCreatedAtAsc(p.getId());
-                        if (psList != null && !psList.isEmpty()) {
-                            if (splits == null) splits = new ArrayList<>();
-                            splits.addAll(psList);
-                        } else if ("MIXED".equalsIgnoreCase(p.getPaymentMethod()) && p.getAmountPaid() != null) {
-                            if (splits == null) splits = new ArrayList<>();
-                            BigDecimal total = p.getAmountPaid();
-                            BigDecimal half = total.divide(BigDecimal.valueOf(2), dp, RoundingMode.HALF_UP);
-                            BigDecimal rem = total.subtract(half);
-                            splits.add(PaymentSplit.builder().paymentMethod("CASH").amount(half).build());
-                            splits.add(PaymentSplit.builder().paymentMethod("ONLINE").amount(rem).build());
-                        } else if (payments.size() > 1 && p.getAmountPaid() != null && p.getAmountPaid().compareTo(BigDecimal.ZERO) > 0) {
-                            if (splits == null) splits = new ArrayList<>();
-                            splits.add(PaymentSplit.builder()
-                                    .paymentMethod(p.getPaymentMethod() != null ? p.getPaymentMethod().toUpperCase() : "PAYMENT")
-                                    .amount(p.getAmountPaid())
-                                    .build());
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
-
-        if (splits != null && !splits.isEmpty()) {
-            sb.append("*Payment Mode:* MIXED (PAID)\n");
-            sb.append("*Payment Breakdown:*\n");
-            for (PaymentSplit sp : splits) {
-                sb.append("  • ").append(sp.getPaymentMethod() != null ? sp.getPaymentMethod().toUpperCase() : "PAYMENT")
-                  .append(": ").append(formatMoney(sp.getAmount(), currency, dp)).append("\n");
+                zone = timezoneResolver.resolveTimezone(clientId, orgId);
+            } catch (Exception ex) {
+                log.warn("[WhatsAppBillFormatter] Could not resolve timezone for order {}: {}", order.getId(), ex.getMessage());
             }
-        } else {
-            sb.append("*Payment Mode:* ").append(payMethod);
-            if ("PAID".equalsIgnoreCase(order.getPaymentStatus()) || Boolean.TRUE.equals(order.getIsReceived())) {
-                sb.append(" (PAID)");
+        }
+        if (zone == null || "UTC".equals(zone.getId()) || "Z".equals(zone.getId())) {
+            // No timezone configured: fall back to the store country's zone (single-timezone countries only)
+            String country = client != null && client.getCountry() != null ? client.getCountry().trim().toUpperCase(Locale.ROOT) : null;
+            String countryZone = country != null ? COUNTRY_ZONES.get(country) : null;
+            if (countryZone != null) {
+                zone = ZoneId.of(countryZone);
             }
-            sb.append("\n");
         }
-        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-
-        // 5. Store Details & Compliance Footer
-        String address = (org != null && org.getAddress() != null && !org.getAddress().isBlank()) 
-                ? org.getAddress() 
-                : (client != null ? client.getAddress() : null);
-        String phone = (org != null && org.getPhone() != null && !org.getPhone().isBlank()) 
-                ? org.getPhone() 
-                : (client != null ? client.getPhone() : null);
-
-        if (address != null && !address.isBlank()) {
-            sb.append("📍 *").append(address.trim()).append("*\n");
+        if (zone == null) {
+            return utc;
         }
-        if (phone != null && !phone.isBlank()) {
-            sb.append("📞 Contact: ").append(phone.trim()).append("\n");
-        }
+        return utc.atZone(ZoneOffset.UTC).withZoneSameInstant(zone).toLocalDateTime();
+    }
 
-        // GSTIN & FSSAI
-        String gstin = (org != null && org.getGstin() != null && !org.getGstin().isBlank()) 
-                ? org.getGstin() 
-                : (client != null ? client.getGstNumber() : null);
-        String fssai = (client != null && client.getFssaiNumber() != null && !client.getFssaiNumber().isBlank()) 
-                ? client.getFssaiNumber() 
-                : null;
-
-        if (gstin != null && !gstin.isBlank()) {
-            sb.append("🧾 *GSTIN:* ").append(gstin.trim());
-            if (fssai != null && !fssai.isBlank()) {
-                sb.append("  |  *FSSAI:* ").append(fssai.trim());
-            }
-            sb.append("\n");
-        } else if (fssai != null && !fssai.isBlank()) {
-            sb.append("🧾 *FSSAI:* ").append(fssai.trim()).append("\n");
-        }
-
-        // Feedback / Google Review link
-        String mapsUrl = (org != null && org.getGoogleMapsUrl() != null && !org.getGoogleMapsUrl().isBlank())
-                ? org.getGoogleMapsUrl()
-                : (client != null ? client.getGoogleMapsUrl() : null);
-        if (mapsUrl != null && !mapsUrl.isBlank()) {
-            sb.append("\n⭐ *Loved your meal? Rate us here:*\n").append(mapsUrl.trim()).append("\n");
-        }
-
-        // Custom Bill Footer from System Configuration
-        if (sysConfig != null && sysConfig.getBillFooter() != null && !sysConfig.getBillFooter().isBlank()) {
-            sb.append("\n_").append(sysConfig.getBillFooter().trim()).append("_\n");
-        }
-
-        sb.append("\n🌱 _Thank you for choosing a digital bill!_\n");
-        sb.append("_Powered by Cafe QR POS_\n");
-        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        return sb.toString();
+    /** "Paid", "Partly paid", "Due – on credit", or null when the status is unknown. */
+    String paymentStatusLabel(Order order) {
+        String ps = order.getPaymentStatus() != null ? order.getPaymentStatus().trim().toUpperCase(Locale.ROOT) : "";
+        if ("PAID".equals(ps)) return "Paid";
+        if ("PARTIAL".equals(ps)) return "Partly paid";
+        boolean credit = Boolean.TRUE.equals(order.getIsCredit())
+                || "CREDIT".equalsIgnoreCase(order.getReference())
+                || "CREDIT".equalsIgnoreCase(order.getPaymentMethod());
+        if (credit) return "Due – on credit";
+        return null;
     }
 
     /**
@@ -371,11 +218,11 @@ public class WhatsAppBillFormatter {
         }
 
         try {
-            UUID clientId = order != null && order.getClientId() != null 
-                    ? order.getClientId() 
+            UUID clientId = order != null && order.getClientId() != null
+                    ? order.getClientId()
                     : (org != null && org.getClientId() != null ? org.getClientId() : (client != null ? client.getId() : null));
-            UUID orgId = order != null && order.getOrgId() != null 
-                    ? order.getOrgId() 
+            UUID orgId = order != null && order.getOrgId() != null
+                    ? order.getOrgId()
                     : (org != null ? org.getId() : null);
 
             // 1. If order explicitly references a currency_id from the Currency Master
@@ -419,42 +266,77 @@ public class WhatsAppBillFormatter {
         return "";
     }
 
-    private SystemConfiguration resolveSystemConfiguration(Order order, Organization org, Client client) {
-        if (systemConfigurationRepository == null) return null;
-        try {
-            UUID clientId = order != null && order.getClientId() != null 
-                    ? order.getClientId() 
-                    : (org != null && org.getClientId() != null ? org.getClientId() : (client != null ? client.getId() : null));
-            UUID orgId = order != null && order.getOrgId() != null 
-                    ? order.getOrgId() 
-                    : (org != null ? org.getId() : null);
-
-            if (clientId != null) {
-                if (orgId != null) {
-                    Optional<SystemConfiguration> opt = systemConfigurationRepository.findFirstByClientIdAndOrgId(clientId, orgId);
-                    if (opt.isPresent()) return opt.get();
-                }
-                return systemConfigurationRepository.findFirstByClientIdAndOrgIdIsNull(clientId).orElse(null);
-            }
-        } catch (Exception ex) {
-            log.warn("[WhatsAppBillFormatter] Error resolving system configuration: {}", ex.getMessage());
-        }
-        return null;
+    /**
+     * Legacy normalisation with no country context (used by the official OTP session).
+     * Assumes India for bare 10-digit numbers — prefer {@link #normalizePhoneNumber(String, String)}.
+     */
+    public String normalizePhoneNumber(String rawPhone) {
+        return normalizePhoneNumber(rawPhone, null);
     }
 
     /**
-     * Normalizes phone number into international WhatsApp format (e.g. 919847920009).
+     * Normalises a phone number into WhatsApp's international digits-only format (e.g. 971501234567).
+     *
+     * @param countryIso2 the store's country (ISO-3166 alpha-2, e.g. "IN", "AE", "ZA"); local numbers get
+     *                    this country's dialling code. When null/unknown, falls back to the legacy India rule.
+     * @return digits with country code, or null when the number cannot be resolved.
      */
-    public String normalizePhoneNumber(String rawPhone) {
+    public String normalizePhoneNumber(String rawPhone, String countryIso2) {
         if (rawPhone == null || rawPhone.isBlank()) return null;
-        String digits = rawPhone.replaceAll("[^0-9]", "");
-        if (digits.length() < 10) return null;
+        String trimmed = rawPhone.trim();
+        String digits = trimmed.replaceAll("[^0-9]", "");
+        if (digits.isEmpty()) return null;
 
-        // If 10 digits (Standard Indian Mobile Number without prefix), prepend 91
+        // Explicit international form: +971..., 00971...
+        if (trimmed.startsWith("+")) {
+            return isPlausibleInternational(digits) ? digits : null;
+        }
+        if (digits.startsWith("00")) {
+            String intl = digits.substring(2);
+            return isPlausibleInternational(intl) ? intl : null;
+        }
+
+        String[] dial = countryIso2 != null ? DIAL_CODES.get(countryIso2.trim().toUpperCase(Locale.ROOT)) : null;
+        if (dial == null) {
+            return legacyIndiaNormalize(digits);
+        }
+
+        String code = dial[0];
+        int nationalLen = Integer.parseInt(dial[1]);
+
+        // Already carries this country's code (e.g. 971501234567)
+        if (digits.startsWith(code)) {
+            int rest = digits.length() - code.length();
+            if (nationalLen > 0 ? rest == nationalLen : rest >= 7) {
+                return digits;
+            }
+        }
+
+        // Local form: drop the trunk prefix 0 (e.g. 0501234567 → 501234567)
+        String national = digits.startsWith("0") ? digits.replaceFirst("^0+", "") : digits;
+        if (nationalLen > 0) {
+            if (national.length() == nationalLen) {
+                return code + national;
+            }
+        } else if (national.length() >= 7 && national.length() <= 12) {
+            return code + national;
+        }
+
+        // Neither local nor this country's international form — accept only if it already looks international
+        return digits.length() >= 11 && !digits.startsWith("0") && isPlausibleInternational(digits) ? digits : null;
+    }
+
+    private static boolean isPlausibleInternational(String digits) {
+        return digits.length() >= 8 && digits.length() <= 15 && !digits.startsWith("0");
+    }
+
+    private static String legacyIndiaNormalize(String digits) {
+        if (digits.length() < 10) return null;
         if (digits.length() == 10) {
-            digits = "91" + digits;
-        } else if (digits.length() == 11 && digits.startsWith("0")) {
-            digits = "91" + digits.substring(1);
+            return "91" + digits;
+        }
+        if (digits.length() == 11 && digits.startsWith("0")) {
+            return "91" + digits.substring(1);
         }
         return digits;
     }
@@ -469,52 +351,23 @@ public class WhatsAppBillFormatter {
         return "Restaurant";
     }
 
-    private String formatFulfillment(Order order) {
-        if (order.getTableNumber() != null && !order.getTableNumber().isBlank()) {
-            return "🍽️ Dine-In (Table " + order.getTableNumber() + ")";
-        }
-        if (order.getFulfillmentType() != null && !order.getFulfillmentType().isBlank()) {
-            String ft = order.getFulfillmentType().toUpperCase();
-            if (ft.contains("TAKEAWAY")) return "🥡 Takeaway";
-            if (ft.contains("DELIVERY")) return "🛵 Delivery";
-            if (ft.contains("DINE")) return "🍽️ Dine-In";
-            return order.getFulfillmentType();
-        }
-        return "🥡 Takeaway";
+    /** Strips WhatsApp formatting characters so names cannot break bold/italic markup. */
+    private static String plain(String value) {
+        if (value == null) return "";
+        return value.replaceAll("[*_~`]", "").replaceAll("\\s+", " ").trim();
     }
 
     private String formatMoney(BigDecimal amount, String currency, int dp) {
         if (amount == null) amount = BigDecimal.ZERO;
-        String formattedNum = fmt(amount, dp);
+        String formattedNum = amount.setScale(dp, RoundingMode.HALF_UP).toPlainString();
         if (currency != null && !currency.isBlank()) {
             return currency + " " + formattedNum;
         }
         return formattedNum;
     }
 
-    private String fmt(BigDecimal value, int dp) {
-        if (value == null) return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP).toPlainString();
-        return value.setScale(dp, RoundingMode.HALF_UP).toPlainString();
-    }
-
-    private String fmtRate(BigDecimal rate) {
-        if (rate == null) return "0";
-        if (rate.remainder(BigDecimal.ONE).compareTo(BigDecimal.ZERO) == 0) {
-            return String.valueOf(rate.intValue());
-        }
-        return rate.stripTrailingZeros().toPlainString();
-    }
-
-    private String formatQty(BigDecimal qty) {
-        if (qty == null) return "1";
-        if (qty.remainder(BigDecimal.ONE).compareTo(BigDecimal.ZERO) == 0) {
-            return String.valueOf(qty.intValue());
-        }
-        return qty.stripTrailingZeros().toPlainString();
-    }
-
     private boolean isGenericGuest(String name) {
-        String lower = name.toLowerCase().trim();
+        String lower = name.toLowerCase(Locale.ROOT).trim();
         return lower.equals("guest") || lower.equals("walk-in") || lower.equals("walk in") || lower.equals("walk-in guest");
     }
 }

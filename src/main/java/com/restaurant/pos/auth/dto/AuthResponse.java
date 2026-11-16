@@ -30,6 +30,9 @@ public class AuthResponse {
     private Boolean canDeleteOrderItem;
     private Boolean canDecrementOrderItem;
     private Boolean canPrintOrder;
+    private Boolean canOpenCashDrawer;
+    private Boolean canAutoOpenCashDrawer;
+    private Boolean canViewCashDrawerHistory;
     private String timezone;
     private String termsAcceptedVersion;
     private java.time.LocalDateTime termsAcceptedAt;

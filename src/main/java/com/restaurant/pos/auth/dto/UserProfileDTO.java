@@ -22,4 +22,7 @@ public class UserProfileDTO {
     private Boolean canDeleteOrderItem;
     private Boolean canDecrementOrderItem;
     private Boolean canPrintOrder;
+    private Boolean canOpenCashDrawer;
+    private Boolean canAutoOpenCashDrawer;
+    private Boolean canViewCashDrawerHistory;
 }

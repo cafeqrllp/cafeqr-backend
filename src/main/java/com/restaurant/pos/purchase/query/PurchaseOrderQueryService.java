@@ -38,6 +38,9 @@ public class PurchaseOrderQueryService {
     private final com.restaurant.pos.order.service.OrderService orderService;
     private final com.restaurant.pos.purchasing.repository.VendorRepository vendorRepository;
     private final CurrencyScaleService currencyScale;
+    private final com.restaurant.pos.product.repository.ProductRepository productRepository;
+    private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
+    private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
 
     /**
      * Paginated purchase order history list mapped to lightweight PurchaseOrderSummaryDto.
@@ -60,9 +63,20 @@ public class PurchaseOrderQueryService {
                 itemCounts.put((UUID) row[0], ((Number) row[1]).intValue());
             }
         }
+        // One batched lookup for supplier names (avoids N+1) so the list can show/search by vendor.
+        Map<UUID, String> vendorNames = new HashMap<>();
+        java.util.Set<UUID> vendorIds = pageResult.getContent().stream()
+                .map(Order::getVendorId).filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!vendorIds.isEmpty()) {
+            vendorRepository.findAllById(vendorIds).forEach(v -> {
+                if (clientId == null || clientId.equals(v.getClientId())) vendorNames.put(v.getId(), v.getName());
+            });
+        }
         return pageResult.map(order -> {
             PurchaseOrderSummaryDto dto = purchaseOrderDtoMapper.toSummaryDto(order);
             dto.setItemCount(itemCounts.getOrDefault(order.getId(), 0));
+            dto.setVendorName(vendorNames.get(order.getVendorId()));
             return dto;
         });
     }
@@ -200,13 +214,14 @@ public class PurchaseOrderQueryService {
         long totalOrders = 0;
         long receivedOrders = 0;
         long draftOrders = 0;
+        long valuedOrders = 0; // orders counted in totalPurchases (not void/cancelled)
 
         java.util.Map<String, Long> statusCounts = new java.util.HashMap<>();
         java.util.Map<String, Long> paymentStatusCounts = new java.util.HashMap<>();
 
         for (Order o : orders) {
             String status = o.getOrderStatus() != null ? o.getOrderStatus().toUpperCase() : "UNKNOWN";
-            String payStatus = o.getPaymentStatus() != null ? o.getPaymentStatus().toUpperCase() : "UNPAID";
+            String payStatus = com.restaurant.pos.purchase.domain.PurchasePaymentStatus.effective(o.getOrderStatus(), o.getPaymentStatus());
 
             totalOrders++;
             statusCounts.merge(status, 1L, Long::sum);
@@ -220,6 +235,7 @@ public class PurchaseOrderQueryService {
             }
 
             if (!"VOID".equals(status) && !"CANCELLED".equals(status)) {
+                valuedOrders++;
                 java.math.BigDecimal grandTotal = safe(o.getGrandTotal());
                 totalPurchases = totalPurchases.add(grandTotal);
                 totalTax = totalTax.add(safe(o.getTotalTaxAmount()));
@@ -237,7 +253,8 @@ public class PurchaseOrderQueryService {
             }
         }
 
-        long nonDraftCount = totalOrders - draftOrders;
+        // Average over the same orders totalPurchases sums, so cancelled orders do not drag it down.
+        long nonDraftCount = valuedOrders;
         java.math.BigDecimal averageOrderValue = (nonDraftCount > 0 && totalPurchases.compareTo(java.math.BigDecimal.ZERO) > 0)
                 ? totalPurchases.divide(java.math.BigDecimal.valueOf(nonDraftCount), dp, java.math.RoundingMode.HALF_UP)
                 : java.math.BigDecimal.ZERO;
@@ -274,6 +291,22 @@ public class PurchaseOrderQueryService {
 
         java.util.Map<String, ItemAccumulator> itemMap = new java.util.LinkedHashMap<>();
 
+        // Purchase lines don't store category_name, so resolve it from the product in one batch.
+        java.util.Set<UUID> productIds = orders.stream()
+                .filter(o -> o.getLines() != null)
+                .flatMap(o -> o.getLines().stream())
+                .map(com.restaurant.pos.order.domain.OrderLine::getProductId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        java.util.Map<UUID, String> productCategories = new HashMap<>();
+        if (!productIds.isEmpty()) {
+            productRepository.findAllById(productIds).forEach(p -> {
+                if (p.getCategory() != null && p.getCategory().getName() != null) {
+                    productCategories.put(p.getId(), p.getCategory().getName());
+                }
+            });
+        }
+
         for (Order o : orders) {
             String status = o.getOrderStatus() != null ? o.getOrderStatus().toUpperCase() : "";
             if ("VOID".equals(status) || "CANCELLED".equals(status)) {
@@ -285,7 +318,9 @@ public class PurchaseOrderQueryService {
             for (com.restaurant.pos.order.domain.OrderLine line : o.getLines()) {
                 if (!line.isActive()) continue;
                 String pName = line.getProductName() != null ? line.getProductName() : "Unknown Item";
-                String cat = line.getCategoryName() != null ? line.getCategoryName() : "General";
+                String cat = line.getCategoryName() != null && !line.getCategoryName().isBlank()
+                        ? line.getCategoryName()
+                        : productCategories.getOrDefault(line.getProductId(), "General");
                 String uom = line.getUnitOfMeasure() != null ? line.getUnitOfMeasure() : "pcs";
                 String key = pName + "|||" + cat + "|||" + uom;
 
@@ -374,7 +409,7 @@ public class PurchaseOrderQueryService {
             java.math.BigDecimal grandTotal = safe(o.getGrandTotal());
             acc.totalBilled = acc.totalBilled.add(grandTotal);
 
-            String payStatus = o.getPaymentStatus() != null ? o.getPaymentStatus().toUpperCase() : "UNPAID";
+            String payStatus = com.restaurant.pos.purchase.domain.PurchasePaymentStatus.effective(o.getOrderStatus(), o.getPaymentStatus());
             if ("PAID".equals(payStatus)) {
                 acc.totalPaid = acc.totalPaid.add(grandTotal);
             } else if ("PARTIAL".equals(payStatus)) {
@@ -455,5 +490,48 @@ public class PurchaseOrderQueryService {
                 })
                 .sorted((a, b) -> b.getTotalAmount().compareTo(a.getTotalAmount()))
                 .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Line-level India GST purchase register (inward supplies) for GSTR-2B reconciliation / ITC filing.
+     * Excludes DRAFT, VOID and CANCELLED purchases.
+     */
+    @Transactional(readOnly = true)
+    public List<com.restaurant.pos.purchase.dto.PurchaseGstRegisterRowDto> getPurchaseGstRegister(
+            java.time.Instant from, java.time.Instant to, UUID orgId, UUID vendorId, UUID warehouseId) {
+        List<Order> orders = fetchFilteredPurchaseOrders(from, to, orgId, vendorId, warehouseId, true);
+        UUID clientId = TenantContext.getCurrentTenant();
+
+        java.util.Set<UUID> vendorIds = new java.util.HashSet<>();
+        java.util.Set<UUID> productIds = new java.util.HashSet<>();
+        java.util.Set<UUID> orgIds = new java.util.HashSet<>();
+        for (Order o : orders) {
+            if (o.getVendorId() != null) vendorIds.add(o.getVendorId());
+            if (o.getOrgId() != null) orgIds.add(o.getOrgId());
+            if (o.getLines() != null) {
+                o.getLines().forEach(l -> { if (l.getProductId() != null) productIds.add(l.getProductId()); });
+            }
+        }
+
+        Map<UUID, com.restaurant.pos.purchasing.domain.Vendor> vendors = new HashMap<>();
+        vendorRepository.findAllById(vendorIds).forEach(v -> {
+            if (clientId == null || clientId.equals(v.getClientId())) vendors.put(v.getId(), v);
+        });
+        Map<UUID, com.restaurant.pos.product.domain.Product> products = new HashMap<>();
+        productRepository.findAllById(productIds).forEach(p -> {
+            if (clientId == null || clientId.equals(p.getClientId())) products.put(p.getId(), p);
+        });
+        Map<UUID, com.restaurant.pos.client.domain.Organization> orgs = new HashMap<>();
+        organizationRepository.findAllById(orgIds).forEach(org -> {
+            if (clientId == null || clientId.equals(org.getClientId())) orgs.put(org.getId(), org);
+        });
+
+        return com.restaurant.pos.purchase.gst.PurchaseGstRegisterBuilder.build(
+                orders, vendors, products, orgs, clientGstin(clientId), currencyDp(orgId));
+    }
+
+    private String clientGstin(UUID clientId) {
+        if (clientId == null) return null;
+        return clientRepository.findById(clientId).map(com.restaurant.pos.client.domain.Client::getGstNumber).orElse(null);
     }
 }

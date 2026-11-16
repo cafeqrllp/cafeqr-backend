@@ -1,5 +1,6 @@
 package com.restaurant.pos.loyalty.dto;
 
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -32,6 +33,7 @@ public class LoyaltyProgramRequest {
 
     // Earn rule
     @NotNull
+    @DecimalMin(value = "0.01", message = "Spend amount must be greater than zero")
     private BigDecimal spendAmount;
 
     @Min(1)
@@ -42,11 +44,13 @@ public class LoyaltyProgramRequest {
     private int pointsRequired;
 
     @NotNull
+    @DecimalMin(value = "0.01", message = "Discount amount must be greater than zero")
     private BigDecimal discountAmount;
 
     @Builder.Default
     private int minPoints = 0;
 
+    @Min(value = 1, message = "Max points per order must be at least 1")
     private Integer maxPointsPerOrder;
 
     @Builder.Default

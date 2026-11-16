@@ -29,4 +29,7 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     List<LoyaltyTransaction> findByCustomerIdAndClientIdOrderByCreatedAtAsc(UUID customerId, UUID clientId);
 
     List<LoyaltyTransaction> findByCustomerIdAndClientIdAndOrgIdOrderByCreatedAtAsc(UUID customerId, UUID clientId, UUID orgId);
+
+    /** Full ledger of one loyalty account, regardless of which branch posted each entry. */
+    List<LoyaltyTransaction> findByCustomerLoyaltyIdOrderByCreatedAtAsc(UUID customerLoyaltyId);
 }

@@ -82,6 +82,10 @@ public class LoyaltyDtoMapper {
     }
 
     public LoyaltyTransactionDto toTransactionDto(LoyaltyTransaction t, String programName) {
+        return toTransactionDto(t, programName, null);
+    }
+
+    public LoyaltyTransactionDto toTransactionDto(LoyaltyTransaction t, String programName, String branchName) {
         if (t == null) return null;
 
         String orderNo = null;
@@ -103,6 +107,8 @@ public class LoyaltyDtoMapper {
                 .orderNumber(orderNo)
                 .programId(t.getProgramId())
                 .programName(programName)
+                .orgId(t.getOrgId())
+                .branchName(branchName)
                 .transactionType(t.getTransactionType())
                 .points(t.getPoints())
                 .balanceAfter(t.getBalanceAfter())

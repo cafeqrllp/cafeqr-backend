@@ -100,6 +100,29 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     @EntityGraph(attributePaths = "lines")
     Optional<Order> findByClientIdAndOrgIdAndSourceLocalRefAndOrderStatusNot(UUID clientId, UUID orgId, String sourceLocalRef, String orderStatus);
 
+    /**
+     * Purchase orders from this vendor that already put stock in, carrying the same supplier invoice reference.
+     * Voided orders are ignored, and so is {@code excludeId} (the order being received or changed).
+     */
+    @Query("""
+            SELECT o FROM Order o
+            WHERE o.clientId = :clientId
+              AND o.orgId = :orgId
+              AND o.vendorId = :vendorId
+              AND o.orderType = :orderType
+              AND LOWER(TRIM(o.reference)) = LOWER(TRIM(:reference))
+              AND (o.orderStatus IS NULL OR UPPER(o.orderStatus) <> 'VOID')
+              AND (o.isReceived = true OR UPPER(o.orderStatus) = 'COMPLETED')
+              AND o.id <> :excludeId
+            ORDER BY o.createdAt ASC
+            """)
+    List<Order> findReceivedPurchasesByVendorAndReference(@Param("clientId") UUID clientId,
+                                                         @Param("orgId") UUID orgId,
+                                                         @Param("vendorId") UUID vendorId,
+                                                         @Param("orderType") OrderType orderType,
+                                                         @Param("reference") String reference,
+                                                         @Param("excludeId") UUID excludeId);
+
     org.springframework.data.domain.Page<Order> findByClientId(UUID clientId, org.springframework.data.domain.Pageable pageable);
 
     org.springframework.data.domain.Page<Order> findByClientIdAndOrgId(UUID clientId, UUID orgId, org.springframework.data.domain.Pageable pageable);
@@ -112,6 +135,7 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     @Query("SELECT l.order.id, COUNT(l) FROM OrderLine l WHERE l.order.id IN :orderIds GROUP BY l.order.id")
     List<Object[]> countLinesByOrderIds(@Param("orderIds") Collection<UUID> orderIds);
 
+    @EntityGraph(attributePaths = "lines")
     @Query("SELECT o FROM Order o WHERE o.id = :id")
     Optional<Order> findByIdWithLines(@Param("id") UUID id);
 

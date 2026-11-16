@@ -3,3 +3,4 @@ npm-debug.log
 auth_sessions
 .git
 .gitignore
+test_*.js

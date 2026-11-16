@@ -29,6 +29,7 @@ public class InventoryService {
     private final InventoryQueryService queryService;
     private final WarehouseQueryService warehouseQueryService;
     private final WarehouseCommandService warehouseCommandService;
+    private final com.restaurant.pos.costing.command.PurchaseCostResolver purchaseCostResolver;
 
     public Optional<Warehouse> findDefaultWarehouse(UUID clientId, UUID orgId) {
         return warehouseQueryService.findDefaultWarehouse(clientId, orgId);
@@ -101,5 +102,16 @@ public class InventoryService {
     @Transactional(readOnly = true)
     public Optional<StockSnapshot> findStockSnapshot(UUID warehouseId, UUID productId, UUID variantId) {
         return commandService.findStockSnapshot(warehouseId, productId, variantId);
+    }
+
+    /** Net purchase stock received for a purchase order (receipts minus voids). */
+    public BigDecimal netPurchaseReceivedQty(UUID purchaseOrderId) {
+        return commandService.netPurchaseReceivedQty(purchaseOrderId);
+    }
+
+    /** Net unit cost of a purchase line for stock costing (after discount; tax per branch costing setting). */
+    public BigDecimal purchaseUnitCost(com.restaurant.pos.order.domain.Order order,
+                                       com.restaurant.pos.order.domain.OrderLine line) {
+        return purchaseCostResolver.netUnitCost(order, line);
     }
 }

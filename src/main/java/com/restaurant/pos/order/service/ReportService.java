@@ -56,8 +56,10 @@ public class ReportService {
     private final AccountingPostingService accountingPostingService;
     private final AccountingService accountingService;
     private final OrganizationRepository organizationRepository;
+    private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private final ProductRepository productRepository;
+    private final com.restaurant.pos.costing.query.CostingQueryService costingQueryService;
     private final ExpenseRepository expenseRepository;
     private final CreditQueryService creditService;
     private final OrderService orderService;
@@ -609,19 +611,32 @@ public class ReportService {
             productRepository.findByIdIn(productIds).forEach(p -> productMap.put(p.getId(), p));
         }
 
+        // Actual COGS from costed stock movements; orders without them fall back to product cost.
+        Map<UUID, BigDecimal> actualCogs = costingQueryService.saleCostByOrder(orders.stream()
+                .map(Order::getId).filter(Objects::nonNull).collect(Collectors.toList()));
+        UUID costOrgId = orgId != null ? orgId : TenantContext.getCurrentOrg();
+        Map<String, BigDecimal> currentCosts = costingQueryService.currentCosts(costOrgId, productIds);
+
         for (Order o : orders) {
             billedTotal = billedTotal.add(safe(o.getGrandTotal()));
             discounts = discounts.add(accountingService.calculateTaxExclusiveDiscount(o));
             outputTax = outputTax.add(safe(o.getTotalTaxAmount()));
             roundOff = roundOff.add(safe(o.getRoundOffAmount()));
 
-            if (o.getLines() != null) {
+            BigDecimal orderCogs = o.getId() != null ? actualCogs.get(o.getId()) : null;
+            if (orderCogs != null) {
+                cogs = cogs.add(orderCogs);
+            } else if (o.getLines() != null) {
                 for (OrderLine line : o.getLines()) {
                     if (line != null && line.isActive()) {
                         BigDecimal unitCost = BigDecimal.ZERO;
                         if (line.getProductId() != null) {
+                            BigDecimal current = currentCosts.get(com.restaurant.pos.costing.query.CostingQueryService
+                                    .key(line.getProductId(), line.getVariantId()));
                             Product p = productMap.get(line.getProductId());
-                            if (p != null && p.getCostPrice() != null) {
+                            if (current != null && current.signum() > 0) {
+                                unitCost = current;
+                            } else if (p != null && p.getCostPrice() != null) {
                                 unitCost = p.getCostPrice();
                             }
                         }
@@ -1350,6 +1365,41 @@ public class ReportService {
 
     private BigDecimal safe(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
+    }
+
+    /**
+     * Line-level India GST sales register (outward supplies) for GSTR-1 filing.
+     * Completed sales only (void/cancelled excluded by {@link #fetchSaleOrders}).
+     */
+    public List<com.restaurant.pos.order.dto.report.SalesGstRegisterRowDto> getSalesGstRegister(
+            Instant from, Instant to, UUID orgId, UUID terminalId) {
+        List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
+
+        Map<UUID, List<Customer>> customers = batchLinkedCustomerEntities(orders, clientId);
+
+        Set<UUID> productIds = new HashSet<>();
+        Set<UUID> orgIds = new HashSet<>();
+        for (Order o : orders) {
+            if (o.getOrgId() != null) orgIds.add(o.getOrgId());
+            if (o.getLines() != null) {
+                o.getLines().forEach(l -> { if (l.getProductId() != null) productIds.add(l.getProductId()); });
+            }
+        }
+        Map<UUID, com.restaurant.pos.product.domain.Product> products = new HashMap<>();
+        productRepository.findAllById(productIds).forEach(p -> {
+            if (clientId == null || clientId.equals(p.getClientId())) products.put(p.getId(), p);
+        });
+        Map<UUID, com.restaurant.pos.client.domain.Organization> orgs = new HashMap<>();
+        organizationRepository.findAllById(orgIds).forEach(org -> {
+            if (clientId == null || clientId.equals(org.getClientId())) orgs.put(org.getId(), org);
+        });
+
+        String clientGstin = clientId == null ? null : clientRepository.findById(clientId)
+                .map(com.restaurant.pos.client.domain.Client::getGstNumber).orElse(null);
+        return com.restaurant.pos.order.gst.SalesGstRegisterBuilder.build(orders, customers, products, orgs, clientGstin, dp);
     }
 
     public TaxReportDetailsDto getTaxReportDetails(Instant from, Instant to, UUID orgId, UUID terminalId) {

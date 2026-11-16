@@ -191,4 +191,45 @@ public interface JournalEntryRepository extends JpaRepository<JournalEntry, UUID
               AND COALESCE(j.autoPosted, false) = true
             """)
     int bulkDeleteAutoPostedByClientIdAndOrgId(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    /** Earliest entry date among auto-posted journals; used to decide how far back a resync must rebuild. */
+    @Query("""
+            SELECT MIN(j.entryDate) FROM JournalEntry j
+            WHERE j.clientId = :clientId
+              AND (:orgId IS NULL OR j.orgId = :orgId)
+              AND COALESCE(j.autoPosted, false) = true
+            """)
+    LocalDateTime findEarliestAutoPostedEntryDate(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId);
+
+    /** Earliest entry date among posted, active journals of a branch. */
+    @Query("""
+            SELECT MIN(j.entryDate) FROM JournalEntry j
+            WHERE j.clientId = :clientId
+              AND (:orgId IS NULL OR j.orgId = :orgId)
+              AND j.status = :status
+              AND COALESCE(UPPER(j.isactive), 'Y') <> 'N'
+            """)
+    LocalDateTime findEarliestPostedEntryDate(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId,
+                                              @Param("status") JournalStatus status);
+
+    /** Number of journal lines ever written to an account (any status). */
+    @Query("""
+            SELECT COUNT(l) FROM JournalEntry j
+            JOIN j.lines l
+            WHERE l.accountId = :accountId
+            """)
+    long countLinesForAccount(@Param("accountId") UUID accountId);
+
+    /** Number of journal lines on an account, ignoring one source type (e.g. opening balances). */
+    @Query("""
+            SELECT COUNT(l) FROM JournalEntry j
+            JOIN j.lines l
+            WHERE l.accountId = :accountId
+              AND (j.sourceType IS NULL OR j.sourceType <> :excludedSourceType)
+            """)
+    long countLinesForAccountExcludingSource(@Param("accountId") UUID accountId,
+                                             @Param("excludedSourceType") String excludedSourceType);
+
+    @EntityGraph(attributePaths = {"lines"})
+    List<JournalEntry> findBySourceTypeAndSourceId(String sourceType, UUID sourceId);
 }

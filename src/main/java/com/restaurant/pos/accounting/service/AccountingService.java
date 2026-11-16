@@ -51,6 +51,8 @@ public class AccountingService {
     private static final int MAX_REPORT_DAYS = 1830;
     private static final int MAX_JOURNAL_ROWS = 500;
     private static final Set<String> FINANCIAL_PAYMENT_METHODS = Set.of("CASH", "ONLINE", "UPI", "CARD", "BANK", "CHEQUE");
+    /** Source type of the journal that carries an account's opening balance (source id = account id). */
+    public static final String OPENING_BALANCE_SOURCE = "OPENING_BALANCE";
 
     private final AccountingAccountRepository accountRepository;
     private final JournalEntryRepository journalEntryRepository;
@@ -63,6 +65,8 @@ public class AccountingService {
     private final BranchContextService branchContext;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private final CurrencyScaleService currencyScale;
+    private final AccountingDefaultsService defaultsService;
+    private final Map<String, Boolean> openingBalancesEnsured = new java.util.concurrent.ConcurrentHashMap<>();
 
 
     public List<AccountingAccount> getAccounts(boolean includeInactive) {
@@ -98,25 +102,54 @@ public class AccountingService {
         account.setOrgId(orgId);
         normalizeAccount(account);
         ensureUniqueCode(clientId, orgId, account.getCode(), null);
-        return accountRepository.save(account);
+        // A balance is only ever changed by journals: the account starts at zero and the
+        // opening balance is posted against Opening Balance Equity so the books stay balanced.
+        account.setCurrentBalance(BigDecimal.ZERO);
+        if (isOpeningBalanceEquity(account)) {
+            account.setOpeningBalance(BigDecimal.ZERO);
+        }
+        AccountingAccount saved = accountRepository.save(account);
+        syncOpeningBalanceJournal(saved, true);
+        return saved;
     }
 
     @Transactional
     public AccountingAccount updateAccount(UUID id, AccountingAccount updates) {
         AccountingAccount existing = getScopedAccount(id);
         UUID orgId = resolveOrg(updates.getOrgId() != null ? updates.getOrgId() : existing.getOrgId());
-        String nextCode = normalizeCode(updates.getCode());
+        String nextCode = trimToNull(updates.getCode()) == null ? existing.getCode() : normalizeCode(updates.getCode());
         ensureUniqueCode(existing.getClientId(), orgId, nextCode, existing.getId());
+
+        AccountType nextType = requireAccountType(updates.getAccountType());
+        String nextActive = isActiveFlag(updates.getIsactive());
+        boolean system = Boolean.TRUE.equals(existing.getSystemAccount());
+        if (nextType != existing.getAccountType()) {
+            if (system) {
+                throw new BusinessException("The type of a system account cannot be changed");
+            }
+            if (journalEntryRepository.countLinesForAccountExcludingSource(existing.getId(), OPENING_BALANCE_SOURCE) > 0) {
+                throw new BusinessException("Account type cannot be changed after transactions have been posted to this account");
+            }
+        }
+        if (!Objects.equals(orgId, existing.getOrgId())
+                && (system || journalEntryRepository.countLinesForAccount(existing.getId()) > 0)) {
+            throw new BusinessException("This account cannot be moved to another branch because it already has transactions");
+        }
+        if ("N".equals(nextActive) && !"N".equalsIgnoreCase(existing.getIsactive())) {
+            assertCanDeactivate(existing);
+        }
+        // Accounts created before opening balances were journalised: post the old amount first.
+        adoptLegacyOpeningBalance(existing, true);
 
         existing.setOrgId(orgId);
         existing.setCode(nextCode);
         existing.setName(requireText(updates.getName(), "Account name is required"));
-        existing.setAccountType(requireAccountType(updates.getAccountType()));
+        existing.setAccountType(nextType);
         existing.setAccountSubType(trimToNull(updates.getAccountSubType()));
         existing.setCurrencyId(updates.getCurrencyId());
-        existing.setOpeningBalance(money(updates.getOpeningBalance()));
-        existing.setCurrentBalance(money(updates.getCurrentBalance()));
-        existing.setSystemAccount(Boolean.TRUE.equals(updates.getSystemAccount()));
+        existing.setOpeningBalance(isOpeningBalanceEquity(existing) ? BigDecimal.ZERO : money(updates.getOpeningBalance()));
+        // currentBalance and the system flag are never taken from the request: the balance is
+        // derived from posted journals, and system accounts stay system accounts.
         existing.setCashAccount(Boolean.TRUE.equals(updates.getCashAccount()));
         existing.setBankAccount(Boolean.TRUE.equals(updates.getBankAccount()));
         existing.setBankName(trimToNull(updates.getBankName()));
@@ -124,15 +157,188 @@ public class AccountingService {
         existing.setIfscCode(trimToNull(updates.getIfscCode()));
         existing.setUpiId(trimToNull(updates.getUpiId()));
         existing.setDescription(trimToNull(updates.getDescription()));
-        existing.setIsactive(isActiveFlag(updates.getIsactive()));
-        return accountRepository.save(existing);
+        existing.setIsactive(nextActive);
+        AccountingAccount saved = accountRepository.save(existing);
+        syncOpeningBalanceJournal(saved, true);
+        return saved;
     }
 
     @Transactional
     public void deactivateAccount(UUID id) {
         AccountingAccount account = getScopedAccount(id);
+        assertCanDeactivate(account);
         account.setIsactive("N");
         accountRepository.save(account);
+    }
+
+    private void assertCanDeactivate(AccountingAccount account) {
+        if (Boolean.TRUE.equals(account.getSystemAccount())) {
+            throw new BusinessException("System accounts are used for automatic postings and cannot be deactivated");
+        }
+        if (money(account.getCurrentBalance()).signum() != 0) {
+            throw new BusinessException("This account still has a balance. Move the balance to another account before deactivating it");
+        }
+    }
+
+    /**
+     * Makes sure every account with an opening balance has its opening journal
+     * (Dr/Cr the account against Opening Balance Equity). Accounts created before
+     * opening balances were journalised are converted here, once per branch.
+     *
+     * @param orgId branch to check, or null for every branch of the client
+     */
+    @Transactional
+    public void ensureOpeningBalanceJournals(UUID orgId) {
+        UUID clientId = requireTenant();
+        String cacheKey = clientId + ":" + (orgId != null ? orgId : "ALL");
+        if (Boolean.TRUE.equals(openingBalancesEnsured.get(cacheKey))) {
+            return;
+        }
+        List<AccountingAccount> accounts = orgId == null
+                ? accountRepository.findByClientIdOrderByCodeAsc(clientId)
+                : accountRepository.findByClientIdAndOrgIdOrderByCodeAsc(clientId, orgId);
+        for (AccountingAccount account : accounts) {
+            adoptLegacyOpeningBalance(account, false);
+        }
+        openingBalancesEnsured.put(cacheKey, true);
+    }
+
+    /**
+     * Legacy accounts carry their opening balance inside currentBalance with no journal behind it.
+     * Take it out of the balance and post it as a proper opening journal instead.
+     */
+    private void adoptLegacyOpeningBalance(AccountingAccount account, boolean strict) {
+        if (isOpeningBalanceEquity(account) || money(account.getOpeningBalance()).signum() == 0) {
+            return;
+        }
+        if (account.getOrgId() == null && !strict) {
+            return;
+        }
+        if (!journalEntryRepository.findBySourceTypeAndSourceId(OPENING_BALANCE_SOURCE, account.getId()).isEmpty()) {
+            return;
+        }
+        account.setCurrentBalance(money(account.getCurrentBalance()).subtract(money(account.getOpeningBalance())));
+        accountRepository.save(account);
+        syncOpeningBalanceJournal(account, strict);
+    }
+
+    /**
+     * Brings the opening journal of an account in line with its openingBalance field:
+     * voids an out-of-date journal and posts a new one when the amount (or account type) changed.
+     */
+    private void syncOpeningBalanceJournal(AccountingAccount account, boolean strict) {
+        if (isOpeningBalanceEquity(account)) {
+            return;
+        }
+        BigDecimal opening = money(account.getOpeningBalance());
+        JournalEntry active = journalEntryRepository.findBySourceTypeAndSourceId(OPENING_BALANCE_SOURCE, account.getId()).stream()
+                .filter(this::isPostedActiveJournal)
+                .findFirst()
+                .orElse(null);
+        if (active != null) {
+            BigDecimal posted = BigDecimal.ZERO;
+            for (JournalLine line : active.getLines()) {
+                if (account.getId().equals(line.getAccountId())) {
+                    posted = posted.add(accountBalanceEffect(account, money(line.getDebit()), money(line.getCredit())));
+                }
+            }
+            if (posted.compareTo(opening) == 0 && Objects.equals(active.getOrgId(), account.getOrgId())) {
+                return;
+            }
+            voidJournal(active, "Opening balance changed");
+        }
+        if (opening.signum() == 0) {
+            return;
+        }
+        if (account.getOrgId() == null) {
+            if (strict) {
+                throw new BusinessException("An opening balance can only be set on an account that belongs to a branch");
+            }
+            return;
+        }
+
+        AccountingAccount equity = inOrg(account.getOrgId(),
+                () -> defaultsService.resolveAccount(AccountingDefaultsService.OPENING_BALANCE_EQUITY));
+        boolean debitNormal = account.getAccountType() == AccountType.ASSET || account.getAccountType() == AccountType.EXPENSE;
+        boolean debitAccount = debitNormal == (opening.signum() > 0);
+        BigDecimal amount = opening.abs();
+
+        JournalEntry entry = JournalEntry.builder()
+                .entryNo("OB-" + account.getCode())
+                .entryDate(openingBalanceDate(account))
+                .status(JournalStatus.POSTED)
+                .sourceType(OPENING_BALANCE_SOURCE)
+                .sourceId(account.getId())
+                .autoPosted(false)
+                .description("Opening balance for " + account.getCode() + " - " + account.getName())
+                .lines(new ArrayList<>())
+                .build();
+        entry.setOrgId(account.getOrgId());
+        entry.attachLine(JournalLine.builder()
+                .accountId(account.getId())
+                .debit(debitAccount ? amount : BigDecimal.ZERO)
+                .credit(debitAccount ? BigDecimal.ZERO : amount)
+                .description("Opening balance")
+                .build());
+        entry.attachLine(JournalLine.builder()
+                .accountId(equity.getId())
+                .debit(debitAccount ? BigDecimal.ZERO : amount)
+                .credit(debitAccount ? amount : BigDecimal.ZERO)
+                .description("Opening balance for " + account.getCode())
+                .build());
+        createJournalEntry(entry);
+    }
+
+    /** Opening entries are dated just before the branch's first posted journal, so they open every report period. */
+    private LocalDateTime openingBalanceDate(AccountingAccount account) {
+        LocalDateTime now = LocalDateTime.now(timezoneResolver.resolveTimezone(account.getClientId(), account.getOrgId()));
+        LocalDateTime earliest = journalEntryRepository.findEarliestPostedEntryDate(
+                account.getClientId(), account.getOrgId(), JournalStatus.POSTED);
+        if (earliest != null && earliest.minusSeconds(1).isBefore(now)) {
+            return earliest.minusSeconds(1);
+        }
+        return now;
+    }
+
+    /** Voids a journal and takes its effect back out of the cached account balances. */
+    private void voidJournal(JournalEntry entry, String reason) {
+        Set<UUID> accountIds = entry.getLines().stream()
+                .map(JournalLine::getAccountId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, AccountingAccount> accountsById = accountRepository.findAllById(accountIds).stream()
+                .collect(Collectors.toMap(AccountingAccount::getId, Function.identity()));
+        for (JournalLine line : entry.getLines()) {
+            AccountingAccount lineAccount = accountsById.get(line.getAccountId());
+            if (lineAccount != null) {
+                BigDecimal effect = accountBalanceEffect(lineAccount, money(line.getDebit()), money(line.getCredit()));
+                lineAccount.setCurrentBalance(money(lineAccount.getCurrentBalance()).subtract(effect));
+            }
+        }
+        accountRepository.saveAll(accountsById.values());
+        entry.setStatus(JournalStatus.VOID);
+        entry.setIsactive("N");
+        String note = "Voided: " + reason;
+        entry.setDescription(entry.getDescription() == null ? note : entry.getDescription() + " | " + note);
+        journalEntryRepository.save(entry);
+    }
+
+    private boolean isOpeningBalanceEquity(AccountingAccount account) {
+        return AccountingDefaultsService.OPENING_BALANCE_EQUITY.equalsIgnoreCase(account.getSystemKey());
+    }
+
+    /** Runs an action with the tenant branch context switched to the given branch. */
+    private <T> T inOrg(UUID orgId, java.util.function.Supplier<T> action) {
+        UUID previousOrgId = TenantContext.getCurrentOrg();
+        if (Objects.equals(previousOrgId, orgId)) {
+            return action.get();
+        }
+        TenantContext.setCurrentOrg(orgId);
+        try {
+            return action.get();
+        } finally {
+            TenantContext.setCurrentOrg(previousOrgId);
+        }
     }
 
     public List<JournalEntry> getJournalEntries(LocalDateTime from, LocalDateTime to) {
@@ -331,7 +537,8 @@ public class AccountingService {
         List<AccountingAccountPeriodDto> list = accounts.stream()
                 .filter(account -> visibleAccountIds.contains(account.getId()))
                 .map(account -> {
-                    BigDecimal opening = money(account.getOpeningBalance()).add(openingEffects.getOrDefault(account.getId(), BigDecimal.ZERO));
+                    // The opening balance is itself a journal, so it is already part of the movements before the period.
+                    BigDecimal opening = openingEffects.getOrDefault(account.getId(), BigDecimal.ZERO);
                     BigDecimal debit = periodDebits.getOrDefault(account.getId(), BigDecimal.ZERO);
                     BigDecimal credit = periodCredits.getOrDefault(account.getId(), BigDecimal.ZERO);
                     BigDecimal periodNet = accountBalanceEffect(account, debit, credit);
@@ -962,41 +1169,69 @@ public class AccountingService {
     }
 
     private void createPartyLedgerEntries(JournalEntry saved, Map<UUID, AccountingAccount> accountsById) {
-        List<PartyLedgerEntry> entries = new ArrayList<>();
+        Map<String, List<JournalLine>> linesByParty = new LinkedHashMap<>();
         for (JournalLine line : saved.getLines()) {
             if (line.getPartyType() == null || line.getPartyId() == null) {
                 continue;
             }
-            BigDecimal previousBalance = partyLedgerEntryRepository
-                    .findTopByClientIdAndOrgIdAndPartyTypeAndPartyIdOrderByEntryDateDescCreatedAtDesc(
-                            saved.getClientId(),
-                            saved.getOrgId(),
-                            line.getPartyType(),
-                            line.getPartyId()
-                    )
-                    .map(PartyLedgerEntry::getBalanceAfter)
-                    .orElse(BigDecimal.ZERO);
-            BigDecimal nextBalance = previousBalance.add(line.getDebit()).subtract(line.getCredit());
-            entries.add(PartyLedgerEntry.builder()
-                    .partyType(line.getPartyType())
-                    .partyId(line.getPartyId())
-                    .accountId(accountsById.get(line.getAccountId()).getId())
-                    .journalEntryId(saved.getId())
-                    .sourceType(saved.getSourceType())
-                    .sourceId(saved.getSourceId())
-                    .entryDate(saved.getEntryDate())
-                    .debit(line.getDebit())
-                    .credit(line.getCredit())
-                    .balanceAfter(nextBalance)
-                    .description(line.getDescription())
-                    .isactive("Y")
-                    .build());
+            linesByParty.computeIfAbsent(line.getPartyType() + ":" + line.getPartyId(), key -> new ArrayList<>()).add(line);
         }
-        entries.forEach(entry -> {
-            entry.setClientId(saved.getClientId());
-            entry.setOrgId(saved.getOrgId());
-        });
-        partyLedgerEntryRepository.saveAll(entries);
+        for (Map.Entry<String, List<JournalLine>> group : linesByParty.entrySet()) {
+            PartyType partyType = group.getValue().get(0).getPartyType();
+            UUID partyId = group.getValue().get(0).getPartyId();
+            // One writer per party at a time, otherwise two postings read the same previous balance.
+            partyLedgerEntryRepository.lockParty(saved.getClientId() + ":" + saved.getOrgId() + ":" + group.getKey());
+
+            Optional<PartyLedgerEntry> latest = partyLedgerEntryRepository
+                    .findTopByClientIdAndOrgIdAndPartyTypeAndPartyIdOrderByEntryDateDescCreatedAtDesc(
+                            saved.getClientId(), saved.getOrgId(), partyType, partyId);
+            boolean backdated = latest.isPresent()
+                    && latest.get().getEntryDate() != null
+                    && saved.getEntryDate().isBefore(latest.get().getEntryDate());
+            BigDecimal running = latest.map(PartyLedgerEntry::getBalanceAfter).map(this::money).orElse(BigDecimal.ZERO);
+
+            List<PartyLedgerEntry> entries = new ArrayList<>();
+            for (JournalLine line : group.getValue()) {
+                running = running.add(line.getDebit()).subtract(line.getCredit());
+                PartyLedgerEntry entry = PartyLedgerEntry.builder()
+                        .partyType(partyType)
+                        .partyId(partyId)
+                        .accountId(accountsById.get(line.getAccountId()).getId())
+                        .journalEntryId(saved.getId())
+                        .sourceType(saved.getSourceType())
+                        .sourceId(saved.getSourceId())
+                        .entryDate(saved.getEntryDate())
+                        .debit(line.getDebit())
+                        .credit(line.getCredit())
+                        .balanceAfter(running)
+                        .description(line.getDescription())
+                        .isactive("Y")
+                        .build();
+                entry.setClientId(saved.getClientId());
+                entry.setOrgId(saved.getOrgId());
+                entries.add(entry);
+            }
+            partyLedgerEntryRepository.saveAllAndFlush(entries);
+            if (backdated) {
+                // The new entry sits in the middle of the ledger: every later running balance moves too.
+                recalculatePartyBalances(saved.getClientId(), saved.getOrgId(), partyType, partyId);
+            }
+        }
+    }
+
+    private void recalculatePartyBalances(UUID clientId, UUID orgId, PartyType partyType, UUID partyId) {
+        List<PartyLedgerEntry> ledger = partyLedgerEntryRepository
+                .findByClientIdAndOrgIdAndPartyTypeAndPartyIdOrderByEntryDateAscCreatedAtAsc(clientId, orgId, partyType, partyId);
+        BigDecimal running = BigDecimal.ZERO;
+        List<PartyLedgerEntry> changed = new ArrayList<>();
+        for (PartyLedgerEntry entry : ledger) {
+            running = running.add(money(entry.getDebit())).subtract(money(entry.getCredit()));
+            if (entry.getBalanceAfter() == null || entry.getBalanceAfter().compareTo(running) != 0) {
+                entry.setBalanceAfter(running);
+                changed.add(entry);
+            }
+        }
+        partyLedgerEntryRepository.saveAll(changed);
     }
 
     private void normalizeAccount(AccountingAccount account) {
@@ -1006,12 +1241,10 @@ public class AccountingService {
         account.setAccountSubType(trimToNull(account.getAccountSubType()));
         account.setSystemKey(trimToNull(account.getSystemKey()));
         account.setOpeningBalance(money(account.getOpeningBalance()));
-        if (account.getCurrentBalance() == null) {
-            account.setCurrentBalance(account.getOpeningBalance());
-        } else {
-            account.setCurrentBalance(money(account.getCurrentBalance()));
-        }
-        account.setSystemAccount(Boolean.TRUE.equals(account.getSystemAccount()));
+        account.setCurrentBalance(BigDecimal.ZERO);
+        // Accounts created through the API are never system accounts; those come from the defaults.
+        account.setSystemAccount(false);
+        account.setSystemKey(null);
         account.setCashAccount(Boolean.TRUE.equals(account.getCashAccount()));
         account.setBankAccount(Boolean.TRUE.equals(account.getBankAccount()));
         account.setBankName(trimToNull(account.getBankName()));

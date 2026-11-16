@@ -74,6 +74,7 @@ class OrderServiceTest {
         private CreditCustomerRepository creditCustomerRepository;
         private SystemConfigurationService configurationService;
         private OrderService orderService;
+        private com.restaurant.pos.loyalty.command.LoyaltyCommandService loyaltyCommandService;
 
         private UUID clientId;
         private UUID orgId;
@@ -81,6 +82,7 @@ class OrderServiceTest {
         @BeforeEach
         void setUp() {
                 orderRepository = mock(OrderRepository.class);
+                loyaltyCommandService = mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class);
                 invoiceRepository = mock(InvoiceRepository.class);
                 paymentRepository = mock(PaymentRepository.class);
                 sequenceService = mock(DocumentSequenceService.class);
@@ -135,7 +137,7 @@ class OrderServiceTest {
                                 mock(CurrencyRepository.class),
                                 new com.restaurant.pos.common.service.CurrencyScaleService(mock(CurrencyRepository.class)),
                                 new OrderCalculationService(),
-                                mock(com.restaurant.pos.loyalty.command.LoyaltyCommandService.class),
+                                loyaltyCommandService,
                                 mock(org.springframework.context.ApplicationContext.class),
                                 mock(org.springframework.context.ApplicationEventPublisher.class));
 
@@ -488,6 +490,10 @@ class OrderServiceTest {
 
                 assertThat(settled.getGrandTotal()).isEqualByComparingTo("100.00");
                 assertThat(invoice.getTotalAmount()).isEqualByComparingTo("100.40");
+                // Round-off is part of the payable total, so a fully paid bill must be PAID with zero due.
+                assertThat(invoice.getStatus()).isEqualTo("PAID");
+                assertThat(invoice.getIsPaid()).isTrue();
+                assertThat(invoice.getAmountDue()).isEqualByComparingTo("0");
         }
 
         @Test
@@ -951,5 +957,102 @@ class OrderServiceTest {
                 assertThat(settled.getCustomerPhone()).isEqualTo("9111222333");
                 assertThat(settled.getOrderStatus()).isEqualTo("COMPLETED");
                 assertThat(settled.getPaymentStatus()).isEqualTo("PAID");
+        }
+
+        @Test
+        void computeLoyaltyEligibleAmount_creditCustomerPaidByCash_earnsNothing() {
+                Order order = new Order();
+                order.setId(UUID.randomUUID());
+                order.setIsCredit(false);
+                order.setReference("CASH");
+                order.setCreditCustomerId(UUID.randomUUID());
+                order.setTotalAmount(new BigDecimal("500.00"));
+
+                assertThat(orderService.computeLoyaltyEligibleAmount(order)).isEqualByComparingTo(BigDecimal.ZERO);
+        }
+
+        @Test
+        void computeLoyaltyEligibleAmount_regularCashSale_isEligible() {
+                Order order = new Order();
+                order.setId(UUID.randomUUID());
+                order.setIsCredit(false);
+                order.setReference("CASH");
+                order.setTotalAmount(new BigDecimal("500.00"));
+
+                assertThat(orderService.computeLoyaltyEligibleAmount(order)).isEqualByComparingTo("500.00");
+        }
+
+        private Order billedSaleWithCustomer(UUID orderId, UUID customerId) {
+                Order order = Order.builder()
+                                .id(orderId)
+                                .orderNo("SO-LOYALTY")
+                                .orderType(OrderType.SALE)
+                                .orderStatus("BILLED")
+                                .paymentStatus("PENDING")
+                                .customerId(customerId)
+                                .grandTotal(new BigDecimal("150.00"))
+                                .totalTaxAmount(BigDecimal.ZERO)
+                                .build();
+                order.setClientId(clientId);
+                order.setOrgId(orgId);
+                when(orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId))
+                                .thenReturn(Optional.of(order));
+                return order;
+        }
+
+        @Test
+        void settleOrder_failsWithReason_whenLoyaltyRedemptionFails() {
+                UUID orderId = UUID.randomUUID();
+                UUID customerId = UUID.randomUUID();
+                billedSaleWithCustomer(orderId, customerId);
+                when(loyaltyCommandService.redeemPoints(customerId, orderId, 100))
+                                .thenThrow(new com.restaurant.pos.common.exception.BusinessException(
+                                                "Insufficient points. Available: 80"));
+
+                OrderSettleRequest request = new OrderSettleRequest();
+                request.setPaymentMethod("CASH");
+                request.setRedeemPoints(100);
+                request.setLoyaltyAmount(new BigDecimal("10.00"));
+
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.settleOrder(orderId, request))
+                                .isInstanceOf(com.restaurant.pos.common.exception.BusinessException.class)
+                                .hasMessage("Insufficient points. Available: 80");
+                verify(orderRepository, never()).save(any(Order.class));
+        }
+
+        @Test
+        void settleOrder_rejectsClientLoyaltyDiscountThatDoesNotMatchServer() {
+                UUID orderId = UUID.randomUUID();
+                UUID customerId = UUID.randomUUID();
+                billedSaleWithCustomer(orderId, customerId);
+                when(loyaltyCommandService.redeemPoints(customerId, orderId, 100))
+                                .thenReturn(com.restaurant.pos.loyalty.command.RedemptionResult.applied(new BigDecimal("10.00")));
+
+                OrderSettleRequest request = new OrderSettleRequest();
+                request.setPaymentMethod("CASH");
+                request.setRedeemPoints(100);
+                request.setLoyaltyAmount(new BigDecimal("50.00"));
+
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.settleOrder(orderId, request))
+                                .isInstanceOf(com.restaurant.pos.common.exception.BusinessException.class)
+                                .hasMessageContaining("Loyalty discount mismatch");
+                verify(orderRepository, never()).save(any(Order.class));
+        }
+
+        @Test
+        void settleOrder_rejectsLoyaltyRedemptionOnCreditSale() {
+                UUID orderId = UUID.randomUUID();
+                UUID customerId = UUID.randomUUID();
+                billedSaleWithCustomer(orderId, customerId);
+
+                OrderSettleRequest request = new OrderSettleRequest();
+                request.setPaymentMethod("CREDIT");
+                request.setRedeemPoints(100);
+                request.setLoyaltyAmount(new BigDecimal("10.00"));
+
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> orderService.settleOrder(orderId, request))
+                                .isInstanceOf(com.restaurant.pos.common.exception.BusinessException.class)
+                                .hasMessageContaining("credit sales");
+                verify(loyaltyCommandService, never()).redeemPoints(any(), any(), org.mockito.ArgumentMatchers.anyInt());
         }
 }

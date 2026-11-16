@@ -72,4 +72,14 @@ public class ExpenseResponse {
 
     @Schema(description = "Online amount for mixed payment", example = "1000.00")
     private BigDecimal onlineAmount;
+
+    // India GST details
+    private String supplierName;
+    private String supplierGstin;
+    private String billNo;
+    private String hsnSac;
+    private BigDecimal gstRate;
+    private BigDecimal taxAmount;
+    @Schema(description = "Amount excluding GST (amount - taxAmount)")
+    private BigDecimal taxableAmount;
 }

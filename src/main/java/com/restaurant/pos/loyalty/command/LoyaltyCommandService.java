@@ -14,6 +14,7 @@ import com.restaurant.pos.purchasing.repository.CustomerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -50,6 +51,8 @@ public class LoyaltyCommandService {
     public LoyaltyProgramDto createProgram(CreateLoyaltyProgramCommand cmd) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
+
+        validateRedemptionLimits(cmd.getMinPoints(), cmd.getMaxPointsPerOrder(), cmd.getPointsRequired(), cmd.isAllowPartial());
 
         // Inactive programs cannot be default
         if (cmd.isDefault() && !cmd.isActive()) {
@@ -98,16 +101,21 @@ public class LoyaltyCommandService {
 
     @Transactional
     public LoyaltyProgramDto updateProgram(UpdateLoyaltyProgramCommand cmd) {
-        LoyaltyProgram program = programRepository.findById(cmd.getId())
-                .orElseThrow(() -> new BusinessException("Loyalty programme not found: " + cmd.getId()));
-
         UUID clientId = TenantContext.getCurrentTenant();
+        UUID currentOrg = TenantContext.getCurrentOrg();
+        // Tenant + branch check: never let one client (or another branch) edit someone else's programme
+        LoyaltyProgram program = programRepository.findById(cmd.getId())
+                .filter(p -> Objects.equals(p.getClientId(), clientId))
+                .filter(p -> currentOrg == null || p.getOrgId() == null || Objects.equals(p.getOrgId(), currentOrg))
+                .orElseThrow(() -> new BusinessException("Loyalty programme not found."));
 
         // If it is a client-wide program or being made client-wide, only Super Admin can edit
         boolean isExistingClientWide = program.getOrgId() == null;
         if ((isExistingClientWide || cmd.isClientWide()) && !com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin()) {
             throw new BusinessException("Only Super Admin can modify client-wide loyalty programs.");
         }
+
+        validateRedemptionLimits(cmd.getMinPoints(), cmd.getMaxPointsPerOrder(), cmd.getPointsRequired(), cmd.isAllowPartial());
 
         // If inactive/deactivating, automatically strip default
         if (!cmd.isActive()) {
@@ -123,7 +131,14 @@ public class LoyaltyCommandService {
         UUID targetOrgId = cmd.isClientWide() ? null : (program.getOrgId() != null ? program.getOrgId() : TenantContext.getCurrentOrg());
 
         // Clear existing default in the same scope before setting new one
-        if (cmd.isDefault() && !program.isDefault()) {
+        // Clear the old default in the target scope when this becomes default there — including
+        // when an existing default moves between branch and client-wide scope.
+        boolean scopeChanged = !Objects.equals(program.getOrgId(), targetOrgId);
+        if (cmd.isDefault() && (!program.isDefault() || scopeChanged)) {
+            // clearDefault() clears the persistence context (detaching `program`); load the rule
+            // collections first so replacing them below cannot hit a LazyInitializationException.
+            program.getEarnRules().size();
+            program.getRedemptionRules().size();
             clearDefault(clientId, targetOrgId);
         }
 
@@ -175,6 +190,12 @@ public class LoyaltyCommandService {
 
         LoyaltyProgram  program  = programOpt.get();
         LoyaltyEarnRule earnRule = program.getEarnRules().get(0);
+        if (earnRule.getSpendAmount() == null || earnRule.getSpendAmount().signum() <= 0
+                || earnRule.getEarnPoints() <= 0) {
+            log.warn("Loyalty EARN skipped: programme {} has an invalid earn rule (spend={}, points={})",
+                    program.getId(), earnRule.getSpendAmount(), earnRule.getEarnPoints());
+            return Optional.empty();
+        }
 
         int points = eligibleAmount
                 .divideToIntegralValue(earnRule.getSpendAmount())
@@ -183,15 +204,14 @@ public class LoyaltyCommandService {
 
         if (points <= 0) return Optional.empty();
 
-        if (orderId != null) {
-            List<LoyaltyTransaction> existingTxns = transactionRepository.findByOrderIdAndClientId(orderId, clientId);
-            if (existingTxns.stream().anyMatch(t -> t.getTransactionType() == LoyaltyTransactionType.EARN)) {
-                log.info("Loyalty EARN already processed for orderId={}", orderId);
-                return Optional.empty();
-            }
+        // Lock the account first so the duplicate check below cannot race with a parallel earn.
+        CustomerLoyalty account = lockForUpdate(getOrCreateAccount(customerId, clientId, orgId, program.getId()));
+
+        if (orderId != null && hasTransaction(orderId, clientId, LoyaltyTransactionType.EARN)) {
+            log.info("Loyalty EARN already processed for orderId={}", orderId);
+            return Optional.empty();
         }
 
-        CustomerLoyalty account = getOrCreateAccount(customerId, clientId, orgId, program.getId());
         account.setProgramId(program.getId());
         account.creditPoints(points);
         accountRepository.save(account);
@@ -216,36 +236,58 @@ public class LoyaltyCommandService {
         return Optional.of(saved);
     }
 
+    /**
+     * Same as {@link #earnPoints} but in its own transaction. Used after the order has committed,
+     * so an earn failure rolls back only the loyalty write and never the sale.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<LoyaltyTransaction> earnPointsInNewTransaction(UUID customerId, UUID orderId, BigDecimal eligibleAmount) {
+        return earnPoints(customerId, orderId, eligibleAmount);
+    }
+
+    /**
+     * Debits loyalty points for an order and returns the discount they are worth.
+     * <p>
+     * Every rule violation throws {@link BusinessException} with a cashier-readable message, so
+     * the calling order transaction rolls back and the POS shows the reason.
+     * <p>
+     * Points are shared across all branches of a client (one account per customer per client);
+     * the redemption rate comes from the active default programme of the current branch.
+     */
     @Transactional
-    public BigDecimal redeemPoints(UUID customerId, UUID orderId, int pointsToUse) {
+    public RedemptionResult redeemPoints(UUID customerId, UUID orderId, int pointsToUse) {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
 
+        if (customerId == null) {
+            throw new BusinessException("Select a customer to redeem loyalty points.");
+        }
+        if (pointsToUse <= 0) {
+            throw new BusinessException("Points to redeem must be greater than zero.");
+        }
         if (!isLoyaltyEnabled(clientId, orgId)) {
             throw new BusinessException("Loyalty is not enabled for this organisation.");
         }
 
-        if (orderId != null) {
-            List<LoyaltyTransaction> existingTxns = transactionRepository.findByOrderIdAndClientId(orderId, clientId);
-            if (existingTxns.stream().anyMatch(t -> t.getTransactionType() == LoyaltyTransactionType.REDEEM)) {
-                log.info("Loyalty REDEEM already processed for orderId={}", orderId);
-                return BigDecimal.ZERO;
-            }
+        CustomerLoyalty account = findAccount(customerId, clientId)
+                .map(this::lockForUpdate)
+                .orElseThrow(() -> new BusinessException("This customer has no loyalty points to redeem."));
+
+        if (orderId != null && hasTransaction(orderId, clientId, LoyaltyTransactionType.REDEEM)) {
+            log.info("Loyalty REDEEM already processed for orderId={}", orderId);
+            return RedemptionResult.replay();
         }
 
-        CustomerLoyalty account = (orgId != null)
-                ? accountRepository.findByCustomerIdAndClientIdAndOrgIdWithLock(customerId, clientId, orgId)
-                        .orElseThrow(() -> new BusinessException("No loyalty account found for customer."))
-                : accountRepository.findByCustomerIdAndClientIdWithLock(customerId, clientId)
-                        .orElseThrow(() -> new BusinessException("No loyalty account found for customer."));
-
         LoyaltyProgram program = resolveProgram(customerId, clientId, orgId).orElse(null);
-
         if (program == null || program.getRedemptionRules().isEmpty()) {
             throw new BusinessException("No active default loyalty programme is configured.");
         }
 
         LoyaltyRedemptionRule rule = program.getRedemptionRules().get(0);
+        if (rule.getPointsRequired() <= 0 || rule.getDiscountAmount() == null
+                || rule.getDiscountAmount().signum() <= 0) {
+            throw new BusinessException("The loyalty redemption rule is not configured correctly. Please check the loyalty programme.");
+        }
 
         if (account.getCurrentPoints() < rule.getMinPoints()) {
             throw new BusinessException("Minimum " + rule.getMinPoints() + " points required. Available: " + account.getCurrentPoints());
@@ -257,11 +299,24 @@ public class LoyaltyCommandService {
             throw new BusinessException("Maximum " + rule.getMaxPointsPerOrder() + " points per order.");
         }
 
-        int slabs = pointsToUse / rule.getPointsRequired();
         int dp = currencyScale.decimalPlaces(clientId, orgId);
-        BigDecimal discount = rule.getDiscountAmount()
-                .multiply(BigDecimal.valueOf(slabs))
-                .setScale(dp, RoundingMode.HALF_UP);
+        BigDecimal discount;
+        if (rule.isAllowPartial()) {
+            // Proportional value: e.g. 100 pts = 10 off, so 150 pts = 15 off.
+            discount = rule.getDiscountAmount()
+                    .multiply(BigDecimal.valueOf(pointsToUse))
+                    .divide(BigDecimal.valueOf(rule.getPointsRequired()), dp, RoundingMode.HALF_UP);
+        } else {
+            if (pointsToUse % rule.getPointsRequired() != 0) {
+                throw new BusinessException("Points must be redeemed in multiples of " + rule.getPointsRequired() + ".");
+            }
+            discount = rule.getDiscountAmount()
+                    .multiply(BigDecimal.valueOf(pointsToUse / rule.getPointsRequired()))
+                    .setScale(dp, RoundingMode.HALF_UP);
+        }
+        if (discount.signum() <= 0) {
+            throw new BusinessException("Too few points selected to give a discount.");
+        }
 
         account.setProgramId(program.getId());
         account.debitPoints(pointsToUse);
@@ -278,12 +333,12 @@ public class LoyaltyCommandService {
                 .transactionType(LoyaltyTransactionType.REDEEM)
                 .points(-pointsToUse)
                 .balanceAfter(account.getCurrentPoints())
-                .remarks("Redeemed for ₹" + discount + " discount")
+                .remarks("Redeemed " + pointsToUse + " points for " + discount.toPlainString() + " discount")
                 .createdAt(resolveTransactionTime(orderId))
                 .build());
 
         log.info("Loyalty REDEEM: customer={} order={} points=-{} discount={}", customerId, orderId, pointsToUse, discount);
-        return discount;
+        return RedemptionResult.applied(discount);
     }
 
     @Transactional
@@ -324,7 +379,7 @@ public class LoyaltyCommandService {
                 continue;
             }
 
-            CustomerLoyalty account = accountRepository.findById(original.getCustomerLoyaltyId())
+            CustomerLoyalty account = accountRepository.findByIdForUpdate(original.getCustomerLoyaltyId())
                     .orElse(null);
             if (account == null) {
                 log.warn("Loyalty account not found for transaction id={}, customerLoyaltyId={}",
@@ -332,12 +387,22 @@ public class LoyaltyCommandService {
                 continue;
             }
 
-            int reversalPoints = -original.getPoints();
+            int reversalPoints;
+            String remarks = "Reversal of " + original.getTransactionType() + " on order cancellation/refund";
             if (original.getTransactionType() == LoyaltyTransactionType.EARN) {
-                account.reverseEarnedPoints(original.getPoints());
+                int removed = account.reverseEarnedPoints(original.getPoints());
+                reversalPoints = -removed;
+                if (removed < Math.abs(original.getPoints())) {
+                    remarks += " (only " + removed + " of " + Math.abs(original.getPoints())
+                            + " points reversed; the rest were already spent)";
+                    log.warn("Loyalty REVERSAL partial: order={} earned={} reversed={}",
+                            orderId, original.getPoints(), removed);
+                }
             } else if (original.getTransactionType() == LoyaltyTransactionType.REDEEM) {
-                account.reverseRedeemedPoints(Math.abs(original.getPoints()));
+                reversalPoints = Math.abs(original.getPoints());
+                account.reverseRedeemedPoints(reversalPoints);
             } else {
+                reversalPoints = -original.getPoints();
                 if (reversalPoints > 0) {
                     account.creditPoints(reversalPoints);
                 } else {
@@ -358,7 +423,7 @@ public class LoyaltyCommandService {
                     .points(reversalPoints)
                     .balanceAfter(account.getCurrentPoints())
                     .referenceTransactionId(original.getId())
-                    .remarks("Reversal of " + original.getTransactionType() + " on order cancellation/refund")
+                    .remarks(remarks)
                     .createdAt(resolveTransactionTime(orderId))
                     .build());
 
@@ -432,12 +497,46 @@ public class LoyaltyCommandService {
         return Optional.empty();
     }
 
-    private Optional<CustomerLoyalty> findAccount(UUID customerId, UUID clientId, UUID orgId) {
-        return accountRepository.findByCustomerIdAndClientId(customerId, clientId);
+    /** Rejects rule combinations under which customers could never redeem points. */
+    private void validateRedemptionLimits(int minPoints, Integer maxPointsPerOrder, int pointsRequired, boolean allowPartial) {
+        if (minPoints < 0) {
+            throw new BusinessException("Minimum points to redeem cannot be negative.");
+        }
+        if (maxPointsPerOrder != null) {
+            if (maxPointsPerOrder < minPoints) {
+                throw new BusinessException("Max points per bill (" + maxPointsPerOrder
+                        + ") cannot be less than the minimum points needed (" + minPoints + ").");
+            }
+            if (!allowPartial && maxPointsPerOrder < pointsRequired) {
+                throw new BusinessException("Max points per bill (" + maxPointsPerOrder
+                        + ") must be at least " + pointsRequired + " when points are used in whole blocks.");
+            }
+        }
+    }
+
+    private boolean hasTransaction(UUID orderId, UUID clientId, LoyaltyTransactionType type) {
+        return transactionRepository.findByOrderIdAndClientId(orderId, clientId).stream()
+                .anyMatch(t -> t.getTransactionType() == type);
+    }
+
+    /**
+     * One loyalty account per customer per client: points earned at any branch can be used at
+     * any branch. If legacy per-branch accounts exist, the oldest one is used.
+     */
+    private Optional<CustomerLoyalty> findAccount(UUID customerId, UUID clientId) {
+        List<CustomerLoyalty> accounts = accountRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
+        return accounts == null || accounts.isEmpty() ? Optional.empty() : Optional.of(accounts.get(0));
+    }
+
+    private CustomerLoyalty lockForUpdate(CustomerLoyalty account) {
+        if (account == null || account.getId() == null) {
+            return account;
+        }
+        return accountRepository.findByIdForUpdate(account.getId()).orElse(account);
     }
 
     private CustomerLoyalty getOrCreateAccount(UUID customerId, UUID clientId, UUID orgId, UUID programId) {
-        return findAccount(customerId, clientId, orgId)
+        return findAccount(customerId, clientId)
                 .orElseGet(() -> accountRepository.save(CustomerLoyalty.builder()
                         .customerId(customerId)
                         .clientId(clientId)
