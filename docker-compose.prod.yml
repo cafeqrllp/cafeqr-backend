@@ -142,7 +142,26 @@ services:
         limits:
           memory: 192M
 
-  # ── WhatsApp Companion Gateway (Baileys Multi-Tenant Microservice) ──
+  # ── WAHA Core Service (Self-Hosted WhatsApp HTTP Engine) ──
+  waha:
+    image: devlikeapro/waha
+    container_name: cafeqr-waha
+    restart: unless-stopped
+    environment:
+      - WHATSAPP_API_KEY=${WAHA_API_KEY:-cafeqr-waha-secret-2026}
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WAHA_DASHBOARD_ENABLED=false
+      - WAHA_LOG_LEVEL=info
+    volumes:
+      - waha_sessions:/app/.sessions
+    networks:
+      - frontend_net
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # ── WhatsApp Companion Gateway Adapter ──
   whatsapp-gateway:
     image: ${WHATSAPP_GATEWAY_IMAGE:-ghcr.io/cafeqrllp/cafeqr-whatsapp-gateway:latest}
     build:
@@ -150,14 +169,25 @@ services:
       dockerfile: Dockerfile
     container_name: cafeqr-whatsapp-gateway
     restart: unless-stopped
-    volumes:
-      - whatsapp_auth_data:/app/auth_sessions
+    environment:
+      - NODE_ENV=production
+      - PORT=3005
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY:-cafeqr-waha-secret-2026}
+      - WAHA_DEFAULT_SESSION=${WAHA_DEFAULT_SESSION:-cafe_qr_orders}
+      - WAHA_MULTI_SESSION=true
+      - WAHA_TIMEOUT_MS=15000
+      - WHATSAPP_HOOK_HMAC_KEY=${WHATSAPP_HOOK_HMAC_KEY:-cafeqr-webhook-hmac-2026}
+      - BACKEND_AUTO_CAPTURE_URL=http://backend:8080/api/v1/public/leads/auto-capture
+      - FOUNDER_SECRET_KEY=${FOUNDER_SECRET_KEY}
+    depends_on:
+      - waha
     networks:
       - frontend_net
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
 
 # ── Networks ──
 networks:
@@ -177,3 +207,4 @@ volumes:
   redis_data:
   backend_backups:
   whatsapp_auth_data:
+  waha_sessions:
