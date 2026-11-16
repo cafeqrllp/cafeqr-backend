@@ -480,6 +480,7 @@ public class OrderDtoMapper {
         }
         order.setSkipAutoPrintKinds(request.getSkipAutoPrintKinds());
         order.setInvoicePdfBase64(request.getPdfBase64());
+        order.setDeferWhatsAppDispatch(request.getDeferWhatsAppDispatch());
 
         if (request.getLines() != null) {
             for (CreateOrderRequest.CreateOrderLineRequest lineReq : request.getLines()) {

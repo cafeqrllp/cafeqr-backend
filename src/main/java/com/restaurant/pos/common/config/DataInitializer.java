@@ -75,10 +75,14 @@ public class DataInitializer implements CommandLineRunner {
 
     private void seedRole(String name, String desc, Set<Permission> permissions, List<Menu> allMenus) {
         RoleEntity role = roleRepository.findByNameAndClientIdIsNull(name).orElseGet(() -> {
+            // Cash drawer defaults match migration V1_202: admin/manager roles may open manually and view history.
+            boolean drawerSupervisor = !"STAFF".equals(name);
             RoleEntity r = RoleEntity.builder()
                     .name(name)
                     .description(desc)
                     .isactive("Y")
+                    .canOpenCashDrawer(drawerSupervisor)
+                    .canViewCashDrawerHistory(drawerSupervisor)
                     .build();
             r.setCreatedBy("SYSTEM");
             return r;
@@ -90,7 +94,7 @@ public class DataInitializer implements CommandLineRunner {
             roleMenus.addAll(allMenus);
         } else if ("ADMIN".equals(name) || "MANAGER".equals(name)) {
             allMenus.stream()
-                    .filter(m -> Arrays.asList("Sales", "Product Management", "Dashboard").contains(m.getName()))
+                    .filter(m -> Arrays.asList("Sales", "Product Management", "Dashboard", "Cash Drawer History").contains(m.getName()))
                     .forEach(roleMenus::add);
         } else if ("STAFF".equals(name)) {
             allMenus.stream()

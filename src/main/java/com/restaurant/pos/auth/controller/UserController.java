@@ -159,6 +159,9 @@ public class UserController {
                 .canDeleteOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDeleteOrderItem() : true)
                 .canDecrementOrderItem(user.getRoleEntity() != null ? user.getRoleEntity().getCanDecrementOrderItem() : true)
                 .canPrintOrder(user.getRoleEntity() != null && user.getRoleEntity().getCanPrintOrder() != null ? user.getRoleEntity().getCanPrintOrder() : true)
+                .canOpenCashDrawer(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanOpenCashDrawer()))
+                .canAutoOpenCashDrawer(user.getRoleEntity() == null || !Boolean.FALSE.equals(user.getRoleEntity().getCanAutoOpenCashDrawer()))
+                .canViewCashDrawerHistory(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanViewCashDrawerHistory()))
                 .build();
 
         return ResponseEntity.ok(ApiResponse.success(dto));

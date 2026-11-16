@@ -86,6 +86,19 @@ public class ExpenseController {
      }
 
 
+     @GetMapping("/reports/gst-register")
+     @StaffAccess
+     @Operation(
+             summary = "Get expense GST register (India)",
+             description = "Line-level inward-supply register for expenses: supplier GSTIN, bill no., HSN/SAC, taxable value and CGST/SGST/IGST split. Void expenses are excluded."
+     )
+     public ResponseEntity<ApiResponse<java.util.List<com.restaurant.pos.purchase.dto.PurchaseGstRegisterRowDto>>> getExpenseGstRegister(
+             @ParameterObject ExpenseSearchCriteria criteria
+     ) {
+         log.info("Fetching expense GST register | criteria={}", criteria);
+         return ResponseEntity.ok(ApiResponse.success(expenseService.getExpenseGstRegister(criteria)));
+     }
+
      @GetMapping("/categories")
      @StaffAccess
      @Operation(

@@ -172,6 +172,10 @@ public class Order extends BaseEntity {
     @Transient
     private String invoicePdfBase64;
 
+    /** Transient: POS will send the WhatsApp bill (with invoice PDF) itself after this request. */
+    @Transient
+    private Boolean deferWhatsAppDispatch;
+
     @Column(name = "vendor_id")
     private UUID vendorId;
 

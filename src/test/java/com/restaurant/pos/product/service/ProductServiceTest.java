@@ -160,6 +160,73 @@ class ProductServiceTest {
         assertThat(created.getIsClientWise()).isTrue();
     }
 
+    @Test
+    void bulkCreateReusesExistingActiveProductWithSameName() {
+        Product existing = branchProduct(UUID.randomUUID(), branchId);
+        existing.setName("Britannia Marie Gold 300g");
+        when(productRepository.findByClientIdAndOrgIdOrGlobal(clientId, branchId)).thenReturn(List.of(existing));
+        when(productRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Same name with different case and spacing, as the AI bill scanner may submit it
+        Product scanned = Product.builder().name("  britannia  marie gold 300G ").price(BigDecimal.ZERO).build();
+        Product brandNew = Product.builder().name("Amul Butter 500g").price(BigDecimal.ZERO).build();
+
+        List<Product> result = productService.bulkCreateProducts(new java.util.ArrayList<>(List.of(scanned, brandNew)));
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0)).isSameAs(existing);
+        assertThat(result.get(1).getName()).isEqualTo("Amul Butter 500g");
+        org.mockito.ArgumentCaptor<List<Product>> saved = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(productRepository).saveAll(saved.capture());
+        assertThat(saved.getValue()).extracting(Product::getName).containsExactly("Amul Butter 500g");
+    }
+
+    @Test
+    void bulkCreateCreatesRepeatedBatchNameOnlyOnce() {
+        when(productRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product first = Product.builder().name("Toned Milk 1L").price(BigDecimal.ZERO).build();
+        Product repeat = Product.builder().name("toned milk 1l").price(BigDecimal.ZERO).build();
+
+        List<Product> result = productService.bulkCreateProducts(new java.util.ArrayList<>(List.of(first, repeat)));
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(1)).isSameAs(result.get(0));
+        org.mockito.ArgumentCaptor<List<Product>> saved = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(productRepository).saveAll(saved.capture());
+        assertThat(saved.getValue()).hasSize(1);
+    }
+
+    @Test
+    void bulkCreateIgnoresInactiveProductWithSameName() {
+        Product inactive = branchProduct(UUID.randomUUID(), branchId);
+        inactive.setName("Old Syrup");
+        inactive.setActive(false);
+        when(productRepository.findByClientIdAndOrgIdOrGlobal(clientId, branchId)).thenReturn(List.of(inactive));
+        when(productRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product scanned = Product.builder().name("Old Syrup").price(BigDecimal.ZERO).build();
+
+        List<Product> result = productService.bulkCreateProducts(new java.util.ArrayList<>(List.of(scanned)));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0)).isNotSameAs(inactive);
+        assertThat(result.get(0).getOrgId()).isEqualTo(branchId);
+    }
+
+    @Test
+    void legacyIngredientProductTypeIsReplacedWithFoodType() {
+        Product scanned = Product.builder().name("Mayonnaise 1 kg").price(BigDecimal.ZERO).productType("INGREDIENT").build();
+        Product product = Product.builder().name("Chai").price(BigDecimal.ZERO).productType("NON_VEG").build();
+        Product blank = Product.builder().name("Tea").price(BigDecimal.ZERO).build();
+
+        assertThat(ProductService.normalizeProductType(scanned)).isEqualTo("VEG");
+        assertThat(ProductService.normalizeProductType(Product.builder().name("x").price(BigDecimal.ZERO).productType("product").build()))
+                .isEqualTo("VEG");
+        assertThat(ProductService.normalizeProductType(product)).isEqualTo("NON_VEG");
+        assertThat(ProductService.normalizeProductType(blank)).isNull();
+    }
+
     private Product branchProduct(UUID productId, UUID ownerBranchId) {
         com.restaurant.pos.product.domain.Category category = com.restaurant.pos.product.domain.Category.builder()
                 .id(UUID.randomUUID())

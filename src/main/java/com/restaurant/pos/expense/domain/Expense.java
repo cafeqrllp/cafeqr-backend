@@ -69,6 +69,25 @@ public class Expense extends BaseEntity {
     @Column(name = "currency_id")
     private UUID currencyId;
 
+    // ── India GST details (optional; V1_204). `amount` stays the tax-inclusive total paid. ──
+    @Column(name = "supplier_name")
+    private String supplierName;
+
+    @Column(name = "supplier_gstin", length = 20)
+    private String supplierGstin;
+
+    @Column(name = "bill_no", length = 100)
+    private String billNo;
+
+    @Column(name = "hsn_sac", length = 20)
+    private String hsnSac;
+
+    @Column(name = "gst_rate", precision = 7, scale = 4)
+    private BigDecimal gstRate;
+
+    @Column(name = "tax_amount", precision = 15, scale = 2)
+    private BigDecimal taxAmount;
+
     public static final String ACTIVE_FLAG = "Y";
     public static final String INACTIVE_FLAG = "N";
 

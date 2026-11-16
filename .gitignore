@@ -40,3 +40,10 @@ application-local.yml
 
 # DB scripts
 scripts/
+
+# Node / WhatsApp Gateway
+node_modules/
+whatsapp-gateway/node_modules/
+whatsapp-gateway/auth_sessions/
+.sessions/
+

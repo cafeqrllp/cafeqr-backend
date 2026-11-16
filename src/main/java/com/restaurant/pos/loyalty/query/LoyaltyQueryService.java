@@ -64,9 +64,14 @@ public class LoyaltyQueryService {
 
     @Transactional(readOnly = true)
     public LoyaltyProgramDto getProgram(UUID id) {
+        UUID clientId = TenantContext.getCurrentTenant();
+        UUID orgId    = TenantContext.getCurrentOrg();
+        // Only programmes of this client that are visible to this branch (own branch or client-wide)
         return programRepository.findById(id)
+                .filter(p -> Objects.equals(p.getClientId(), clientId))
+                .filter(p -> orgId == null || p.getOrgId() == null || Objects.equals(p.getOrgId(), orgId))
                 .map(mapper::toProgramDto)
-                .orElseThrow(() -> new BusinessException("Loyalty programme not found: " + id));
+                .orElseThrow(() -> new BusinessException("Loyalty programme not found."));
     }
 
     @Transactional
@@ -74,10 +79,10 @@ public class LoyaltyQueryService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId    = TenantContext.getCurrentOrg();
 
-        CustomerLoyalty account = (orgId != null)
-                ? accountRepository.findByCustomerIdAndClientIdAndOrgId(customerId, clientId, orgId)
-                        .orElseGet(() -> accountRepository.findByCustomerIdAndClientId(customerId, clientId).orElse(null))
-                : accountRepository.findByCustomerIdAndClientId(customerId, clientId).orElse(null);
+        // One account per customer per client (points are shared across branches) — the same
+        // account LoyaltyCommandService earns into and redeems from.
+        List<CustomerLoyalty> accounts = accountRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
+        CustomerLoyalty account = (accounts == null || accounts.isEmpty()) ? null : accounts.get(0);
 
         com.restaurant.pos.purchasing.domain.Customer customer = customerRepository.findById(customerId).orElse(null);
 
@@ -91,7 +96,9 @@ public class LoyaltyQueryService {
         }
 
         if (account == null) {
-            int customerPoints = (customer != null && customer.getLoyaltyPoints() != null) ? customer.getLoyaltyPoints() : 0;
+            // No loyalty account yet = nothing redeemable. Do not show the legacy customers.loyalty_points
+            // value here: the POS would offer points that redemption then rejects.
+            int customerPoints = 0;
             return CustomerLoyaltyDto.builder()
                     .customerId(customerId)
                     .customerName(customer != null ? customer.getName() : null)
@@ -126,13 +133,11 @@ public class LoyaltyQueryService {
 
     private void reconcileAccountFromLedger(CustomerLoyalty account, UUID customerId, UUID clientId) {
         if (account == null || customerId == null) return;
-        List<LoyaltyTransaction> txns = (account.getOrgId() != null)
-                ? transactionRepository.findByCustomerIdAndClientIdAndOrgIdOrderByCreatedAtAsc(customerId, clientId, account.getOrgId())
-                : transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
-
-        if (txns.isEmpty() && account.getOrgId() != null) {
-            txns = transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtAsc(customerId, clientId);
-        }
+        // Reconcile against this account's own ledger. Entries carry the org of the branch that
+        // posted them, so filtering by the account's org would drop other branches' activity.
+        List<LoyaltyTransaction> txns = account.getId() != null
+                ? transactionRepository.findByCustomerLoyaltyIdOrderByCreatedAtAsc(account.getId())
+                : List.of();
 
         if (txns.isEmpty()) return;
 
@@ -140,7 +145,13 @@ public class LoyaltyQueryService {
         int calculatedRedeemed = 0;
 
         for (LoyaltyTransaction t : txns) {
-            if (t.getTransactionType() == LoyaltyTransactionType.EARN) {
+            if (t.getTransactionType() == LoyaltyTransactionType.ADJUSTMENT) {
+                // Manual correction: positive adds to earned, negative counts as used
+                if (t.getPoints() >= 0) calculatedEarned += t.getPoints();
+                else calculatedRedeemed += Math.abs(t.getPoints());
+            } else if (t.getTransactionType() == LoyaltyTransactionType.EXPIRE) {
+                calculatedRedeemed += Math.abs(t.getPoints());
+            } else if (t.getTransactionType() == LoyaltyTransactionType.EARN) {
                 calculatedEarned += t.getPoints();
             } else if (t.getTransactionType() == LoyaltyTransactionType.REDEEM) {
                 calculatedRedeemed += Math.abs(t.getPoints());
@@ -184,13 +195,9 @@ public class LoyaltyQueryService {
         UUID orgId    = TenantContext.getCurrentOrg();
         Pageable pageable = PageRequest.of(page, Math.min(size, 200));
 
-        Page<LoyaltyTransaction> txns = (orgId != null)
-                ? transactionRepository.findByCustomerIdAndClientIdAndOrgIdOrderByCreatedAtDesc(customerId, clientId, orgId, pageable)
-                : transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtDesc(customerId, clientId, pageable);
-
-        if (txns.isEmpty() && orgId != null) {
-            txns = transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtDesc(customerId, clientId, pageable);
-        }
+        // Points are shared across branches, so show the full history; each entry carries its branch.
+        Page<LoyaltyTransaction> txns =
+                transactionRepository.findByCustomerIdAndClientIdOrderByCreatedAtDesc(customerId, clientId, pageable);
 
         // Batch-fetch program names for all transactions
         Set<UUID> programIds = txns.getContent().stream()
@@ -201,6 +208,19 @@ public class LoyaltyQueryService {
                 : programRepository.findAllById(programIds).stream()
                         .collect(Collectors.toMap(LoyaltyProgram::getId, LoyaltyProgram::getName, (a, b) -> a));
 
-        return txns.map(t -> mapper.toTransactionDto(t, t.getProgramId() != null ? programNameMap.get(t.getProgramId()) : null));
+        Set<UUID> txnOrgIds = txns.getContent().stream()
+                .map(LoyaltyTransaction::getOrgId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, String> branchNameMap = txnOrgIds.isEmpty() ? Map.of()
+                : organizationRepository.findAllById(txnOrgIds).stream()
+                        .collect(Collectors.toMap(
+                                com.restaurant.pos.client.domain.Organization::getId,
+                                com.restaurant.pos.client.domain.Organization::getName,
+                                (a, b) -> a));
+
+        return txns.map(t -> mapper.toTransactionDto(t,
+                t.getProgramId() != null ? programNameMap.get(t.getProgramId()) : null,
+                t.getOrgId() != null ? branchNameMap.get(t.getOrgId()) : null));
     }
 }

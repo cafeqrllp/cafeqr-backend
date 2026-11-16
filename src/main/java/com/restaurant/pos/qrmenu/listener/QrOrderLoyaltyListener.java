@@ -2,14 +2,13 @@ package com.restaurant.pos.qrmenu.listener;
 
 import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.service.SystemConfigurationService;
-import com.restaurant.pos.loyalty.event.LoyaltyOrderSettledEvent;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderLine;
+import com.restaurant.pos.order.domain.OrderType;
 import com.restaurant.pos.outbox.service.OutboxService;
 import com.restaurant.pos.qrmenu.event.QrOrderPlacedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +28,6 @@ public class QrOrderLoyaltyListener {
 
     private final SystemConfigurationService systemConfigurationService;
     private final OutboxService outboxService;
-    private final ApplicationEventPublisher eventPublisher;
 
     @EventListener
     public void onQrOrderPlaced(QrOrderPlacedEvent event) {
@@ -42,7 +40,8 @@ public class QrOrderLoyaltyListener {
 
         try {
             ConfigurationDto config = systemConfigurationService.getConfigurationForClientAndBranch(clientId, orgId);
-            boolean loyaltyEnabled = config != null && config.isLoyaltyEnabled();
+            // Same default as LoyaltyCommandService / OrderService: no config row = default settings (enabled)
+            boolean loyaltyEnabled = config == null || config.isLoyaltyEnabled();
 
             if (!loyaltyEnabled) {
                 log.debug("Loyalty is disabled for client={} org={}, skipping loyalty processing for QR order {}",
@@ -55,19 +54,19 @@ public class QrOrderLoyaltyListener {
                 return;
             }
 
-            // Only process loyalty earn if order is paid/settled
+            // Only completed, paid SALE orders earn points (never purchases, returns or credit)
+            boolean isSale = order.getOrderType() == null || order.getOrderType() == OrderType.SALE;
             boolean isSettled = "COMPLETED".equalsIgnoreCase(order.getOrderStatus())
-                    || "PAID".equalsIgnoreCase(order.getPaymentStatus());
+                    && "PAID".equalsIgnoreCase(order.getPaymentStatus());
+            boolean isCredit = Boolean.TRUE.equals(order.getIsCredit()) || order.getCreditCustomerId() != null;
 
-            if (isSettled) {
+            if (isSale && isSettled && !isCredit) {
                 BigDecimal eligible = computeLoyaltyEligibleAmount(order);
-                log.info("EventListener: QR order settled with customer={} eligibleAmount={}. Publishing LoyaltyOrderSettledEvent.",
+                log.info("EventListener: QR order settled with customer={} eligibleAmount={}. Enqueuing ORDER_SETTLED.",
                         customerId, eligible);
 
-                // 1. Publish in-process LoyaltyOrderSettledEvent (handled by LoyaltyOrderSettledListener)
-                eventPublisher.publishEvent(new LoyaltyOrderSettledEvent(this, order, customerId, eligible));
-
-                // 2. Also enqueue ORDER_SETTLED to transactional outbox for durability
+                // Single path: the transactional outbox (LoyaltyEventConsumer earns after commit,
+                // with retries). No parallel in-process event, so points cannot be double-awarded.
                 outboxService.enqueue(
                         "ORDER",
                         order.getId(),
@@ -77,8 +76,7 @@ public class QrOrderLoyaltyListener {
                         Map.of(
                                 "orderId", order.getId().toString(),
                                 "customerId", customerId.toString(),
-                                "redeemPoints", 0,
-                                "eligibleAmount", eligible.toString()
+                                "loyaltyEligibleAmount", eligible.toPlainString()
                         )
                 );
             }

@@ -59,6 +59,8 @@ public class PurchaseOrder extends Order {
             throw new BusinessException("Purchase Order is already voided");
         }
         this.setOrderStatus(OrderStatus.VOID.name());
+        // Its payments are voided with it, so it no longer counts as paid.
+        this.setPaymentStatus(com.restaurant.pos.order.domain.PaymentStatus.VOID.name());
     }
 
     public void cancel() {

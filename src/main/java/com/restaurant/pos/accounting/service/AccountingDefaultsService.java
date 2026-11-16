@@ -32,6 +32,9 @@ public class AccountingDefaultsService {
     public static final String DISCOUNT_ALLOWED = "DISCOUNT_ALLOWED";
     public static final String ROUND_OFF = "ROUND_OFF";
     public static final String STOCK_ADJUSTMENT_GAIN_LOSS = "STOCK_ADJUSTMENT_GAIN_LOSS";
+    public static final String OPENING_BALANCE_EQUITY = "OPENING_BALANCE_EQUITY";
+    public static final String OWNER_CAPITAL = "OWNER_CAPITAL";
+    public static final String RETAINED_EARNINGS = "RETAINED_EARNINGS";
 
     private static final List<AccountTemplate> ACCOUNT_TEMPLATES = List.of(
             new AccountTemplate(CASH, "SYS-1000", "Cash in Hand", AccountType.ASSET, "Cash", true, false),
@@ -41,6 +44,9 @@ public class AccountingDefaultsService {
             new AccountTemplate(INPUT_TAX, "SYS-1300", "Input Tax", AccountType.ASSET, "Tax", false, false),
             new AccountTemplate(ACCOUNTS_PAYABLE, "SYS-2000", "Accounts Payable", AccountType.LIABILITY, "Payable", false, false),
             new AccountTemplate(OUTPUT_TAX, "SYS-2100", "Output Tax", AccountType.LIABILITY, "Tax", false, false),
+            new AccountTemplate(OPENING_BALANCE_EQUITY, "SYS-3000", "Opening Balance Equity", AccountType.EQUITY, "Opening Balance", false, false),
+            new AccountTemplate(OWNER_CAPITAL, "SYS-3100", "Owner's Capital", AccountType.EQUITY, "Capital", false, false),
+            new AccountTemplate(RETAINED_EARNINGS, "SYS-3200", "Retained Earnings", AccountType.EQUITY, "Retained Earnings", false, false),
             new AccountTemplate(SALES_REVENUE, "SYS-4000", "Sales Revenue", AccountType.INCOME, "Sales", false, false),
             new AccountTemplate(PURCHASE_COGS, "SYS-5000", "Purchase / Cost of Goods Sold", AccountType.EXPENSE, "COGS", false, false),
             new AccountTemplate(OPERATING_EXPENSES, "SYS-5100", "Operating Expenses", AccountType.EXPENSE, "Expense", false, false),

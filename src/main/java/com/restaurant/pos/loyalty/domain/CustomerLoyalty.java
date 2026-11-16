@@ -83,7 +83,7 @@ public class CustomerLoyalty {
 
     public void debitPoints(int points) {
         if (points > this.currentPoints) {
-            throw new IllegalStateException(
+            throw new com.restaurant.pos.common.exception.BusinessException(
                     "Insufficient loyalty points. Available: " + currentPoints + ", requested: " + points);
         }
         this.currentPoints -= points;
@@ -91,11 +91,19 @@ public class CustomerLoyalty {
         this.updatedAt = Instant.now();
     }
 
-    public void reverseEarnedPoints(int points) {
+    /**
+     * Takes back points earned on a cancelled order. If the customer has already spent some
+     * of them, only the remaining balance can be taken back (the balance never goes negative).
+     *
+     * @return the number of points actually removed, so the ledger records the true movement
+     */
+    public int reverseEarnedPoints(int points) {
         int abs = Math.abs(points);
-        this.currentPoints = Math.max(0, this.currentPoints - abs);
-        this.lifetimeEarned = Math.max(0, this.lifetimeEarned - abs);
+        int removable = Math.min(abs, Math.max(0, this.currentPoints));
+        this.currentPoints -= removable;
+        this.lifetimeEarned = Math.max(0, this.lifetimeEarned - removable);
         this.updatedAt = Instant.now();
+        return removable;
     }
 
     public void reverseRedeemedPoints(int points) {

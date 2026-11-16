@@ -36,6 +36,11 @@ public class SalesScreenConfiguration {
     private boolean barcodeScannerEnabled;
     private boolean onlineDeliveryEnabled;
     private boolean takeawayAutoPrintKotOnSettle;
+    private boolean cashDrawerEnabled;
+    private boolean cashDrawerAutoOpenOnSale;
+    private boolean cashDrawerAutoOpenOnOrderSettle;
+    private String cashDrawerOpenTenders;
+    private boolean cashDrawerManualReasonRequired;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean takeawayHideKitchenMode;
     private boolean dineInHideKitchenMode;

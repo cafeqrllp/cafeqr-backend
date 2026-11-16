@@ -1,5 +1,6 @@
 package com.restaurant.pos.purchase.listener;
 
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.inventory.service.InventoryService;
 import com.restaurant.pos.order.domain.Order;
 import com.restaurant.pos.order.domain.OrderLine;
@@ -49,6 +50,12 @@ public class PurchaseOrderInventoryListener {
             }
         }
 
+        // Idempotency: never receive the same purchase order twice (legacy OrderService path may already have).
+        if (isPositive(inventoryService.netPurchaseReceivedQty(purchaseOrder.getId()))) {
+            log.info("EventListener: Skipping stock intake for PO {} — stock already received", purchaseOrder.getOrderNo());
+            return;
+        }
+
         final java.util.UUID targetWarehouseId = warehouseId;
 
         log.info("EventListener: Processing stock intake | orderNo={} | warehouseId={} | lines={}",
@@ -64,14 +71,25 @@ public class PurchaseOrderInventoryListener {
                             line.getQuantity(),           // Positive = Stock IN
                             "PURCHASE_RECEIPT",           // Transaction type
                             purchaseOrder.getId(),
-                            line.getUnitPrice(),
+                            inventoryService.purchaseUnitCost(purchaseOrder, line),
                             purchaseOrder.getOrgId()
                     );
                 } catch (Exception e) {
+                    // Rethrow so the whole PO completion rolls back instead of leaving it
+                    // completed with partial stock (or failing later with UnexpectedRollbackException).
                     log.error("Failed stock intake for item {} in PO {}: {}",
                             line.getProductId(), purchaseOrder.getOrderNo(), e.getMessage(), e);
+                    if (e instanceof BusinessException be) {
+                        throw be;
+                    }
+                    throw new BusinessException("Could not receive stock for " + line.getProductName()
+                            + " in PO " + purchaseOrder.getOrderNo() + ": " + e.getMessage());
                 }
             }
         }
+    }
+
+    private static boolean isPositive(BigDecimal value) {
+        return value != null && value.signum() > 0;
     }
 }

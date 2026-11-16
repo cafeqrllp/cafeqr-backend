@@ -125,6 +125,19 @@ public class PurchaseOrderQueryController {
         return ResponseEntity.ok(ApiResponse.success(queryService.getPurchasePaymentBreakdown(from, to, orgId, vendorId, warehouseId)));
     }
 
+    @GetMapping("/reports/gst-register")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
+    @Operation(summary = "Get Purchase GST Register (India)", description = "Line-level inward-supply register with supplier GSTIN, HSN, UQC, taxable value and CGST/SGST/IGST split for GST filing and GSTR-2B reconciliation. Excludes draft, void and cancelled purchases.")
+    public ResponseEntity<ApiResponse<List<com.restaurant.pos.purchase.dto.PurchaseGstRegisterRowDto>>> getPurchaseGstRegister(
+            @RequestParam(required = false) java.time.Instant from,
+            @RequestParam(required = false) java.time.Instant to,
+            @RequestParam(required = false) UUID orgId,
+            @RequestParam(required = false) UUID vendorId,
+            @RequestParam(required = false) UUID warehouseId) {
+        log.info("Fetching Purchase GST Register | from={} | to={} | orgId={}", from, to, orgId);
+        return ResponseEntity.ok(ApiResponse.success(queryService.getPurchaseGstRegister(from, to, orgId, vendorId, warehouseId)));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     @Operation(summary = "Get Purchase Order by ID", description = "Returns a single Purchase Order with detailed line items.")

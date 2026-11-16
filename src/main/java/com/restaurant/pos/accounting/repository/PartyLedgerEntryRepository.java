@@ -33,6 +33,20 @@ public interface PartyLedgerEntryRepository extends JpaRepository<PartyLedgerEnt
             UUID partyId
     );
 
+    List<PartyLedgerEntry> findByClientIdAndOrgIdAndPartyTypeAndPartyIdOrderByEntryDateAscCreatedAtAsc(
+            UUID clientId,
+            UUID orgId,
+            PartyType partyType,
+            UUID partyId
+    );
+
+    /**
+     * Serialises ledger writes for one party until the current transaction ends (PostgreSQL advisory lock),
+     * so two concurrent postings cannot both read the same "previous balance".
+     */
+    @Query(value = "SELECT CAST(pg_advisory_xact_lock(hashtext(:lockKey)) AS text)", nativeQuery = true)
+    String lockParty(@Param("lockKey") String lockKey);
+
     @Modifying
     @Query("""
             DELETE FROM PartyLedgerEntry p

@@ -42,10 +42,9 @@ public class PublicDigitalInvoiceDto {
     private BigDecimal totalDiscountAmount;
     private BigDecimal subtotal;
     private BigDecimal totalTaxAmount;
-    private BigDecimal cgstRate;
-    private BigDecimal cgstAmount;
-    private BigDecimal sgstRate;
-    private BigDecimal sgstAmount;
+    /** Tax lines to print, e.g. "CGST 9%" / "SGST 9%" when split is on, else "GST 18%". */
+    private List<TaxSummaryLineDto> taxSummary;
+    private boolean taxSplit;
     private BigDecimal roundOffAmount;
     private BigDecimal grandTotal;
 
@@ -87,5 +86,16 @@ public class PublicDigitalInvoiceDto {
         private String paymentMethod;
         private BigDecimal amount;
         private String referenceNo;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TaxSummaryLineDto {
+        private String label;
+        private String name;
+        private BigDecimal rate;
+        private BigDecimal amount;
     }
 }

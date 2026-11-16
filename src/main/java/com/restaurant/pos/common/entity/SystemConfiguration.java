@@ -73,6 +73,23 @@ public class SystemConfiguration {
     @Column(name = "mcp_enabled")
     private boolean mcpEnabled = false;
     private boolean takeawayAutoPrintKotOnSettle;
+    /** Cash drawer: master switch for drawer kicks on this client/branch. */
+    @Builder.Default
+    @Column(name = "cash_drawer_enabled")
+    private boolean cashDrawerEnabled = false;
+    @Builder.Default
+    @Column(name = "cash_drawer_auto_open_on_sale")
+    private boolean cashDrawerAutoOpenOnSale = true;
+    @Builder.Default
+    @Column(name = "cash_drawer_auto_open_on_order_settle")
+    private boolean cashDrawerAutoOpenOnOrderSettle = true;
+    /** Comma separated tender types that open the drawer, e.g. "CASH" or "CASH,CARD". */
+    @Builder.Default
+    @Column(name = "cash_drawer_open_tenders", length = 100)
+    private String cashDrawerOpenTenders = "CASH";
+    @Builder.Default
+    @Column(name = "cash_drawer_manual_reason_required")
+    private boolean cashDrawerManualReasonRequired = true;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;
@@ -95,6 +112,11 @@ public class SystemConfiguration {
     @Column(name = "non_stock_transfer_policy", length = 20)
     @Builder.Default
     private String nonStockTransferPolicy = "NONE";
+
+    /** Inventory costing method: AVERAGE_PO, LAST_PO or STANDARD. */
+    @Column(name = "costing_method", length = 20)
+    @Builder.Default
+    private String costingMethod = "AVERAGE_PO";
 
     // Offline Sync Capabilities
     private boolean offlineSyncEnabled;

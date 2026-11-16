@@ -85,6 +85,9 @@ public class ExpenseService {
     private final ContextProvider contextProvider;
     private final ExpenseCategoryPolicy categoryPolicy;
     private final com.restaurant.pos.order.repository.PaymentSplitRepository paymentSplitRepository;
+    private final com.restaurant.pos.client.repository.OrganizationRepository organizationRepository;
+    private final com.restaurant.pos.client.repository.ClientRepository clientRepository;
+    private final com.restaurant.pos.common.service.CurrencyScaleService currencyScale;
 
     // ─────────────────────────────────────────────────────────────
     // Sort Field Translation
@@ -578,11 +581,68 @@ public class ExpenseService {
 
 
     /**
+     * Line-level India GST inward-supply register for expenses (same row shape as purchases).
+     * Uses the same scope/branch rules as the expense list; void expenses are excluded.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<com.restaurant.pos.purchase.dto.PurchaseGstRegisterRowDto> getExpenseGstRegister(ExpenseSearchCriteria criteria) {
+        UUID clientId = contextProvider.getCurrentTenant();
+        UUID orgId = contextProvider.getCurrentOrg();
+        Specification<Expense> spec = ExpenseSpecification.filterBy(criteria, clientId, orgId, canUseOrganizationScope());
+        java.util.List<Expense> expenses = expenseRepository.findAll(spec);
+
+        java.util.Set<UUID> categoryIds = new java.util.HashSet<>();
+        java.util.Set<UUID> orgIds = new java.util.HashSet<>();
+        expenses.forEach(e -> {
+            if (e.getCategoryId() != null) categoryIds.add(e.getCategoryId());
+            if (e.getOrgId() != null) orgIds.add(e.getOrgId());
+        });
+        java.util.Map<UUID, String> categoryNames = new java.util.HashMap<>();
+        categoryRepository.findAllById(categoryIds).forEach(c -> categoryNames.put(c.getId(), c.getName()));
+        java.util.Map<UUID, com.restaurant.pos.client.domain.Organization> orgs = new java.util.HashMap<>();
+        organizationRepository.findAllById(orgIds).forEach(o -> {
+            if (clientId == null || clientId.equals(o.getClientId())) orgs.put(o.getId(), o);
+        });
+        String clientGstin = clientId == null ? null : clientRepository.findById(clientId)
+                .map(com.restaurant.pos.client.domain.Client::getGstNumber).orElse(null);
+        int dp = currencyScale.decimalPlaces(clientId, criteria != null && criteria.getBranchId() != null ? criteria.getBranchId() : orgId);
+
+        return com.restaurant.pos.expense.gst.ExpenseGstRegisterBuilder.build(expenses, categoryNames, orgs, clientGstin, dp);
+    }
+
+    /**
      * Helper to post accounting entries cleanly in a single step.
      */
     private void postAccountingEntries(Invoice invoice, Payment payment) {
         accountingPostingService.postInvoice(null, invoice);
         accountingPostingService.postPayment(null, payment);
+    }
+
+    /**
+     * Copies optional India GST details. `amount` is tax-inclusive, so when only a rate is given the
+     * tax is back-calculated: tax = amount x rate / (100 + rate).
+     */
+    private void applyGstDetails(Expense expense, ExpenseBaseRequest request) {
+        expense.setSupplierName(trimToNull(request.getSupplierName()));
+        String gstin = trimToNull(request.getSupplierGstin());
+        expense.setSupplierGstin(gstin != null ? gstin.toUpperCase() : null);
+        expense.setBillNo(trimToNull(request.getBillNo()));
+        expense.setHsnSac(trimToNull(request.getHsnSac()));
+        BigDecimal rate = request.getGstRate();
+        BigDecimal tax = request.getTaxAmount();
+        BigDecimal amount = expense.getAmount() != null ? expense.getAmount() : BigDecimal.ZERO;
+        if (tax == null && rate != null && rate.signum() > 0) {
+            tax = amount.multiply(rate).divide(rate.add(BigDecimal.valueOf(100)), 2, java.math.RoundingMode.HALF_UP);
+        }
+        if (tax != null && tax.compareTo(amount) > 0) {
+            throw new com.restaurant.pos.common.exception.BusinessException("GST amount cannot exceed the expense amount");
+        }
+        expense.setGstRate(rate);
+        expense.setTaxAmount(tax != null ? tax.setScale(2, java.math.RoundingMode.HALF_UP) : null);
+    }
+
+    private static String trimToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     /**
@@ -606,6 +666,7 @@ public class ExpenseService {
                 .activeFlag(Expense.ACTIVE_FLAG)
                 .revisionNumber(0)
                 .build();
+        applyGstDetails(expense, request);
 
         // Contextual Metadata
         expense.setOrgId(targetScope.orgId());

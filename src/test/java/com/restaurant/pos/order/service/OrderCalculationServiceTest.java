@@ -209,11 +209,13 @@ class OrderCalculationServiceTest {
 
         // Face pool = 118 (excl) + 118 (incl) = 236. Discount ₹20.
         // Proportional: each line share = 10.00 face.
-        //   Line 1 (EXCLUSIVE): discBase = 10/1.18 = 8.47. taxable = 91.53.
-        //   tax = 91.53 × 18% = 16.48. total = 108.01.
+        //   Line 1 (EXCLUSIVE, discounted): faceTotal = 118 - 10 = 108.00. taxable = 108/1.18 = 91.53. tax = 16.47.
+        //   (Building up from base would give 91.53 + 16.48 = 108.01 — a 1-cent drift from 118 - 10.)
         //   Line 2 (INCLUSIVE): faceTotal = 118 - 10 = 108.00. taxable = 91.53. tax = 16.47.
-        // Grand total = 108.01 + 108.00 = 216.01.
-        assertThat(result.getGrandTotal()).isEqualByComparingTo("216.01");
+        // Grand total = 108.00 + 108.00 = 216.00 = 236 - 20.
+        assertThat(result.getGrandTotal()).isEqualByComparingTo("216.00");
+        assertThat(result.getLines().get(0).getLineTotal()).isEqualByComparingTo("108.00");
+        assertThat(result.getLines().get(0).getTaxAmount()).isEqualByComparingTo("16.47");
         assertThat(result.getLines().get(0).getAllocatedOrderDiscountFace()).isEqualByComparingTo("10.00");
         assertThat(result.getLines().get(1).getAllocatedOrderDiscountFace()).isEqualByComparingTo("10.00");
         assertThat(result.getLines().get(0).getAllocatedOrderDiscountBase()).isEqualByComparingTo("8.47");

@@ -21,7 +21,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -47,6 +50,18 @@ public class PurchaseOrderCommandService {
     private final com.restaurant.pos.inventory.service.InventoryService inventoryService;
     private final com.restaurant.pos.invoice.repository.InvoiceRepository invoiceRepository;
     private final com.restaurant.pos.order.repository.PaymentRepository paymentRepository;
+    private final PlatformTransactionManager transactionManager;
+
+    /**
+     * A fresh transaction per purchase order for bulk operations. Without it, one PO whose
+     * listener fails marks the shared transaction rollback-only and the whole batch is lost
+     * with UnexpectedRollbackException, even though the response reported partial success.
+     */
+    private TransactionTemplate perOrderTransaction() {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
+    }
 
     /**
      * Creates and saves a new Purchase Order with server-side total recalculation.
@@ -121,6 +136,10 @@ public class PurchaseOrderCommandService {
         log.info("Creating Purchase Order | orderNo={} | vendorId={} | warehouseId={} | grandTotal={} | lineCount={}",
                 orderNo, command.getVendorId(), command.getWarehouseId(),
                 purchaseOrder.getGrandTotal(), purchaseOrder.getLines() != null ? purchaseOrder.getLines().size() : 0);
+
+        if (receivesStock(purchaseOrder)) {
+            assertInvoiceNotAlreadyReceived(clientId, orgId, purchaseOrder.getVendorId(), purchaseOrder.getReference(), null);
+        }
 
         Order savedOrder = orderRepository.save(purchaseOrder);
 
@@ -206,6 +225,10 @@ public class PurchaseOrderCommandService {
             log.info("Updating DRAFT Purchase Order in place | id={} | orderNo={} | status={} | grandTotal={}",
                     orderId, existingEntity.getOrderNo(), existingEntity.getOrderStatus(), existingEntity.getGrandTotal());
 
+            if (receivesStock(existingEntity)) {
+                assertInvoiceNotAlreadyReceived(clientId, existingEntity.getOrgId(), existingEntity.getVendorId(),
+                        existingEntity.getReference(), existingEntity.getId());
+            }
             Order savedOrder = orderRepository.save(existingEntity);
             publishCompletedEventIfNeeded(savedOrder);
 
@@ -220,8 +243,11 @@ public class PurchaseOrderCommandService {
         int currentRev = existingEntity.getRevisionNumber() != null ? existingEntity.getRevisionNumber() : 0;
         UUID rootOrderId = existingEntity.getOriginalOrderId() != null ? existingEntity.getOriginalOrderId() : existingEntity.getId();
 
+        // Keep the live payment status for the new revision; the voided snapshot's payments are voided below.
+        String priorPaymentStatus = existingEntity.getPaymentStatus();
         existingEntity.setOrderNo(originalOrderNo + "_VOID_" + currentRev);
         existingEntity.setOrderStatus(OrderStatus.VOID.name());
+        existingEntity.setPaymentStatus(com.restaurant.pos.order.domain.PaymentStatus.VOID.name());
         existingEntity.setIsactive("N");
         orderRepository.saveAndFlush(existingEntity);
 
@@ -259,7 +285,7 @@ public class PurchaseOrderCommandService {
         // Copy / update fields from command or existing
         newPo.setVendorId(command.getVendorId() != null ? command.getVendorId() : existingEntity.getVendorId());
         newPo.setWarehouseId(command.getWarehouseId() != null ? command.getWarehouseId() : existingEntity.getWarehouseId());
-        newPo.setPaymentStatus(command.getPaymentStatus() != null ? command.getPaymentStatus() : existingEntity.getPaymentStatus());
+        newPo.setPaymentStatus(command.getPaymentStatus() != null ? command.getPaymentStatus() : priorPaymentStatus);
         newPo.setPaymentMethod(command.getPaymentMethod() != null ? command.getPaymentMethod() : existingEntity.getPaymentMethod());
         newPo.setPaymentSplits(command.getPaymentSplits() != null ? command.getPaymentSplits() : existingEntity.getPaymentSplits());
         newPo.setReference(command.getReference() != null ? command.getReference() : existingEntity.getReference());
@@ -298,6 +324,9 @@ public class PurchaseOrderCommandService {
         log.info("Creating Revised Purchase Order | newId={} | orderNo={} | rev={} | grandTotal={}",
                 newPo.getId(), newPo.getOrderNo(), newPo.getRevisionNumber(), newPo.getGrandTotal());
 
+        if (receivesStock(newPo)) {
+            assertInvoiceNotAlreadyReceived(clientId, newPo.getOrgId(), newPo.getVendorId(), newPo.getReference(), null);
+        }
         Order savedOrder = orderRepository.save(newPo);
         publishCompletedEventIfNeeded(savedOrder);
 
@@ -325,6 +354,7 @@ public class PurchaseOrderCommandService {
                 throw new BusinessException("Purchase Order is already voided");
             }
             existingEntity.setOrderStatus(OrderStatus.VOID.name());
+            existingEntity.setPaymentStatus(com.restaurant.pos.order.domain.PaymentStatus.VOID.name());
         }
 
         log.info("Voiding Purchase Order | id={} | orderNo={}", orderId, existingEntity.getOrderNo());
@@ -355,6 +385,9 @@ public class PurchaseOrderCommandService {
             throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already received");
         }
 
+        assertInvoiceNotAlreadyReceived(clientId, existingEntity.getOrgId(), existingEntity.getVendorId(),
+                existingEntity.getReference(), existingEntity.getId());
+
         existingEntity.setIsReceived(true);
         if (existingEntity instanceof PurchaseOrder po) {
             po.complete();
@@ -374,7 +407,7 @@ public class PurchaseOrderCommandService {
     /**
      * Voids / cancels multiple Purchase Orders in a single bulk operation.
      */
-    @Transactional
+    // No outer transaction: each PO runs in its own (see perOrderTransaction) so one failure can't roll back the batch.
     public BulkPurchaseOrderResponseDto bulkVoidPurchaseOrders(List<UUID> orderIds) {
         if (orderIds == null || orderIds.isEmpty()) {
             return BulkPurchaseOrderResponseDto.builder()
@@ -388,30 +421,34 @@ public class PurchaseOrderCommandService {
         List<OrderResponseDto> processedOrders = new ArrayList<>();
         List<String> errors = new ArrayList<>();
 
+        TransactionTemplate perOrderTx = perOrderTransaction();
         for (UUID orderId : orderIds) {
             try {
-                Order existingEntity = orderRepository.findByIdAndClientId(orderId, clientId)
-                        .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found: " + orderId));
+                OrderResponseDto dto = perOrderTx.execute(status -> {
+                    Order existingEntity = orderRepository.findByIdAndClientId(orderId, clientId)
+                            .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found: " + orderId));
 
-                if (existingEntity.getOrderType() != null && existingEntity.getOrderType() != OrderType.PURCHASE) {
-                    throw new BusinessException("Order " + orderId + " is not a Purchase Order");
-                }
-
-                if (existingEntity instanceof PurchaseOrder po) {
-                    po.voidOrder();
-                } else {
-                    if ("VOID".equalsIgnoreCase(existingEntity.getOrderStatus()) || "CANCELLED".equalsIgnoreCase(existingEntity.getOrderStatus())) {
-                        throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already voided");
+                    if (existingEntity.getOrderType() != null && existingEntity.getOrderType() != OrderType.PURCHASE) {
+                        throw new BusinessException("Order " + orderId + " is not a Purchase Order");
                     }
-                    existingEntity.setOrderStatus(OrderStatus.VOID.name());
-                }
 
-                existingEntity.setIsReceived(false);
-                Order savedOrder = orderRepository.save(existingEntity);
-                eventPublisher.publishEvent(new PurchaseOrderVoidedEvent(savedOrder));
+                    if (existingEntity instanceof PurchaseOrder po) {
+                        po.voidOrder();
+                    } else {
+                        if ("VOID".equalsIgnoreCase(existingEntity.getOrderStatus()) || "CANCELLED".equalsIgnoreCase(existingEntity.getOrderStatus())) {
+                            throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already voided");
+                        }
+                        existingEntity.setOrderStatus(OrderStatus.VOID.name());
+                    }
+
+                    existingEntity.setIsReceived(false);
+                    Order savedOrder = orderRepository.save(existingEntity);
+                    eventPublisher.publishEvent(new PurchaseOrderVoidedEvent(savedOrder));
+                    return purchaseOrderDtoMapper.toResponseDto(savedOrder);
+                });
 
                 successfulIds.add(orderId);
-                processedOrders.add(purchaseOrderDtoMapper.toResponseDto(savedOrder));
+                processedOrders.add(dto);
             } catch (Exception e) {
                 log.warn("Bulk void failed for PO ID {}: {}", orderId, e.getMessage());
                 errors.add("PO " + orderId + ": " + e.getMessage());
@@ -431,7 +468,7 @@ public class PurchaseOrderCommandService {
     /**
      * Receives/completes multiple Purchase Orders in a single bulk operation.
      */
-    @Transactional
+    // No outer transaction: each PO runs in its own (see perOrderTransaction) so one failure can't roll back the batch.
     public BulkPurchaseOrderResponseDto bulkReceivePurchaseOrders(List<UUID> orderIds) {
         if (orderIds == null || orderIds.isEmpty()) {
             return BulkPurchaseOrderResponseDto.builder()
@@ -445,36 +482,43 @@ public class PurchaseOrderCommandService {
         List<OrderResponseDto> processedOrders = new ArrayList<>();
         List<String> errors = new ArrayList<>();
 
+        TransactionTemplate perOrderTx = perOrderTransaction();
         for (UUID orderId : orderIds) {
             try {
-                Order existingEntity = orderRepository.findByIdAndClientId(orderId, clientId)
-                        .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found: " + orderId));
+                OrderResponseDto dto = perOrderTx.execute(status -> {
+                    Order existingEntity = orderRepository.findByIdAndClientId(orderId, clientId)
+                            .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found: " + orderId));
 
-                if (existingEntity.getOrderType() != null && existingEntity.getOrderType() != OrderType.PURCHASE) {
-                    throw new BusinessException("Order " + orderId + " is not a Purchase Order");
-                }
+                    if (existingEntity.getOrderType() != null && existingEntity.getOrderType() != OrderType.PURCHASE) {
+                        throw new BusinessException("Order " + orderId + " is not a Purchase Order");
+                    }
 
-                boolean wasCompleted = OrderStatus.COMPLETED.name().equalsIgnoreCase(existingEntity.getOrderStatus());
-                if (wasCompleted) {
-                    throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already received/completed");
-                }
+                    boolean wasCompleted = OrderStatus.COMPLETED.name().equalsIgnoreCase(existingEntity.getOrderStatus());
+                    if (wasCompleted) {
+                        throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already received/completed");
+                    }
 
-                if (!StringUtils.hasText(existingEntity.getPaymentMethod())) {
-                    throw new BusinessException("Payment method must be specified before receiving Purchase Order " + existingEntity.getOrderNo());
-                }
+                    if (!StringUtils.hasText(existingEntity.getPaymentMethod())) {
+                        throw new BusinessException("Payment method must be specified before receiving Purchase Order " + existingEntity.getOrderNo());
+                    }
 
-                if (existingEntity instanceof PurchaseOrder po) {
-                    po.complete();
-                } else {
-                    existingEntity.setOrderStatus(OrderStatus.COMPLETED.name());
-                }
+                    assertInvoiceNotAlreadyReceived(clientId, existingEntity.getOrgId(), existingEntity.getVendorId(),
+                            existingEntity.getReference(), existingEntity.getId());
 
-                existingEntity.setIsReceived(true);
-                Order savedOrder = orderRepository.save(existingEntity);
-                eventPublisher.publishEvent(new PurchaseOrderCompletedEvent(savedOrder));
+                    if (existingEntity instanceof PurchaseOrder po) {
+                        po.complete();
+                    } else {
+                        existingEntity.setOrderStatus(OrderStatus.COMPLETED.name());
+                    }
+
+                    existingEntity.setIsReceived(true);
+                    Order savedOrder = orderRepository.save(existingEntity);
+                    eventPublisher.publishEvent(new PurchaseOrderCompletedEvent(savedOrder));
+                    return purchaseOrderDtoMapper.toResponseDto(savedOrder);
+                });
 
                 successfulIds.add(orderId);
-                processedOrders.add(purchaseOrderDtoMapper.toResponseDto(savedOrder));
+                processedOrders.add(dto);
             } catch (Exception e) {
                 log.warn("Bulk receive failed for PO ID {}: {}", orderId, e.getMessage());
                 errors.add("PO " + orderId + ": " + e.getMessage());
@@ -577,6 +621,32 @@ public class PurchaseOrderCommandService {
         newLine.setDiscountAmount(oldLine.getDiscountAmount());
         newLine.setLineTotal(oldLine.getLineTotal());
         return newLine;
+    }
+
+    /** True when saving this order puts its lines into stock (same rule as publishCompletedEventIfNeeded). */
+    private boolean receivesStock(Order order) {
+        return Boolean.TRUE.equals(order.getIsReceived())
+                || OrderStatus.COMPLETED.name().equalsIgnoreCase(order.getOrderStatus());
+    }
+
+    /**
+     * Stops the same supplier invoice being received twice, which would add its quantities to stock again.
+     * A bill is identified by vendor and invoice reference. Blank references are not checked, since they
+     * cannot be told apart.
+     */
+    private void assertInvoiceNotAlreadyReceived(UUID clientId, UUID orgId, UUID vendorId, String reference, UUID excludeOrderId) {
+        String ref = reference == null ? "" : reference.trim();
+        if (ref.isEmpty() || vendorId == null || orgId == null || clientId == null) {
+            return;
+        }
+        UUID exclude = excludeOrderId != null ? excludeOrderId : new UUID(0L, 0L);
+        List<Order> received = orderRepository.findReceivedPurchasesByVendorAndReference(
+                clientId, orgId, vendorId, OrderType.PURCHASE, ref, exclude);
+        if (!received.isEmpty()) {
+            throw new BusinessException("Supplier invoice \"" + ref + "\" was already received on "
+                    + received.get(0).getOrderNo() + ". Stock was not added again. "
+                    + "If that order was entered by mistake, void it first.");
+        }
     }
 
     private void publishCompletedEventIfNeeded(Order savedOrder) {

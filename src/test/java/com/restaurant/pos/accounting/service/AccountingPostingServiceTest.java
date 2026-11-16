@@ -81,7 +81,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 mock(com.restaurant.pos.expense.repository.ExpenseRepository.class),
-                mock(PlatformTransactionManager.class), new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                mock(PlatformTransactionManager.class), new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
 
         int deleted = service.cleanupAutoPostedAccountingData(clientId, orgId);
@@ -116,7 +117,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 mock(com.restaurant.pos.expense.repository.ExpenseRepository.class),
-                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
 
         Method method = AccountingPostingService.class.getDeclaredMethod("inTransaction", Supplier.class);
@@ -147,7 +149,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 mock(com.restaurant.pos.expense.repository.ExpenseRepository.class),
-                mock(PlatformTransactionManager.class), new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                mock(PlatformTransactionManager.class), new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
 
         Method method = AccountingPostingService.class.getDeclaredMethod("boundedRange", LocalDateTime.class, LocalDateTime.class);
@@ -201,7 +204,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 mock(com.restaurant.pos.expense.repository.ExpenseRepository.class),
-                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
 
         AccountingAccount receivable = account(AccountingDefaultsService.ACCOUNTS_RECEIVABLE, AccountType.ASSET);
@@ -352,7 +356,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 mock(com.restaurant.pos.expense.repository.ExpenseRepository.class),
-                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
 
         AccountingPostingService.PostingOutcome outcome = service.postSaleCogs(order);
@@ -486,7 +491,8 @@ class AccountingPostingServiceTest {
                 mock(ExpenseCategoryRepository.class),
                 mock(StockAdjustmentRepository.class),
                 expenseRepository,
-                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class))
+                transactionManager, new com.restaurant.pos.common.service.CurrencyScaleService(mock(com.restaurant.pos.purchasing.repository.CurrencyRepository.class)),
+                mock(com.restaurant.pos.costing.query.CostingQueryService.class)
         );
         AccountingBackfillRequest request = new AccountingBackfillRequest();
         request.setFrom("2026-06-06T00:00:00");

@@ -8,6 +8,7 @@ import com.restaurant.pos.order.domain.OrderLine;
 import com.restaurant.pos.order.domain.OrderStatus;
 import com.restaurant.pos.order.domain.OrderType;
 import com.restaurant.pos.order.dto.OrderResponseDto;
+import com.restaurant.pos.product.repository.ProductRepository;
 import com.restaurant.pos.purchase.command.CreatePurchaseOrderCommand;
 import com.restaurant.pos.purchase.command.UpdatePurchaseOrderCommand;
 import com.restaurant.pos.common.tenant.TenantContext;
@@ -31,6 +32,7 @@ public class PurchaseOrderDtoMapper {
 
     private final UserRepository userRepository;
     private final InvoiceRepository invoiceRepository;
+    private final ProductRepository productRepository;
 
     /**
      * Converts a CreatePurchaseOrderCommand into a PurchaseOrder domain entity.
@@ -79,8 +81,8 @@ public class PurchaseOrderDtoMapper {
                 line.setProductName(lineCmd.getProductName());
                 line.setQuantity(lineCmd.getQuantity());
                 line.setUnitPrice(lineCmd.getUnitPrice());
-                line.setUnitOfMeasure(lineCmd.getUnitOfMeasure());
-                line.setUomPrecision(lineCmd.getUomPrecision() != null ? lineCmd.getUomPrecision() : 0);
+                line.setUnitOfMeasure(resolveUom(lineCmd.getProductId(), lineCmd.getUnitOfMeasure()));
+                line.setUomPrecision(resolvePrecision(lineCmd.getProductId(), lineCmd.getUomPrecision()));
                 line.setTaxRate(lineCmd.getTaxRate() != null ? lineCmd.getTaxRate() : BigDecimal.ZERO);
                 line.setTaxAmount(lineCmd.getTaxAmount() != null ? lineCmd.getTaxAmount() : BigDecimal.ZERO);
                 line.setDiscountAmount(lineCmd.getDiscountAmount() != null ? lineCmd.getDiscountAmount() : BigDecimal.ZERO);
@@ -136,8 +138,8 @@ public class PurchaseOrderDtoMapper {
                 line.setProductName(lineCmd.getProductName());
                 line.setQuantity(lineCmd.getQuantity());
                 line.setUnitPrice(lineCmd.getUnitPrice());
-                line.setUnitOfMeasure(lineCmd.getUnitOfMeasure());
-                line.setUomPrecision(lineCmd.getUomPrecision() != null ? lineCmd.getUomPrecision() : 0);
+                line.setUnitOfMeasure(resolveUom(lineCmd.getProductId(), lineCmd.getUnitOfMeasure()));
+                line.setUomPrecision(resolvePrecision(lineCmd.getProductId(), lineCmd.getUomPrecision()));
                 line.setTaxRate(lineCmd.getTaxRate() != null ? lineCmd.getTaxRate() : BigDecimal.ZERO);
                 line.setTaxAmount(lineCmd.getTaxAmount() != null ? lineCmd.getTaxAmount() : BigDecimal.ZERO);
                 line.setDiscountAmount(lineCmd.getDiscountAmount() != null ? lineCmd.getDiscountAmount() : BigDecimal.ZERO);
@@ -204,8 +206,8 @@ public class PurchaseOrderDtoMapper {
                             .productName(line.getProductName())
                             .quantity(line.getQuantity())
                             .unitPrice(line.getUnitPrice())
-                            .unitOfMeasure(line.getUnitOfMeasure())
-                            .uomPrecision(line.getUomPrecision())
+                            .unitOfMeasure(resolveUom(line.getProductId(), line.getUnitOfMeasure()))
+                            .uomPrecision(resolvePrecision(line.getProductId(), line.getUomPrecision()))
                             .taxRate(line.getTaxRate())
                             .taxAmount(line.getTaxAmount())
                             .discountAmount(line.getDiscountAmount())
@@ -217,6 +219,34 @@ public class PurchaseOrderDtoMapper {
         }
 
         return builder.build();
+    }
+
+    private Integer resolvePrecision(UUID productId, Integer currentPrecision) {
+        if (currentPrecision != null && currentPrecision > 0) {
+            return currentPrecision;
+        }
+        if (productId != null) {
+            try {
+                return productRepository.findById(productId)
+                        .map(p -> p.getUom() != null ? p.getUom().getUomPrecision() : 0)
+                        .orElse(0);
+            } catch (Exception ignored) {}
+        }
+        return currentPrecision != null ? currentPrecision : 0;
+    }
+
+    private String resolveUom(UUID productId, String currentUom) {
+        if (currentUom != null && !currentUom.isBlank() && !"units".equalsIgnoreCase(currentUom)) {
+            return currentUom;
+        }
+        if (productId != null) {
+            try {
+                return productRepository.findById(productId)
+                        .map(p -> p.getUom() != null && p.getUom().getName() != null ? p.getUom().getName() : currentUom)
+                        .orElse(currentUom != null ? currentUom : "units");
+            } catch (Exception ignored) {}
+        }
+        return currentUom != null ? currentUom : "units";
     }
 
     private String resolveUserDisplayName(String uidStr) {
@@ -268,7 +298,8 @@ public class PurchaseOrderDtoMapper {
                 .orderNo(order.getOrderNo())
                 .orderStatus(order.getOrderStatus())
                 .isReceived(order.getIsReceived())
-                .paymentStatus(order.getPaymentStatus())
+                // Lists show what was actually paid: voided POs as VOID, drafts as PENDING.
+                .paymentStatus(com.restaurant.pos.purchase.domain.PurchasePaymentStatus.effective(order.getOrderStatus(), order.getPaymentStatus()))
                 .paymentMethod(order.getPaymentMethod())
                 .vendorId(order.getVendorId())
                 .warehouseId(order.getWarehouseId())

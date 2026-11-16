@@ -53,4 +53,8 @@ public class StockSnapshot {
 
     @Transient
     private java.math.BigDecimal variantCostPrice;
+
+    /** Current stock cost from inventory costing (product_costs) for this org/product/variant. */
+    @Transient
+    private java.math.BigDecimal currentCost;
 }

@@ -162,8 +162,16 @@ public class OrderCalculationService {
             BigDecimal tax;
             BigDecimal total;
 
-            if (cl.getTaxType() == TaxType.INCLUSIVE) {
-                // For inclusive lines, derive taxable from the final customer-visible face total
+            // Discounts are face (customer-visible) amounts. For a discounted EXCLUSIVE line, building up
+            // from the rounded base can drift a cent from (gross face − discount face), e.g. 118 − 10 → 108.01.
+            // So discounted exclusive lines also derive taxable/tax from the final face total.
+            boolean hasDiscount = cl.getLineDiscountFaceAmount().compareTo(BigDecimal.ZERO) > 0
+                    || cl.getAllocatedOrderDiscountFace().compareTo(BigDecimal.ZERO) > 0;
+            boolean deriveFromFace = cl.getTaxType() == TaxType.INCLUSIVE
+                    || (cl.getTaxType() == TaxType.EXCLUSIVE && hasDiscount);
+
+            if (deriveFromFace) {
+                // Derive taxable from the final customer-visible face total
                 BigDecimal faceTotal = cl.getFaceAfterLineDiscount()
                         .subtract(cl.getAllocatedOrderDiscountFace())
                         .max(BigDecimal.ZERO)

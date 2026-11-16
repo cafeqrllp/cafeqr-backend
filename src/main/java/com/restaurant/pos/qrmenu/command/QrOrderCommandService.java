@@ -908,6 +908,7 @@ public class QrOrderCommandService {
                     .manualDiscountAmount(ol.getManualDiscountAmount())
                     .manualDiscountPercent(ol.getManualDiscountPercent())
                     .allocatedOrderDiscount(ol.getAllocatedOrderDiscount())
+                    .uomPrecision(ol.getUomPrecision())
                     .build();
             existingInv.addLine(il);
         }

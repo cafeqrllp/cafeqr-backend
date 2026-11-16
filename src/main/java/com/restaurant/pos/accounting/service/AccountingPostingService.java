@@ -49,6 +49,7 @@ import java.util.function.Supplier;
 public class AccountingPostingService {
 
     private static final int MAX_BACKFILL_DAYS = 1830;
+    private static final int RESYNC_WINDOW_DAYS = 366;
 
     private final AccountingService accountingService;
     private final AccountingDefaultsService defaultsService;
@@ -68,6 +69,7 @@ public class AccountingPostingService {
     private final ExpenseRepository expenseRepository;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
     private final CurrencyScaleService currencyScale;
+    private final com.restaurant.pos.costing.query.CostingQueryService costingQueryService;
 
     public PostingOutcome postInvoice(Order order, Invoice invoice) {
         if (invoice == null || invoice.getId() == null || isVoid(invoice.getStatus()) || isInactive(invoice.getIsactive())) {
@@ -424,6 +426,23 @@ public class AccountingPostingService {
         UUID orgId = TenantContext.getCurrentOrg();
         log.info("resyncAll started | clientId={} | orgId={}", clientId, orgId);
 
+        // Opening balances live in their own (manual) journals; make sure they exist before balances are rebuilt.
+        inTransaction(() -> {
+            accountingService.ensureOpeningBalanceJournals(orgId);
+            return null;
+        });
+
+        // Everything auto-posted is deleted below, so the rebuild must reach back to the oldest
+        // auto-posted entry - not just the current year - or earlier periods would be lost.
+        ZoneId branchZone = timezoneResolver.resolveTimezone(clientId, orgId);
+        LocalDateTime now = LocalDateTime.now(branchZone);
+        LocalDateTime rebuildStart = now.toLocalDate().withDayOfYear(1).atStartOfDay();
+        LocalDateTime earliestAutoPosted = journalEntryRepository.findEarliestAutoPostedEntryDate(clientId, orgId);
+        if (earliestAutoPosted != null && earliestAutoPosted.minusDays(1).isBefore(rebuildStart)) {
+            rebuildStart = earliestAutoPosted.minusDays(1);
+        }
+        final LocalDateTime rebuildFrom = rebuildStart;
+
         int journalsDeleted;
         try {
             journalsDeleted = inTransaction(() -> cleanupAutoPostedAccountingData(clientId, orgId));
@@ -439,24 +458,34 @@ public class AccountingPostingService {
 
         log.info("resyncAll cleanup done | journals={} | now re-running backfill", journalsDeleted);
 
-        AccountingBackfillRequest rebuildRequest = new AccountingBackfillRequest();
-        // Year boundaries are branch-local; timestamps in the database are UTC.
-        ZoneId branchZone = timezoneResolver.resolveTimezone(clientId, orgId);
-        int branchYear = java.time.ZonedDateTime.now(branchZone).getYear();
-        LocalDateTime yearStart = java.time.ZonedDateTime.of(branchYear, 1, 1, 0, 0, 0, 0, branchZone)
-                .withZoneSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
-        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
-        rebuildRequest.setFrom(yearStart);
-        rebuildRequest.setTo(now);
-        rebuildRequest.setSourceTypes(Set.of("INVOICE", "PAYMENT", "COGS", "STOCK", "EXPENSE", "PURCHASE"));
-        rebuildRequest.setDryRun(false);
-
-        AccountingBackfillResponse response = backfill(rebuildRequest);
+        // Rebuild in windows (branch-local time, like journal entry dates) so each stays inside the backfill range limit.
+        AccountingBackfillResponse response = AccountingBackfillResponse.builder().dryRun(false).build();
+        LocalDateTime windowFrom = rebuildFrom;
+        while (windowFrom.isBefore(now)) {
+            LocalDateTime windowTo = windowFrom.plusDays(RESYNC_WINDOW_DAYS);
+            if (windowTo.isAfter(now)) {
+                windowTo = now;
+            }
+            AccountingBackfillRequest rebuildRequest = new AccountingBackfillRequest();
+            rebuildRequest.setFrom(windowFrom);
+            rebuildRequest.setTo(windowTo);
+            rebuildRequest.setSourceTypes(Set.of("INVOICE", "PAYMENT", "COGS", "STOCK", "EXPENSE", "PURCHASE"));
+            rebuildRequest.setDryRun(false);
+            AccountingBackfillResponse window = backfill(rebuildRequest);
+            response.setScanned(response.getScanned() + window.getScanned());
+            response.setPosted(response.getPosted() + window.getPosted());
+            response.setSkipped(response.getSkipped() + window.getSkipped());
+            response.setFailed(response.getFailed() + window.getFailed());
+            response.setReversed(response.getReversed() + window.getReversed());
+            response.getFailures().addAll(window.getFailures());
+            windowFrom = windowTo;
+        }
         inTransaction(() -> {
             recalculateAccountBalances(clientId, orgId);
             return null;
         });
         response.setReversed(journalsDeleted);
+        log.info("resyncAll rebuilt from {} to {} | clientId={} | orgId={}", rebuildFrom, now, clientId, orgId);
         log.info("resyncAll complete | posted={} | skipped={} | failed={}", response.getPosted(), response.getSkipped(), response.getFailed());
         return response;
     }
@@ -631,7 +660,7 @@ public class AccountingPostingService {
             return;
         }
         recordOutcome(response, invoiceSourceType(invoice), invoice.getId(),
-                replaceInvoiceJournal(order, invoice, "Discounted sale repaired"));
+                replaceInvoiceJournal(order, invoice, "Discount / round-off split repaired"));
     }
 
     private void recordOutcome(AccountingBackfillResponse response, String sourceType, UUID sourceId, PostingOutcome outcome) {
@@ -666,8 +695,9 @@ public class AccountingPostingService {
             return false;
         }
         int dp = currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
+        // Only sales with a discount or a round-off can have been posted with the wrong split.
         BigDecimal discount = effectiveInvoiceDiscount(order, dp);
-        if (discount.compareTo(BigDecimal.ZERO) <= 0) {
+        if (discount.compareTo(BigDecimal.ZERO) <= 0 && money(order.getRoundOffAmount(), dp).signum() == 0) {
             return false;
         }
         return findActiveSourceJournal(invoiceSourceType(invoice), invoice.getId())
@@ -680,9 +710,11 @@ public class AccountingPostingService {
         BigDecimal total = money(invoice.getTotalAmount(), dp);
         BigDecimal tax = clampTax(order != null ? order.getTotalTaxAmount() : BigDecimal.ZERO, total, dp);
         BigDecimal discount = effectiveInvoiceDiscount(order, dp);
-        BigDecimal grossBeforeDiscount = total.subtract(tax).add(discount);
+        BigDecimal roundOff = invoiceRoundOff(order, total.subtract(tax), discount, dp);
+        BigDecimal grossBeforeDiscount = total.subtract(tax).subtract(roundOff).add(discount);
 
-        return journalAmount(entry, AccountingDefaultsService.ACCOUNTS_RECEIVABLE, true, dp).compareTo(total) == 0
+        return journalRoundOff(entry, dp).compareTo(roundOff) == 0
+                && journalAmount(entry, AccountingDefaultsService.ACCOUNTS_RECEIVABLE, true, dp).compareTo(total) == 0
                 && journalAmount(entry, AccountingDefaultsService.DISCOUNT_ALLOWED, true, dp).compareTo(discount) == 0
                 && journalAmount(entry, AccountingDefaultsService.SALES_REVENUE, false, dp).compareTo(grossBeforeDiscount) == 0
                 && journalAmount(entry, AccountingDefaultsService.OUTPUT_TAX, false, dp).compareTo(tax) == 0;
@@ -936,9 +968,18 @@ public class AccountingPostingService {
         List<JournalLine> lines = new ArrayList<>();
         if (type == InvoiceType.CUSTOMER_INVOICE) {
             BigDecimal discount = effectiveInvoiceDiscount(order, dp);
-            BigDecimal grossBeforeDiscount = base.add(discount);
+            // The invoice total includes the round-off; it is not sales revenue, so it goes to its own account.
+            BigDecimal roundOff = invoiceRoundOff(order, base, discount, dp);
+            BigDecimal grossBeforeDiscount = base.subtract(roundOff).add(discount);
             addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ACCOUNTS_RECEIVABLE), total, BigDecimal.ZERO,
                     PartyType.CUSTOMER, invoice.getCustomerId(), "Customer invoice receivable");
+            if (roundOff.signum() > 0) {
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ROUND_OFF), BigDecimal.ZERO, roundOff,
+                        null, null, "Round off (rounded up)");
+            } else if (roundOff.signum() < 0) {
+                addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.ROUND_OFF), roundOff.negate(), BigDecimal.ZERO,
+                        null, null, "Round off (rounded down)");
+            }
             if (discount.compareTo(BigDecimal.ZERO) > 0) {
                 addLine(lines, dp, defaultsService.resolveAccount(AccountingDefaultsService.DISCOUNT_ALLOWED), discount, BigDecimal.ZERO,
                         null, null, "Sales discount allowed");
@@ -1028,14 +1069,20 @@ public class AccountingPostingService {
 
     private Optional<JournalEntry> buildSaleCogsJournal(Order order) {
         int dp = currencyScale.decimalPlaces(order.getClientId(), order.getOrgId());
-        BigDecimal costTotal = BigDecimal.ZERO;
-        if (order.getLines() != null) {
-            for (OrderLine line : order.getLines()) {
-                if (line == null || !line.isActive() || line.getProductId() == null) {
-                    continue;
+        // Actual cost from the costed stock movements of this sale (recipe items = ingredients consumed).
+        BigDecimal costTotal = order.getId() != null
+                ? costingQueryService.saleCostByOrder(List.of(order.getId())).get(order.getId())
+                : null;
+        if (costTotal == null) {
+            costTotal = BigDecimal.ZERO;
+            if (order.getLines() != null) {
+                for (OrderLine line : order.getLines()) {
+                    if (line == null || !line.isActive() || line.getProductId() == null) {
+                        continue;
+                    }
+                    BigDecimal unitCost = resolveUnitCost(order, line, dp);
+                    costTotal = costTotal.add(unitCost.multiply(quantity(line.getQuantity())));
                 }
-                BigDecimal unitCost = resolveUnitCost(line, dp);
-                costTotal = costTotal.add(unitCost.multiply(quantity(line.getQuantity())));
             }
         }
         costTotal = money(costTotal, dp);
@@ -1096,7 +1143,8 @@ public class AccountingPostingService {
                     originalLine.getPartyId(),
                     "Reversal: " + nullToDash(originalLine.getDescription()));
         }
-        return journal(original.getSourceType() + "_REV", original.getId(), LocalDateTime.now(), original.getTerminalId(),
+        LocalDateTime reversalDate = LocalDateTime.now(timezoneResolver.resolveTimezone(original.getClientId(), original.getOrgId()));
+        return journal(original.getSourceType() + "_REV", original.getId(), reversalDate, original.getTerminalId(),
                 original.getWarehouseId(), original.getCurrencyId(),
                 original.getOrgId(), "Reversal for " + original.getEntryNo() + (reason == null || reason.isBlank() ? "" : " - " + reason),
                 lines).map(entry -> {
@@ -1132,6 +1180,24 @@ public class AccountingPostingService {
         entry.setOrgId(orgId);
         lines.forEach(entry::attachLine);
         return Optional.of(entry);
+    }
+
+    /**
+     * Round-off included in the invoice total (positive = rounded up). Ignored when it would
+     * push revenue below zero, which only happens on inconsistent order data.
+     */
+    private BigDecimal invoiceRoundOff(Order order, BigDecimal base, BigDecimal discount, int dp) {
+        BigDecimal roundOff = money(order != null ? order.getRoundOffAmount() : BigDecimal.ZERO, dp);
+        if (roundOff.signum() == 0 || base.subtract(roundOff).add(discount).signum() < 0) {
+            return BigDecimal.ZERO.setScale(dp, RoundingMode.HALF_UP);
+        }
+        return roundOff;
+    }
+
+    /** Net round-off posted on a journal: credits minus debits on the Round Off account. */
+    private BigDecimal journalRoundOff(JournalEntry entry, int dp) {
+        return journalAmount(entry, AccountingDefaultsService.ROUND_OFF, false, dp)
+                .subtract(journalAmount(entry, AccountingDefaultsService.ROUND_OFF, true, dp));
     }
 
     private BigDecimal effectiveInvoiceDiscount(Order order, int dp) {
@@ -1346,7 +1412,12 @@ public class AccountingPostingService {
         return type == PaymentType.INBOUND ? "INBOUND_PAYMENT" : "OUTBOUND_PAYMENT";
     }
 
-    private BigDecimal resolveUnitCost(OrderLine line, int dp) {
+    /** Fallback when the sale has no costed stock movements: current product cost, then the manual cost price. */
+    private BigDecimal resolveUnitCost(Order order, OrderLine line, int dp) {
+        BigDecimal current = costingQueryService.currentCost(order.getOrgId(), line.getProductId(), line.getVariantId());
+        if (current != null && current.signum() > 0) {
+            return money(current, dp);
+        }
         return productRepository.findById(line.getProductId())
                 .map(Product::getCostPrice)
                 .map(cost -> money(cost, dp))
@@ -1446,7 +1517,8 @@ public class AccountingPostingService {
                 : accountRepository.findByClientIdAndOrgIdOrderByCodeAsc(clientId, orgId);
         Map<UUID, AccountingAccount> accountsById = new LinkedHashMap<>();
         for (AccountingAccount account : accounts) {
-            account.setCurrentBalance(money(account.getOpeningBalance(), dp));
+            // Opening balances are posted as journals, so every balance is rebuilt from zero.
+            account.setCurrentBalance(money(BigDecimal.ZERO, dp));
             accountsById.put(account.getId(), account);
         }
 
