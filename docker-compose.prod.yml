@@ -144,7 +144,7 @@ services:
 
   # ── WAHA Core Service (Self-Hosted WhatsApp HTTP Engine) ──
   waha:
-    image: devlikeapro/waha
+    image: ${WAHA_IMAGE:-devlikeapro/waha:arm}
     container_name: cafeqr-waha
     restart: unless-stopped
     environment:
