@@ -75,6 +75,7 @@ public class AccountingService {
 
     public List<AccountingAccount> getAccounts(boolean includeInactive, UUID orgId) {
         UUID clientId = requireTenant();
+        orgId = resolveOrg(orgId);
         List<AccountingAccount> accounts;
         if (orgId == null) {
             accounts = accountRepository.findByClientIdOrderByCodeAsc(clientId);
@@ -1114,6 +1115,9 @@ public class AccountingService {
     private AccountingAccount getScopedAccount(UUID id) {
         UUID clientId = requireTenant();
         UUID orgId = TenantContext.getCurrentOrg();
+        if (orgId == null && SecurityUtils.isSuperAdmin()) {
+            throw new BusinessException("A branch must be selected before accessing accounting data.");
+        }
         if (orgId == null) {
             return accountRepository.findByIdAndClientId(id, clientId)
                     .orElseThrow(() -> new ResourceNotFoundException("Accounting account not found"));
@@ -1285,17 +1289,23 @@ public class AccountingService {
     }
 
     private UUID resolveOrg(UUID requestedOrgId) {
+        UUID currentOrgId = TenantContext.getCurrentOrg();
+        if (currentOrgId != null) {
+            if (requestedOrgId != null && !currentOrgId.equals(requestedOrgId)) {
+                throw new BusinessException("The requested branch does not match the active branch.");
+            }
+            return currentOrgId;
+        }
+        if (SecurityUtils.isSuperAdmin()) {
+            throw new BusinessException("A branch must be selected before accessing accounting data.");
+        }
         if (requestedOrgId != null) {
             return requestedOrgId;
         }
-        UUID currentOrgId = TenantContext.getCurrentOrg();
-        if (currentOrgId != null) {
-            return currentOrgId;
-        }
-        if (SecurityUtils.isSuperAdmin() || SecurityUtils.hasRole("ADMIN")) {
+        if (SecurityUtils.hasRole("ADMIN")) {
             return null;
         }
-        return branchContext.requireWriteOrgId(requestedOrgId);
+        return branchContext.requireWriteOrgId(null);
     }
 
     private String normalizeCode(String value) {

@@ -34,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -224,7 +225,7 @@ public class CreditCommandService {
                 .creditCustomerId(customer.getId())
                 .orderId(linkedCreditOrder != null ? linkedCreditOrder.getId() : null)
                 .invoiceId(invoiceId)
-                .paymentDate(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentDate(resolvePaymentDateTime(command.getPaymentDate()))
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
                 .roundOffAmount(roundOffAmount)
@@ -239,6 +240,16 @@ public class CreditCommandService {
         allocatePayment(customer, savedPayment, command);
         accountingPostingService.postPayment(null, savedPayment);
         return toDtoWithBalance(customer);
+    }
+
+    /**
+     * Payments are stored as UTC LocalDateTime (matching formatTzDate on the frontend). Uses the caller's
+     * transaction instant when given, otherwise the current time.
+     */
+    private LocalDateTime resolvePaymentDateTime(Instant transactionInstant) {
+        return transactionInstant == null
+                ? LocalDateTime.now(ZoneOffset.UTC)
+                : LocalDateTime.ofInstant(transactionInstant, ZoneOffset.UTC);
     }
 
     private CreditBPartnerDto recordVendorPayment(RecordPaymentCommand command, UUID clientId) {
@@ -282,7 +293,7 @@ public class CreditCommandService {
                 .creditCustomerId(vendor.getId())
                 .orderId(linkedOrder != null ? linkedOrder.getId() : null)
                 .invoiceId(invoiceId)
-                .paymentDate(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentDate(resolvePaymentDateTime(command.getPaymentDate()))
                 .paymentMethod(paymentMethod)
                 .amountPaid(amount)
                 .referenceNo(referenceNo)

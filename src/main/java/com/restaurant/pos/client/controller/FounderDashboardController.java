@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -532,6 +533,7 @@ public class FounderDashboardController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
+    @Transactional
     @PostMapping("/client/{clientId}/impersonate")
     public ResponseEntity<?> impersonateClient(
             @PathVariable UUID clientId,
@@ -554,9 +556,18 @@ public class FounderDashboardController {
         }
 
         User targetUser = users.stream()
-                .filter(u -> u.getRoleEntity() != null && "ADMIN".equalsIgnoreCase(u.getRoleEntity().getName()))
+                .filter(u -> "Y".equalsIgnoreCase(u.getIsactive()) && u.getRoleEntity() != null && "ADMIN".equalsIgnoreCase(u.getRoleEntity().getName()))
                 .findFirst()
+                .or(() -> users.stream().filter(u -> "Y".equalsIgnoreCase(u.getIsactive())).findFirst())
                 .orElse(users.get(0));
+
+        // Auto-activate user if inactive to allow founder store inspection
+        if (!"Y".equalsIgnoreCase(targetUser.getIsactive())) {
+            targetUser.setIsactive("Y");
+            targetUser.setIsEnabled(true);
+            userRepository.save(targetUser);
+            log.info("[FounderDashboard] Auto-activated inactive user {} to permit founder store inspection", targetUser.getEmail());
+        }
 
         log.info("[FounderDashboard] Founder impersonating client {} ({}) as user {}", clientId, client.getName(), targetUser.getEmail());
 

@@ -68,6 +68,25 @@ public class PrintJobService {
     private final CustomerRepository customerRepository;
     private final TimezoneResolver timezoneResolver;
     private final PrintSseService printSseService;
+    private final com.restaurant.pos.auth.repository.UserRepository userRepository;
+
+    private String resolveUserName(String userIdStr) {
+        if (userIdStr == null || userIdStr.isBlank() || "SYSTEM".equalsIgnoreCase(userIdStr)) {
+            return null;
+        }
+        try {
+            return userRepository.findById(UUID.fromString(userIdStr))
+                    .map(u -> {
+                        String full = ((u.getFirstName() != null ? u.getFirstName() : "") + " "
+                                + (u.getLastName() != null ? u.getLastName() : "")).trim();
+                        return full.isEmpty() ? u.getEmail() : full;
+                    })
+                    .orElse(null);
+        } catch (Exception e) {
+            // Non-UUID values such as "Name (customer)" are already display text
+            return userIdStr;
+        }
+    }
 
     @Transactional
     public PrintJob enqueueOrderJob(UUID orderId, String jobKind) {
@@ -465,6 +484,10 @@ public class PrintJobService {
         out.put("total_tax_amount", order.getTotalTaxAmount());
         out.put("totalDiscountAmount", order.getTotalDiscountAmount());
         out.put("total_discount_amount", order.getTotalDiscountAmount());
+
+        String updatedByName = resolveUserName(order.getUpdatedBy());
+        out.put("updatedByName", updatedByName);
+        out.put("updated_by_name", updatedByName);
 
         // Add customer fields so receipt & KOT printing can show customer details
         populateCustomerDetailsIfNeeded(order, out);

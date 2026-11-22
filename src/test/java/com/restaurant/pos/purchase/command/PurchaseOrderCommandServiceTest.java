@@ -14,6 +14,8 @@ import com.restaurant.pos.purchase.mapper.PurchaseOrderDtoMapper;
 import com.restaurant.pos.sequence.service.DocumentSequenceService;
 import com.restaurant.pos.common.service.BranchContextService;
 import com.restaurant.pos.sequence.domain.DocumentType;
+import com.restaurant.pos.purchasing.domain.Vendor;
+import com.restaurant.pos.purchasing.repository.VendorRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +43,7 @@ class PurchaseOrderCommandServiceTest {
     private PurchaseOrderDtoMapper mapper;
     private BranchContextService branchContext;
     private DocumentSequenceService documentSequenceService;
+    private VendorRepository vendorRepository;
     private PurchaseOrderCommandService service;
     private UUID clientId;
     private UUID orgId;
@@ -52,6 +56,7 @@ class PurchaseOrderCommandServiceTest {
         mapper = mock(PurchaseOrderDtoMapper.class);
         branchContext = mock(BranchContextService.class);
         documentSequenceService = mock(DocumentSequenceService.class);
+        vendorRepository = mock(VendorRepository.class);
         service = new PurchaseOrderCommandService(
                 orderRepository,
                 documentSequenceService,
@@ -61,7 +66,8 @@ class PurchaseOrderCommandServiceTest {
                 mock(InventoryService.class),
                 mock(InvoiceRepository.class),
                 mock(PaymentRepository.class),
-                mock(PlatformTransactionManager.class)
+                mock(PlatformTransactionManager.class),
+                vendorRepository
         );
         clientId = UUID.randomUUID();
         orgId = UUID.randomUUID();
@@ -73,6 +79,20 @@ class PurchaseOrderCommandServiceTest {
         when(branchContext.requireWriteOrgId(any())).thenReturn(orgId);
         when(documentSequenceService.generateNextSequence(any(DocumentType.class), any())).thenReturn("PO-NEW");
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(vendorRepository.findByIdAndClientId(vendorId, clientId))
+                .thenReturn(Optional.of(Vendor.builder().name("Acme").isactive("Y").build()));
+    }
+
+    @Test
+    void inactiveVendorCannotBeUsedOnANewPurchase() {
+        when(vendorRepository.findByIdAndClientId(vendorId, clientId))
+                .thenReturn(Optional.of(Vendor.builder().name("Acme").isactive("N").build()));
+        when(mapper.toEntity(any(CreatePurchaseOrderCommand.class))).thenReturn(purchase(null, "INV-9", false));
+
+        assertThatThrownBy(() -> service.createPurchaseOrder(command(false, "INV-9"), null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("inactive");
+        verify(orderRepository, never()).save(any(Order.class));
     }
 
     @AfterEach

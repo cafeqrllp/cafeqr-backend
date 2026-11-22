@@ -1870,7 +1870,7 @@ public class OrderService {
 
         UUID orgId;
         if (SecurityUtils.isSuperAdmin()) {
-            orgId = paramOrgId != null ? paramOrgId : branchContext.getReadOrgId(null);
+            orgId = branchContext.getSelectedReadOrgId(paramOrgId);
         } else {
             orgId = TenantContext.getCurrentOrg();
         }

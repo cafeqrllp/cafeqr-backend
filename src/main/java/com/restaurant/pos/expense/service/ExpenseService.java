@@ -508,7 +508,7 @@ public class ExpenseService {
     @SuppressWarnings("null")
     public Page<ExpenseResponse> getExpenses(ExpenseSearchCriteria criteria, @NonNull Pageable pageable) {
         UUID clientId = contextProvider.getCurrentTenant();
-        UUID orgId = contextProvider.getCurrentOrg();
+        UUID orgId = resolveExpenseReadOrgId();
 
         log.info("Fetching expenses from database | clientId={} | orgId={} | criteria={}", clientId, orgId, criteria);
 
@@ -568,7 +568,7 @@ public class ExpenseService {
     @Transactional(readOnly = true)
     public BigDecimal getExpenseTotal(ExpenseSearchCriteria criteria) {
         UUID clientId = contextProvider.getCurrentTenant();
-        UUID orgId = contextProvider.getCurrentOrg();
+        UUID orgId = resolveExpenseReadOrgId();
 
         log.info("Calculating total expenses | clientId={} | orgId={} | criteria={}", clientId, orgId, criteria);
 
@@ -587,7 +587,7 @@ public class ExpenseService {
     @Transactional(readOnly = true)
     public java.util.List<com.restaurant.pos.purchase.dto.PurchaseGstRegisterRowDto> getExpenseGstRegister(ExpenseSearchCriteria criteria) {
         UUID clientId = contextProvider.getCurrentTenant();
-        UUID orgId = contextProvider.getCurrentOrg();
+        UUID orgId = resolveExpenseReadOrgId();
         Specification<Expense> spec = ExpenseSpecification.filterBy(criteria, clientId, orgId, canUseOrganizationScope());
         java.util.List<Expense> expenses = expenseRepository.findAll(spec);
 
@@ -737,16 +737,20 @@ public class ExpenseService {
         return contextProvider.isSuperAdmin() || contextProvider.hasRole("ADMIN");
     }
 
-    private void validateExpenseAccess(Expense expense) {
-        UUID currentOrgId = contextProvider.getCurrentOrg();
-        if (canUseOrganizationScope()) {
-            return;
+    private UUID resolveExpenseReadOrgId() {
+        UUID selectedOrgId = contextProvider.getCurrentOrg();
+        if (contextProvider.isSuperAdmin() && selectedOrgId == null) {
+            throw new BusinessException("Select a branch before viewing expense reports.");
         }
+        return selectedOrgId;
+    }
+
+    private void validateExpenseAccess(Expense expense) {
+        UUID currentOrgId = resolveExpenseReadOrgId();
         if (currentOrgId == null || !Objects.equals(currentOrgId, expense.getOrgId())) {
             throw new ResourceNotFoundException("Expense not found: " + expense.getId());
         }
     }
-
     /**
      * Resolves a single user's display name by ID.
      * WARNING: Hits the database per call. Do NOT use this method inside a loop

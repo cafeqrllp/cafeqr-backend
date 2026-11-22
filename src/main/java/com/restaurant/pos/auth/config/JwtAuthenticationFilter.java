@@ -89,8 +89,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             final String userEmail = jwtService.extractUsername(jwt);
             System.out.println("===> [DEBUG] JWT Filter: Extracted user: " + userEmail);
 
+            // Scoped tokens that are not logins. Fail closed: QR guest tokens and any unknown scope never
+            // authenticate here. On public paths the request continues anonymously, as it would without a token.
+            String scope = jwtService.extractScope(jwt);
+            if (scope != null && !JwtService.AI_READ_SCOPE.equals(scope)) {
+                if (isPublicPath(path)) {
+                    filterChain.doFilter(request, response);
+                } else {
+                    sendErrorResponse(request, response,
+                            "This token cannot be used to sign in", HttpServletResponse.SC_FORBIDDEN);
+                }
+                return;
+            }
+
             // AI assistant / MCP tokens are read-only and limited to the assistant's own report endpoints.
-            if (JwtService.AI_READ_SCOPE.equals(jwtService.extractScope(jwt))
+            if (JwtService.AI_READ_SCOPE.equals(scope)
                     && !com.restaurant.pos.ai.AiTokenPolicy.isAllowed(method, path)) {
                 sendErrorResponse(request, response,
                         isReadOnlyMethod(method) ? "AI assistant tokens cannot access this endpoint"

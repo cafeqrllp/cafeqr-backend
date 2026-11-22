@@ -2,6 +2,7 @@ package com.restaurant.pos.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.pos.accounting.service.AccountingPostingService;
+import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.dto.ConfigurationDto;
 import com.restaurant.pos.common.service.SystemConfigurationService;
 import com.restaurant.pos.common.tenant.TenantContext;
@@ -53,6 +54,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -213,30 +215,46 @@ class OrderServiceTest {
         }
 
         @Test
-        void superAdminAllBranchesLeavesSalesHistoryUnscoped() {
+        void superAdminWithAllBranchesSelectionReadsSalesHistoryAcrossBranches() {
                 TenantContext.setCurrentOrg(null);
                 SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
                                 "owner@example.com",
                                 null,
                                 List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))));
                 when(orderRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(Page.empty());
-                when(customerRepository.findIdsByClientAndOrgAndSearch(eq(clientId), isNull(), eq("%inv-1%")))
-                                .thenReturn(List.of());
-                when(customerRepository.findLinkedOrderIdsByClientAndOrgAndCustomerSearch(eq(clientId), isNull(),
-                                eq("%inv-1%")))
-                                .thenReturn(List.of());
 
                 orderService.getSalesOrderHistory(
                                 Instant.parse("2026-05-23T00:00:00Z"),
                                 Instant.parse("2026-05-23T23:59:59Z"),
                                 0,
                                 20,
-                                "INV-1");
+                                null);
 
-                verify(customerRepository).findIdsByClientAndOrgAndSearch(eq(clientId), isNull(), eq("%inv-1%"));
-                verify(customerRepository).findLinkedOrderIdsByClientAndOrgAndCustomerSearch(eq(clientId), isNull(),
-                                eq("%inv-1%"));
-                capturedSalesHistorySpecs(2).forEach(this::assertSpecificationDoesNotFilterOrg);
+                // "All branches" = no org filter (still limited to the super admin's own client).
+                capturedSalesHistorySpecs(1).forEach(this::assertSpecificationDoesNotFilterOrg);
+        }
+
+        @Test
+        void superAdminWithAllBranchesSelectionCannotNarrowToAnotherBranchByParameter() {
+                TenantContext.setCurrentOrg(null);
+                SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                                "owner@example.com",
+                                null,
+                                List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))));
+
+                assertThatThrownBy(() -> orderService.getSalesOrderHistory(
+                                Instant.parse("2026-05-23T00:00:00Z"),
+                                Instant.parse("2026-05-23T23:59:59Z"),
+                                0,
+                                20,
+                                null,
+                                null,
+                                UUID.randomUUID(),
+                                null))
+                                .isInstanceOf(BusinessException.class)
+                                .hasMessageContaining("does not match the active branch");
+
+                verify(orderRepository, never()).findAll(any(Specification.class), any(Pageable.class));
         }
 
         @Test

@@ -65,7 +65,7 @@ public class OrderLine {
     @Column(name = "uom_precision")
     private Integer uomPrecision = 0;
 
-    @Column(name = "unit_price", precision = 15, scale = 2, nullable = false)
+    @Column(name = "unit_price", precision = 15, scale = 2)
     private BigDecimal unitPrice;
 
     @Builder.Default

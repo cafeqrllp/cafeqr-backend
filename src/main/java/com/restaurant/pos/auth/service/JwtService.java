@@ -28,6 +28,13 @@ public class JwtService {
     public static final String SCOPE_CLAIM = "scope";
     /** Scope of short-lived, read-only tokens issued to the CafeQR AI assistant / MCP server. */
     public static final String AI_READ_SCOPE = "ai:read";
+    /**
+     * Scope of short-lived QR table-guest tokens. They identify one table session for the customer chat in
+     * cafe-qr-ai and are never accepted as a login by this backend (see JwtAuthenticationFilter).
+     */
+    public static final String QR_GUEST_SCOPE = "qr:guest";
+    /** Subject prefix of guest tokens; never a user email, so it can never load a user. */
+    public static final String QR_GUEST_SUBJECT_PREFIX = "qr-guest:";
 
     @Value("${jwt.private-key}")
     private String privateKeyStr;
@@ -104,6 +111,23 @@ public class JwtService {
     /** Issues a token with a custom lifetime (used for short-lived scoped tokens such as {@link #AI_READ_SCOPE}). */
     public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails, long expirationMs) {
         return buildToken(extraClaims, userDetails, expirationMs);
+    }
+
+    /**
+     * Issues a scoped token for a subject that is not a user (e.g. a QR table guest session).
+     * Callers must always set {@link #SCOPE_CLAIM}.
+     */
+    public String generateScopedToken(String subject, Map<String, Object> claims, long expirationMs) {
+        if (claims == null || claims.get(SCOPE_CLAIM) == null) {
+            throw new IllegalArgumentException("Scoped tokens must carry a scope claim");
+        }
+        return Jwts.builder()
+                .setClaims(new HashMap<>(claims))
+                .setSubject(subject)
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
+                .signWith(privateKey, SignatureAlgorithm.RS256)
+                .compact();
     }
 
     /** Extracts the scope claim, or null for normal (unscoped) tokens. */

@@ -101,9 +101,8 @@ public class CreatePurchaseOrderCommand {
         @Schema(description = "Quantity to purchase", example = "50.00", requiredMode = Schema.RequiredMode.REQUIRED)
         private BigDecimal quantity;
 
-        @NotNull(message = "Unit price must not be null")
         @DecimalMin(value = "0.00", message = "Unit price must not be negative")
-        @Schema(description = "Purchase unit price per item", example = "20.00", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "Purchase unit price per item; required when confirming or receiving", example = "20.00")
         private BigDecimal unitPrice;
 
         @Schema(description = "Unit of measure (e.g. KG, PCS, BOX)", example = "KG")

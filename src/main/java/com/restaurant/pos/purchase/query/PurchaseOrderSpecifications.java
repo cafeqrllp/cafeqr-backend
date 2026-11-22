@@ -22,10 +22,7 @@ public class PurchaseOrderSpecifications {
             predicates.add(cb.equal(root.get("orderType"), OrderType.PURCHASE));
 
             if (orgId != null) {
-                predicates.add(cb.or(
-                        cb.equal(root.get("orgId"), orgId),
-                        cb.isNull(root.get("orgId"))
-                ));
+                predicates.add(cb.equal(root.get("orgId"), orgId));
             }
             if (request.getVendorId() != null) {
                 predicates.add(cb.equal(root.get("vendorId"), request.getVendorId()));

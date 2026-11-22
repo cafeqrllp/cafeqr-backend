@@ -24,12 +24,12 @@ public class OrderSpecification {
             }
 
             // Multi-Branch Security Logic
-            // Normal users: always their logged-in org.
-            // Super admin: explicit branchId filter, else the org selected in the branch switcher
-            // (null only when "All Branches" is selected).
-            UUID effectiveOrgId = SecurityUtils.isSuperAdmin() && criteria.getBranchId() != null
-                    ? criteria.getBranchId()
-                    : orgId;
+            // The active org context is authoritative, including for super admins.
+            // A superadmin without an active org context gets no rows.
+            UUID effectiveOrgId = orgId;
+            if (effectiveOrgId == null && SecurityUtils.isSuperAdmin()) {
+                predicates.add(cb.disjunction());
+            }
             if (effectiveOrgId != null) {
                 predicates.add(cb.equal(root.get("orgId"), effectiveOrgId));
             }

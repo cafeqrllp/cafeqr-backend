@@ -1,6 +1,7 @@
 package com.restaurant.pos.purchasing.domain;
 
 import com.restaurant.pos.common.entity.BaseEntity;
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
@@ -53,6 +54,7 @@ public class Vendor extends BaseEntity {
 
     @Builder.Default
     @JsonProperty("isActive")
+    @JsonAlias({"isactive"})
     @Column(name = "isactive", length = 1)
     private String isactive = "Y";
 }

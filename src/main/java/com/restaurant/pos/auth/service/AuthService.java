@@ -233,11 +233,26 @@ public class AuthService {
 
         String subStatus = client.getSubscriptionStatus();
         LocalDateTime subExpiry = client.getSubscriptionExpiryDate();
+        String orgName = null;
+        String timezone = client.getTimezone();
         if (resolvedOrgId != null) {
             var orgOpt = organizationRepository.findById(resolvedOrgId);
             if (orgOpt.isPresent()) {
-                subStatus = orgOpt.get().getSubscriptionStatus();
-                subExpiry = orgOpt.get().getSubscriptionExpiryDate();
+                var org = orgOpt.get();
+                subStatus = org.getSubscriptionStatus();
+                subExpiry = org.getSubscriptionExpiryDate();
+                orgName = org.getName();
+                if (org.getTimezone() != null && !org.getTimezone().isBlank()) {
+                    timezone = org.getTimezone();
+                }
+            }
+        }
+
+        String terminalName = null;
+        if (user.getTerminalId() != null) {
+            var termOpt = terminalRepository.findById(user.getTerminalId());
+            if (termOpt.isPresent()) {
+                terminalName = termOpt.get().getName();
             }
         }
 
@@ -251,9 +266,9 @@ public class AuthService {
                 .clientId(user.getClientId())
                 .clientName(client.getName())
                 .orgId(user.getOrgId())
-                .orgName(user.getOrganization() != null ? user.getOrganization().getName() : null)
+                .orgName(orgName)
                 .terminalId(user.getTerminalId())
-                .terminalName(user.getTerminal() != null ? user.getTerminal().getName() : null)
+                .terminalName(terminalName)
                 .userId(user.getId())
                 .country(client.getCountry())
                 .subscriptionStatus(subStatus)
@@ -265,7 +280,7 @@ public class AuthService {
                 .canOpenCashDrawer(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanOpenCashDrawer()))
                 .canAutoOpenCashDrawer(user.getRoleEntity() == null || !Boolean.FALSE.equals(user.getRoleEntity().getCanAutoOpenCashDrawer()))
                 .canViewCashDrawerHistory(user.getRoleEntity() != null && Boolean.TRUE.equals(user.getRoleEntity().getCanViewCashDrawerHistory()))
-                .timezone(user.getOrganization() != null && user.getOrganization().getTimezone() != null ? user.getOrganization().getTimezone() : client.getTimezone())
+                .timezone(timezone)
                 .termsAcceptedVersion(user.getTermsAcceptedVersion())
                 .termsAcceptedAt(user.getTermsAcceptedAt())
                 .build();

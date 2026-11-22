@@ -83,7 +83,7 @@ public class PaymentBalanceReportService {
 
     public PaymentBalanceReportDto getPaymentTypeBalances(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
 
         // 1. Initialize buckets from configured Payment Types in the database
@@ -335,6 +335,22 @@ public class PaymentBalanceReportService {
         }
         LocalDateTime orderUtc = LocalDateTime.ofInstant(order.getOrderDate(), ZoneOffset.UTC);
         return Duration.between(orderUtc, p.getPaymentDate()).compareTo(SETTLEMENT_GAP) > 0;
+    }
+
+
+    private UUID resolveReportOrgId(UUID requestedOrgId) {
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            if (requestedOrgId != null && !selectedOrgId.equals(requestedOrgId)) {
+                throw new com.restaurant.pos.common.exception.BusinessException("The requested branch does not match the active branch.");
+            }
+            return selectedOrgId;
+        }
+        if (SecurityUtils.isSuperAdmin() && requestedOrgId != null) {
+            throw new com.restaurant.pos.common.exception.BusinessException("The requested branch does not match the active branch.");
+        }
+        // Super admin with the global "All branches" selection reads every branch of their client
+        return null;
     }
 
     private record CreditTotals(BigDecimal given, BigDecimal collected, BigDecimal balance) {}

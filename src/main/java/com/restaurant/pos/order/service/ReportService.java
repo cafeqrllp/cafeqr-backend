@@ -97,7 +97,7 @@ public class ReportService {
         }
 
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
 
         BigDecimal avg = totalOrders > 0
@@ -395,7 +395,7 @@ public class ReportService {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
 
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
 
         Map<BigDecimal, BigDecimal[]> taxMap = new TreeMap<>();
@@ -464,12 +464,7 @@ public class ReportService {
 
     public List<InvoiceReportDto> getInvoices(Instant from, Instant to, String filterType, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId;
-        if (SecurityUtils.isSuperAdmin()) {
-            resolvedOrgId = orgId;
-        } else {
-            resolvedOrgId = TenantContext.getCurrentOrg();
-        }
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
 
         // invoiceDate is LocalDateTime — convert Instant to LocalDateTime for comparison using branch timezone
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
@@ -714,14 +709,9 @@ public class ReportService {
     @Transactional
     public Invoice voidInvoice(UUID invoiceId, String reason) {
         UUID clientId = TenantContext.getCurrentTenant();
-        Invoice invoice;
-        if (SecurityUtils.isSuperAdmin()) {
-            invoice = invoiceRepository.findByIdAndClientId(invoiceId, clientId)
-                    .orElseThrow(() -> new com.restaurant.pos.common.exception.ResourceNotFoundException("Invoice not found"));
-        } else {
-            invoice = invoiceRepository.findByIdAndClientIdAndOrgId(invoiceId, clientId, TenantContext.getCurrentOrg())
-                    .orElseThrow(() -> new com.restaurant.pos.common.exception.ResourceNotFoundException("Invoice not found"));
-        }
+        UUID invoiceOrgId = resolveReportOrgId(null);
+        Invoice invoice = invoiceRepository.findByIdAndClientIdAndOrgId(invoiceId, clientId, invoiceOrgId)
+                .orElseThrow(() -> new com.restaurant.pos.common.exception.ResourceNotFoundException("Invoice not found"));
 
         if ("VOID".equalsIgnoreCase(invoice.getStatus())) {
             throw new IllegalStateException("Invoice is already voided");
@@ -1242,12 +1232,7 @@ public class ReportService {
 
     private List<Invoice> fetchCustomerInvoices(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId;
-        if (SecurityUtils.isSuperAdmin()) {
-            resolvedOrgId = orgId;
-        } else {
-            resolvedOrgId = TenantContext.getCurrentOrg();
-        }
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
         LocalDateTime ldFrom = from != null ? LocalDateTime.ofInstant(from, zoneId) : null;
         LocalDateTime ldTo = to != null ? LocalDateTime.ofInstant(to, zoneId) : null;
@@ -1275,7 +1260,7 @@ public class ReportService {
 
     private List<Order> fetchSaleOrders(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
 
         return orderRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
@@ -1310,7 +1295,7 @@ public class ReportService {
      */
     private List<Order> fetchSaleOrdersLightweight(Instant from, Instant to, UUID orgId, UUID terminalId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
 
         return orderRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
@@ -1333,6 +1318,21 @@ public class ReportService {
             query.orderBy(cb.desc(root.get("orderDate")));
             return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
         });
+    }
+
+    private UUID resolveReportOrgId(UUID requestedOrgId) {
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            if (requestedOrgId != null && !selectedOrgId.equals(requestedOrgId)) {
+                throw new com.restaurant.pos.common.exception.BusinessException("The requested branch does not match the active branch.");
+            }
+            return selectedOrgId;
+        }
+        if (SecurityUtils.isSuperAdmin() && requestedOrgId != null) {
+            throw new com.restaurant.pos.common.exception.BusinessException("The requested branch does not match the active branch.");
+        }
+        // Super admin with the global "All branches" selection reads every branch of their client
+        return null;
     }
 
     private UUID reportOrgId() {
@@ -1375,7 +1375,7 @@ public class ReportService {
             Instant from, Instant to, UUID orgId, UUID terminalId) {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
 
         Map<UUID, List<Customer>> customers = batchLinkedCustomerEntities(orders, clientId);
@@ -1406,7 +1406,7 @@ public class ReportService {
         List<Order> orders = fetchSaleOrders(from, to, orgId, terminalId);
 
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = SecurityUtils.isSuperAdmin() ? orgId : TenantContext.getCurrentOrg();
+        UUID resolvedOrgId = resolveReportOrgId(orgId);
         int dp = currencyScale.decimalPlaces(clientId, resolvedOrgId);
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, resolvedOrgId);
 

@@ -275,9 +275,7 @@ public class PurchaseOrderDtoMapper {
             if (orgId != null) {
                 return invoiceRepository.findByOrderIdAndClientIdAndOrgId(orderId, clientId, orgId)
                         .map(com.restaurant.pos.invoice.domain.Invoice::getInvoiceNo)
-                        .orElseGet(() -> invoiceRepository.findByOrderIdAndClientId(orderId, clientId)
-                                .map(com.restaurant.pos.invoice.domain.Invoice::getInvoiceNo)
-                                .orElse(null));
+                        .orElse(null);
             }
             return invoiceRepository.findByOrderIdAndClientId(orderId, clientId)
                     .map(com.restaurant.pos.invoice.domain.Invoice::getInvoiceNo)

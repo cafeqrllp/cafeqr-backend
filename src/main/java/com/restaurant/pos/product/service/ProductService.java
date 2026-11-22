@@ -1481,8 +1481,8 @@ public class ProductService {
         boolean isGlobal = (ownerOrgId == null || new UUID(0L, 0L).equals(ownerOrgId));
         boolean currentIsBranch = branchSelected;
 
-        if (forModification && isGlobal && currentIsBranch) {
-            // Protect global data from being deleted/updated by org users.
+        if (forModification && isGlobal && currentIsBranch && !SecurityUtils.isSuperAdmin()) {
+            // Protect global data from being deleted/updated by org users (super admins may modify it from any branch).
             throw new BusinessException("Access denied: Global " + entityName + " cannot be modified by branch users");
         }
 

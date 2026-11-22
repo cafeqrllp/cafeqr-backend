@@ -27,24 +27,16 @@ public class InvoiceService {
     @Transactional(readOnly = true)
     public Invoice getInvoice(UUID id) {
         UUID tenantId = TenantContext.getCurrentTenant();
-        Invoice invoice;
-        if (SecurityUtils.isSuperAdmin()) {
-            invoice = invoiceRepository.findByIdAndClientId(id, tenantId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Invoice not found or access denied"));
-        } else {
-            invoice = invoiceRepository.findByIdAndClientIdAndOrgId(id, tenantId, TenantContext.getCurrentOrg())
-                    .orElseThrow(() -> new ResourceNotFoundException("Invoice not found or access denied"));
-        }
+        UUID orgId = requireSelectedOrgForRead();
+        Invoice invoice = invoiceRepository.findByIdAndClientIdAndOrgId(id, tenantId, orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Invoice not found or access denied"));
 
         if ("VOID".equalsIgnoreCase(invoice.getStatus()) || "N".equalsIgnoreCase(invoice.getIsactive())) {
             String baseInvoiceNo = invoice.getInvoiceNo();
             if (baseInvoiceNo != null && baseInvoiceNo.contains("_VOID_")) {
                 baseInvoiceNo = baseInvoiceNo.substring(0, baseInvoiceNo.indexOf("_VOID_"));
             }
-            UUID orgId = SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg();
-            Optional<Invoice> activeInvoice = orgId == null
-                    ? invoiceRepository.findActiveByInvoiceNoAndClientId(baseInvoiceNo, tenantId)
-                    : invoiceRepository.findActiveByInvoiceNoAndClientIdAndOrgId(baseInvoiceNo, tenantId, orgId);
+            Optional<Invoice> activeInvoice = invoiceRepository.findActiveByInvoiceNoAndClientIdAndOrgId(baseInvoiceNo, tenantId, orgId);
             if (activeInvoice.isPresent()) {
                 invoice = activeInvoice.get();
             }
@@ -59,7 +51,7 @@ public class InvoiceService {
     @Transactional(readOnly = true)
     public Invoice getInvoiceByOrder(UUID orderId) {
         UUID tenantId = TenantContext.getCurrentTenant();
-        UUID orgId = SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg();
+        UUID orgId = requireSelectedOrgForRead();
 
         UUID resolvedOrderId = orderId;
         try {
@@ -70,16 +62,9 @@ public class InvoiceService {
         } catch (Exception ignored) {}
         final UUID activeOrderId = resolvedOrderId;
 
-        Invoice invoice;
-        if (SecurityUtils.isSuperAdmin()) {
-            invoice = invoiceRepository.findActiveByOrderIdAndClientId(activeOrderId, tenantId)
-                    .orElseGet(() -> invoiceRepository.findByOrderIdAndClientId(activeOrderId, tenantId)
-                            .orElseThrow(() -> new ResourceNotFoundException("Invoice not found for order or access denied")));
-        } else {
-            invoice = invoiceRepository.findActiveByOrderIdAndClientIdAndOrgId(activeOrderId, tenantId, orgId)
-                    .orElseGet(() -> invoiceRepository.findByOrderIdAndClientIdAndOrgId(activeOrderId, tenantId, orgId)
-                            .orElseThrow(() -> new ResourceNotFoundException("Invoice not found for order or access denied")));
-        }
+        Invoice invoice = invoiceRepository.findActiveByOrderIdAndClientIdAndOrgId(activeOrderId, tenantId, orgId)
+                .orElseGet(() -> invoiceRepository.findByOrderIdAndClientIdAndOrgId(activeOrderId, tenantId, orgId)
+                        .orElseThrow(() -> new ResourceNotFoundException("Invoice not found for order or access denied")));
         if (invoice.getLines() != null) {
             invoice.getLines().size();
         }
@@ -91,8 +76,12 @@ public class InvoiceService {
         if (invoice.getClientId() == null) {
             invoice.setClientId(TenantContext.getCurrentTenant());
         }
-        if (invoice.getOrgId() == null && !SecurityUtils.isSuperAdmin()) {
-            invoice.setOrgId(TenantContext.getCurrentOrg());
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId == null && SecurityUtils.isSuperAdmin()) {
+            throw new com.restaurant.pos.common.exception.BusinessException("Select a branch before creating a bill.");
+        }
+        if (selectedOrgId != null) {
+            invoice.setOrgId(selectedOrgId);
         }
 
         // Generate daily bill number resetting everyday (customer sales only; expenses and vendor bills do not consume numbers)
@@ -116,16 +105,9 @@ public class InvoiceService {
 
         // Prevent duplicate creation from offline sync
         if (invoice.getInvoiceNo() != null) {
-             Optional<Invoice> existing;
-             if (SecurityUtils.isSuperAdmin()) {
-                 existing = invoiceRepository.findByInvoiceNoAndClientId(
-                     invoice.getInvoiceNo(), invoice.getClientId()
-                 );
-             } else {
-                 existing = invoiceRepository.findByInvoiceNoAndClientIdAndOrgId(
-                     invoice.getInvoiceNo(), invoice.getClientId(), invoice.getOrgId()
-                 );
-             }
+             Optional<Invoice> existing = invoiceRepository.findByInvoiceNoAndClientIdAndOrgId(
+                    invoice.getInvoiceNo(), invoice.getClientId(), invoice.getOrgId()
+             );
              
              if (existing.isPresent()) {
                  return existing.get();
@@ -140,5 +122,13 @@ public class InvoiceService {
         }
 
         return invoiceRepository.save(invoice);
+    }
+
+    private UUID requireSelectedOrgForRead() {
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId == null && SecurityUtils.isSuperAdmin()) {
+            throw new com.restaurant.pos.common.exception.BusinessException("Select a branch before viewing bills.");
+        }
+        return selectedOrgId;
     }
 }

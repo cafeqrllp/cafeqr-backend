@@ -161,6 +161,20 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
             @Param("orderNo") String orderNo,
             @Param("voidPrefix") String voidPrefix);
 
+    @EntityGraph(attributePaths = "lines")
+    @Query("""
+            SELECT o FROM Order o
+            WHERE o.clientId = :clientId
+              AND ((:orgId IS NULL AND o.orgId IS NULL) OR o.orgId = :orgId)
+              AND (o.orderNo = :orderNo OR o.orderNo LIKE :voidPrefix)
+            ORDER BY o.revisionNumber ASC NULLS FIRST, o.createdAt ASC
+            """)
+    List<Order> findAllRevisionsByOrderNoAndOrgId(
+            @Param("clientId") UUID clientId,
+            @Param("orgId") UUID orgId,
+            @Param("orderNo") String orderNo,
+            @Param("voidPrefix") String voidPrefix);
+
     @Query("""
             SELECT o FROM Order o
             WHERE o.clientId = :clientId

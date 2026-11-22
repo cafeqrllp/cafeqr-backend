@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,6 +21,7 @@ public class RecordPaymentCommand {
     private String description;
     private String allocationMode;
     private UUID invoiceId;
+    private Instant paymentDate;
     private String partnerType;
     private String idempotencyKey;
     private List<AllocationEntry> allocations;
