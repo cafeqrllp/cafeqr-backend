@@ -46,7 +46,7 @@ public class AccountingController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId
     ) {
-        UUID effectiveOrgId = orgId != null ? orgId : com.restaurant.pos.common.tenant.TenantContext.getCurrentOrg();
+        UUID effectiveOrgId = resolveReportingOrgId(orgId);
         if (effectiveOrgId != null) {
             defaultsService.ensureDefaultAccounts(effectiveOrgId);
         }
@@ -55,7 +55,7 @@ public class AccountingController {
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),
                 includeInactive,
-                orgId,
+                effectiveOrgId,
                 terminalId
         )));
     }
@@ -131,7 +131,7 @@ public class AccountingController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId
     ) {
-        UUID effectiveOrgId = orgId != null ? orgId : com.restaurant.pos.common.tenant.TenantContext.getCurrentOrg();
+        UUID effectiveOrgId = resolveReportingOrgId(orgId);
         if (effectiveOrgId != null) {
             defaultsService.ensureDefaultAccounts(effectiveOrgId);
         }
@@ -139,7 +139,7 @@ public class AccountingController {
         return ResponseEntity.ok(ApiResponse.success(accountingService.getSummary(
                 parseAccountingDateTime(from),
                 parseAccountingDateTime(to),
-                orgId,
+                effectiveOrgId,
                 terminalId
         )));
     }
@@ -152,7 +152,8 @@ public class AccountingController {
             @RequestParam(required = false) UUID orgId,
             @RequestParam(required = false) UUID terminalId
     ) {
-        return ResponseEntity.ok(ApiResponse.success(accountingService.getReconciliation(parseAccountingDateTime(from), parseAccountingDateTime(to), orgId, terminalId)));
+        UUID effectiveOrgId = resolveReportingOrgId(orgId);
+        return ResponseEntity.ok(ApiResponse.success(accountingService.getReconciliation(parseAccountingDateTime(from), parseAccountingDateTime(to), effectiveOrgId, terminalId)));
     }
 
     @PostMapping("/payment-allocations")
@@ -202,6 +203,20 @@ public class AccountingController {
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')")
     public ResponseEntity<ApiResponse<AccountingBackfillResponse>> resyncAll() {
         return ResponseEntity.ok(ApiResponse.success("Auto-posted accounting data safely rebuilt", postingService.resyncAll()));
+    }
+
+    private UUID resolveReportingOrgId(UUID requestedOrgId) {
+        UUID selectedOrgId = com.restaurant.pos.common.tenant.TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            if (requestedOrgId != null && !selectedOrgId.equals(requestedOrgId)) {
+                throw new com.restaurant.pos.common.exception.BusinessException("The requested branch does not match the active branch.");
+            }
+            return selectedOrgId;
+        }
+        if (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin()) {
+            throw new com.restaurant.pos.common.exception.BusinessException("Select a branch before viewing accounting reports.");
+        }
+        return null;
     }
 
     private LocalDateTime parseAccountingDateTime(String value) {

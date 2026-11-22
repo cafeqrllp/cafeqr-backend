@@ -1,7 +1,10 @@
 package com.restaurant.pos.whatsapp.controller;
 
+import com.restaurant.pos.client.repository.OrganizationRepository;
 import com.restaurant.pos.common.dto.ApiResponse;
 import com.restaurant.pos.common.tenant.TenantContext;
+import com.restaurant.pos.common.util.SecurityUtils;
+import org.springframework.security.access.AccessDeniedException;
 import com.restaurant.pos.whatsapp.service.WhatsAppService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +23,7 @@ import java.util.UUID;
 public class WhatsAppController {
 
     private final WhatsAppService whatsAppService;
+    private final OrganizationRepository organizationRepository;
 
     @GetMapping("/status")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getStatus(
@@ -97,18 +101,48 @@ public class WhatsAppController {
         }
     }
 
-    private String resolveSessionId(String explicitSessionId) {
-        if (explicitSessionId != null && !explicitSessionId.isBlank()) {
-            return explicitSessionId.trim();
-        }
-        UUID orgId = TenantContext.getCurrentOrg();
-        if (orgId != null) {
-            return "org_" + orgId;
-        }
+    /**
+     * Resolves the WhatsApp session the caller may act on. Without an explicit id it is the caller's current
+     * branch. An explicit id is accepted only when it belongs to the caller's own company:
+     * {@code org_<branch of this client>} or {@code client_<this client>}. Super admins may target any session.
+     * Anything else is rejected with 403, so one company cannot view another's pairing QR, unlink it, or send from it.
+     */
+    String resolveSessionId(String explicitSessionId) {
         UUID tenantId = TenantContext.getCurrentTenant();
-        if (tenantId != null) {
-            return "client_" + tenantId;
+        UUID orgId = TenantContext.getCurrentOrg();
+
+        if (explicitSessionId == null || explicitSessionId.isBlank()) {
+            if (orgId != null) return "org_" + orgId;
+            if (tenantId != null) return "client_" + tenantId;
+            if (SecurityUtils.isSuperAdmin()) return "default";
+            throw new AccessDeniedException("No branch selected for WhatsApp session");
         }
-        return "default";
+
+        String requested = explicitSessionId.trim();
+        if (SecurityUtils.isSuperAdmin()) {
+            return requested;
+        }
+        if (tenantId != null) {
+            if (requested.equals("client_" + tenantId)) {
+                return requested;
+            }
+            if (requested.startsWith("org_")) {
+                UUID requestedOrg = parseUuid(requested.substring(4));
+                if (requestedOrg != null
+                        && organizationRepository.findByIdAndClientId(requestedOrg, tenantId).isPresent()) {
+                    return "org_" + requestedOrg;
+                }
+            }
+        }
+        log.warn("[WhatsAppController] Rejected WhatsApp session '{}' for client {} / org {}", requested, tenantId, orgId);
+        throw new AccessDeniedException("WhatsApp session does not belong to your organization");
+    }
+
+    private static UUID parseUuid(String value) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 }

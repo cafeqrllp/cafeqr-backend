@@ -130,7 +130,7 @@ public class PosSaleQueryService {
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId;
         if (SecurityUtils.isSuperAdmin()) {
-            orgId = overrideOrgId != null ? overrideOrgId : branchContext.getReadOrgId(null);
+            orgId = branchContext.getReadOrgId(overrideOrgId);
         } else {
             orgId = TenantContext.getCurrentOrg();
         }

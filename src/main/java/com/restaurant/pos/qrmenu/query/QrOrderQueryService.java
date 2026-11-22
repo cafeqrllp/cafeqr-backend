@@ -1,5 +1,6 @@
 package com.restaurant.pos.qrmenu.query;
 
+import com.restaurant.pos.qrmenu.guest.QrGuestTokenService;
 import com.restaurant.pos.client.domain.Client;
 import com.restaurant.pos.client.repository.ClientRepository;
 import com.restaurant.pos.client.repository.OrganizationRepository;
@@ -48,6 +49,7 @@ public class QrOrderQueryService {
     private final SystemConfigurationService systemConfigurationService;
     private final com.restaurant.pos.common.context.TimezoneResolver timezoneResolver;
     private final com.restaurant.pos.inventory.repository.StockSnapshotRepository stockSnapshotRepository;
+    private final com.restaurant.pos.qrmenu.guest.QrGuestTokenService guestTokenService;
 
     /**
      * Resolves client UUID from either a raw UUID string or a human-readable slug string.
@@ -88,6 +90,16 @@ public class QrOrderQueryService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> getTableSessionInfo(String clientIdentifier, String orgIdentifier, String tableIdentifier) {
+        return getTableSessionInfo(clientIdentifier, orgIdentifier, tableIdentifier, false);
+    }
+
+    /**
+     * @param issueGuestSession also issue a qr:guest token for the chat view. Only when the page asks for it,
+     *                          so the page's regular table-session polling does not start a new chat session.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getTableSessionInfo(String clientIdentifier, String orgIdentifier, String tableIdentifier,
+                                                   boolean issueGuestSession) {
         UUID clientId = resolveClientId(clientIdentifier);
         UUID orgUuid = resolveOrgId(clientId, orgIdentifier);
 
@@ -277,6 +289,14 @@ public class QrOrderQueryService {
             info.put("activeOrder", activeOrderMap);
         } else {
             info.put("activeOrder", null);
+        }
+
+        // Guest chat session token for the conversational ordering view (cafe-qr-ai /api/guest/**).
+        if (issueGuestSession) {
+            QrGuestTokenService.GuestToken guest = guestTokenService.issue(
+                    effectiveClientId, effectiveOrgId, table.getId(), table.getTableNumber());
+            info.put("guestToken", guest.token());
+            info.put("guestTokenExpiresAt", guest.expiresAt().toString());
         }
 
         return info;

@@ -27,11 +27,11 @@ public class ExpenseSpecification {
             // Note: OrderType.EXPENSE filter is handled automatically by JPA inheritance (@DiscriminatorValue)
 
             // Scope handling:
-            // ALL    -> no org predicate (global + all branches) for organization admins only.
+            // ALL    -> selected org only when an org context is active; no org predicate for org admins otherwise.
             // GLOBAL -> only true organization-level expenses where org_id is null.
             // BRANCH -> one branch, either explicit branchId or current branch context.
             String requestedScope = criteria.getScope() != null ? criteria.getScope().trim().toUpperCase() : "";
-            if (!canManageAll && orgId != null) {
+            if (orgId != null) {
                 predicates.add(cb.equal(root.get("orgId"), orgId));
             } else if (ScopeType.GLOBAL.name().equals(requestedScope)) {
                 if (canManageAll) {

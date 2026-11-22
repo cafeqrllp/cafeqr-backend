@@ -46,15 +46,17 @@ public class QrMenuQueryController {
     }
 
     /**
-     * GET /api/v1/public/menu/{clientId}/{orgId}/table/{tableId}
+     * GET /api/v1/public/menu/{clientId}/{orgId}/table/{tableId}[?guestSession=true]
      * Returns table info & active open session for the scanned QR code (via UUID or slug).
+     * With guestSession=true it also returns a short-lived qr:guest token for the chat view.
      */
     @GetMapping("/{clientId}/{orgId}/table/{tableId}")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getTableInfo(
             @PathVariable String clientId,
             @PathVariable String orgId,
-            @PathVariable String tableId) {
-        Map<String, Object> info = queryService.getTableSessionInfo(clientId, orgId, tableId);
+            @PathVariable String tableId,
+            @RequestParam(name = "guestSession", defaultValue = "false") boolean guestSession) {
+        Map<String, Object> info = queryService.getTableSessionInfo(clientId, orgId, tableId, guestSession);
         return ResponseEntity.ok(ApiResponse.success(info));
     }
 

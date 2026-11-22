@@ -132,6 +132,7 @@ public class CreditCommandController {
                             .description(request.getDescription())
                             .allocationMode(request.getAllocationMode())
                             .invoiceId(request.getInvoiceId())
+                            .paymentDate(request.getPaymentDate())
                             .partnerType(request.getPartnerType())
                             .idempotencyKey(effectiveIdempotencyKey)
                             .allocations(request.getAllocations() != null

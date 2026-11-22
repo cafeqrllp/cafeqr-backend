@@ -14,7 +14,7 @@ import java.util.UUID;
  * <h3>Design Contract:</h3>
  * <ul>
  *   <li><b>READ</b> operations use {@link #getReadOrgId(UUID)} — returns the selected
- *       branch when one is active, and only returns {@code null} for Super Admin all-branch reads.</li>
+ *       branch when one is active, or {@code null} for Super Admin all-branch reads.</li>
  *   <li><b>WRITE</b> operations use {@link #requireWriteOrgId(UUID)} — always requires a
  *       branch context; throws {@link BusinessException} if none is available.</li>
  * </ul>
@@ -25,24 +25,37 @@ public class BranchContextService {
     /**
      * For READ operations: returns the effective org ID to filter data by.
      * <ul>
-     *   <li>If {@code filterOrgId} is provided (e.g. from {@code ?orgId=} query param), use it.</li>
-     *   <li>If the header selected a real branch, returns the current org from tenant context.</li>
-     *   <li>If the current user is a Super Admin with the all-branches sentinel, returns {@code null}.</li>
+     *   <li>An explicit filter org takes precedence.</li>
+     *   <li>Otherwise, returns the current org from tenant context.</li>
+     *   <li>A Super Admin with no active org may read across branches.</li>
      * </ul>
      *
-     * @param filterOrgId optional org ID override from a query parameter
-     * @return the org ID to filter by, or {@code null} for "all branches"
+     * @param filterOrgId optional org ID filter
+     * @return the org ID to filter by, or {@code null} for an all-branch read
      */
     public UUID getReadOrgId(@Nullable UUID filterOrgId) {
         if (filterOrgId != null) {
             return filterOrgId;
         }
-        UUID currentOrgId = TenantContext.getCurrentOrg();
-        if (currentOrgId != null) {
-            return currentOrgId;
+        return TenantContext.getCurrentOrg();
+    }
+
+    /**
+     * For report and billing reads that must stay within the active branch. A query
+     * parameter cannot select a different branch. A Super Admin with the global
+     * ("All branches", X-Org-ID = 0) selection gets {@code null}, meaning every branch
+     * of their own client; a specific branch filter without an active branch is rejected.
+     */
+    public UUID getSelectedReadOrgId(@Nullable UUID filterOrgId) {
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            if (filterOrgId != null && !selectedOrgId.equals(filterOrgId)) {
+                throw new BusinessException("The requested branch does not match the active branch.");
+            }
+            return selectedOrgId;
         }
-        if (SecurityUtils.isSuperAdmin()) {
-            return null; // All branches
+        if (SecurityUtils.isSuperAdmin() && filterOrgId != null) {
+            throw new BusinessException("The requested branch does not match the active branch.");
         }
         return null;
     }
@@ -52,8 +65,8 @@ public class BranchContextService {
      * <p>
      * Resolution order:
      * <ol>
-     *   <li>Use the current org from tenant context when a branch is selected.</li>
-     *   <li>Use {@code explicitOrgId} only when there is no selected branch, e.g. Super Admin all-branches create forms.</li>
+     *   <li>For Super Admin, use an explicit org when one is supplied.</li>
+     *   <li>Otherwise, use the current org from tenant context.</li>
      *   <li>If still {@code null}, throw a {@link BusinessException}.</li>
      * </ol>
      *
@@ -65,9 +78,9 @@ public class BranchContextService {
         if (explicitOrgId != null && SecurityUtils.isSuperAdmin()) {
             return explicitOrgId;
         }
-        UUID currentOrgId = TenantContext.getCurrentOrg();
-        if (currentOrgId != null) {
-            return currentOrgId;
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            return selectedOrgId;
         }
         throw new BusinessException(
             "A branch must be selected before performing this operation. " +

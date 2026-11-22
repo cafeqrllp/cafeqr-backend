@@ -169,30 +169,33 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
             SELECT i.creditCustomerId, COALESCE(SUM(i.totalAmount), 0)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.CUSTOMER_INVOICE
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND i.creditCustomerId IN :customerIds
             GROUP BY i.creditCustomerId
             """)
-    List<Object[]> sumTotalAmountByCustomerIds(@Param("clientId") UUID clientId, @Param("customerIds") java.util.Collection<UUID> customerIds);
+    List<Object[]> sumTotalAmountByCustomerIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("customerIds") java.util.Collection<UUID> customerIds);
 
     @Query("""
             SELECT i.creditCustomerId, COALESCE(SUM(i.amountDue), 0)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.CUSTOMER_INVOICE
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND i.creditCustomerId IN :customerIds
             GROUP BY i.creditCustomerId
             """)
-    List<Object[]> sumAmountDueByCustomerIds(@Param("clientId") UUID clientId, @Param("customerIds") java.util.Collection<UUID> customerIds);
+    List<Object[]> sumAmountDueByCustomerIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("customerIds") java.util.Collection<UUID> customerIds);
 
     @Query("""
             SELECT i.creditCustomerId, COUNT(i)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.CUSTOMER_INVOICE
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
@@ -200,36 +203,39 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
               AND i.creditCustomerId IN :customerIds
             GROUP BY i.creditCustomerId
             """)
-    List<Object[]> countOpenInvoicesByCustomerIds(@Param("clientId") UUID clientId, @Param("customerIds") java.util.Collection<UUID> customerIds);
+    List<Object[]> countOpenInvoicesByCustomerIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("customerIds") java.util.Collection<UUID> customerIds);
 
     @Query("""
             SELECT COALESCE(i.vendorId, i.creditCustomerId), COALESCE(SUM(i.totalAmount), 0)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.VENDOR_BILL
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND (i.vendorId IN :vendorIds OR i.creditCustomerId IN :vendorIds)
             GROUP BY COALESCE(i.vendorId, i.creditCustomerId)
             """)
-    List<Object[]> sumTotalAmountByVendorIds(@Param("clientId") UUID clientId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
+    List<Object[]> sumTotalAmountByVendorIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
 
     @Query("""
             SELECT COALESCE(i.vendorId, i.creditCustomerId), COALESCE(SUM(i.amountDue), 0)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.VENDOR_BILL
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND (i.vendorId IN :vendorIds OR i.creditCustomerId IN :vendorIds)
             GROUP BY COALESCE(i.vendorId, i.creditCustomerId)
             """)
-    List<Object[]> sumAmountDueByVendorIds(@Param("clientId") UUID clientId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
+    List<Object[]> sumAmountDueByVendorIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
 
     @Query("""
             SELECT COALESCE(i.vendorId, i.creditCustomerId), COUNT(i)
             FROM Invoice i
             WHERE i.clientId = :clientId
+              AND (:orgId IS NULL OR i.orgId = :orgId)
               AND i.invoiceType = com.restaurant.pos.invoice.domain.InvoiceType.VENDOR_BILL
               AND (i.isactive IS NULL OR UPPER(i.isactive) != 'N')
               AND (i.status IS NULL OR UPPER(i.status) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
@@ -237,5 +243,5 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
               AND (i.vendorId IN :vendorIds OR i.creditCustomerId IN :vendorIds)
             GROUP BY COALESCE(i.vendorId, i.creditCustomerId)
             """)
-    List<Object[]> countOpenInvoicesByVendorIds(@Param("clientId") UUID clientId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
+    List<Object[]> countOpenInvoicesByVendorIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
 }

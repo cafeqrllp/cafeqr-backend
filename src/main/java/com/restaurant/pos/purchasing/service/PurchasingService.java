@@ -161,6 +161,8 @@ public class PurchasingService {
     public Vendor saveVendor(Vendor vendor) {
         vendor.setClientId(TenantContext.getCurrentTenant());
         vendor.setOrgId(branchContext.requireWriteOrgId(vendor.getOrgId()));
+        String status = normalizeActiveFlag(vendor.getIsactive());
+        vendor.setIsactive(status != null ? status : "Y");
         return vendorRepository.save(vendor);
     }
 
@@ -177,8 +179,29 @@ public class PurchasingService {
         existing.setOpeningBalance(updates.getOpeningBalance());
         existing.setCreditLimit(updates.getCreditLimit());
         existing.setPricelistId(updates.getPricelistId());
-        existing.setIsactive(updates.getIsactive());
+        // A payload without a status (e.g. a details-only edit) must not silently reactivate
+        // or clear the flag; only an explicit value changes it.
+        String status = normalizeActiveFlag(updates.getIsactive());
+        if (status != null) {
+            existing.setIsactive(status);
+        }
         return vendorRepository.save(existing);
+    }
+
+    /** Maps the accepted client spellings of the active flag to the stored 'Y'/'N'; null means "not sent". */
+    static String normalizeActiveFlag(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String v = raw.trim();
+        if ("Y".equalsIgnoreCase(v) || "true".equalsIgnoreCase(v) || "ACTIVE".equalsIgnoreCase(v)) {
+            return "Y";
+        }
+        if ("N".equalsIgnoreCase(v) || "false".equalsIgnoreCase(v)
+                || "INACTIVE".equalsIgnoreCase(v) || "SUSPENDED".equalsIgnoreCase(v)) {
+            return "N";
+        }
+        throw new BusinessException("Invalid vendor status '" + raw + "'. Use Y or N.");
     }
 
     @Transactional
@@ -335,3 +358,4 @@ public class PurchasingService {
     }
 
 }
+

@@ -92,22 +92,24 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID>, JpaSpec
             SELECT p.creditCustomerId, COALESCE(SUM(p.amountPaid), 0)
             FROM Payment p
             WHERE p.clientId = :clientId
+              AND (:orgId IS NULL OR p.orgId = :orgId)
               AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
               AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND p.creditCustomerId IN :customerIds
             GROUP BY p.creditCustomerId
             """)
-    List<Object[]> sumPaidByCustomerIds(@Param("clientId") UUID clientId, @Param("customerIds") java.util.Collection<UUID> customerIds);
+    List<Object[]> sumPaidByCustomerIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("customerIds") java.util.Collection<UUID> customerIds);
 
     @Query("""
             SELECT p.creditCustomerId, COALESCE(SUM(p.amountPaid), 0)
             FROM Payment p
             WHERE p.clientId = :clientId
+              AND (:orgId IS NULL OR p.orgId = :orgId)
               AND p.paymentType = com.restaurant.pos.order.domain.PaymentType.OUTBOUND
               AND (p.isactive IS NULL OR UPPER(p.isactive) != 'N')
               AND (p.docStatus IS NULL OR UPPER(p.docStatus) NOT IN ('VOID', 'VOIDED', 'CANCELLED', 'INACTIVE'))
               AND p.creditCustomerId IN :vendorIds
             GROUP BY p.creditCustomerId
             """)
-    List<Object[]> sumPaidByVendorIds(@Param("clientId") UUID clientId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
+    List<Object[]> sumPaidByVendorIds(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("vendorIds") java.util.Collection<UUID> vendorIds);
 }

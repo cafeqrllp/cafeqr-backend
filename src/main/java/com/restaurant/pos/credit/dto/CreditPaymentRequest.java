@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,6 +33,9 @@ public class CreditPaymentRequest {
     private String allocationMode;
 
     private UUID invoiceId;
+
+    /** Optional transaction instant (ISO-8601, UTC). When absent the payment is stamped with the current time. */
+    private Instant paymentDate;
 
     @Size(max = 20, message = "Partner type must not exceed 20 characters")
     private String partnerType;

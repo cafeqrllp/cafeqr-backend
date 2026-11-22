@@ -50,9 +50,7 @@ public class PurchaseOrderQueryService {
     @Transactional(readOnly = true)
     public Page<PurchaseOrderSummaryDto> searchPurchaseOrders(PurchaseOrderSearchRequest request, Pageable pageable) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID orgId = request.getBranchId() != null 
-                ? request.getBranchId() 
-                : (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg());
+        UUID orgId = resolveOrgId(request.getBranchId());
 
         Specification<Order> spec = PurchaseOrderSpecifications.withFilters(request, clientId, orgId);
         Page<Order> pageResult = orderRepository.findAll(spec, pageable);
@@ -84,7 +82,7 @@ public class PurchaseOrderQueryService {
     @Transactional(readOnly = true)
     public List<OrderResponseDto> getDraftPurchaseOrders() {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID orgId = TenantContext.getCurrentOrg();
+        UUID orgId = resolveOrgId(null);
 
         List<Order> drafts = (orgId != null)
                 ? orderRepository.findByClientIdAndOrgIdAndOrderTypeOrderByCreatedAtDesc(clientId, orgId, OrderType.PURCHASE)
@@ -103,14 +101,10 @@ public class PurchaseOrderQueryService {
     @Transactional(readOnly = true)
     public OrderResponseDto getPurchaseOrder(UUID orderId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID orgId = TenantContext.getCurrentOrg();
+        UUID orgId = resolveOrgId(null);
 
-        Order order = (orgId != null)
-                ? orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId)
-                    .orElseGet(() -> orderRepository.findByIdAndClientId(orderId, clientId)
-                        .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found for ID: " + orderId)))
-                : orderRepository.findByIdAndClientId(orderId, clientId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found for ID: " + orderId));
+        Order order = orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found for ID: " + orderId));
 
         if (order.getOrderType() != null && order.getOrderType() != OrderType.PURCHASE) {
             throw new BusinessException("Order " + orderId + " is not a Purchase Order");
@@ -125,7 +119,8 @@ public class PurchaseOrderQueryService {
     @Transactional(readOnly = true)
     public List<OrderResponseDto> getPurchaseOrderRevisions(UUID orderId) {
         UUID clientId = TenantContext.getCurrentTenant();
-        Order current = orderRepository.findByIdAndClientId(orderId, clientId)
+        UUID orgId = resolveOrgId(null);
+        Order current = orderRepository.findByIdAndClientIdAndOrgId(orderId, clientId, orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Purchase Order not found for ID: " + orderId));
 
         String baseOrderNo = current.getOrderNo();
@@ -134,7 +129,7 @@ public class PurchaseOrderQueryService {
         }
         String voidPrefix = baseOrderNo + "_VOID_%";
 
-        return orderRepository.findAllRevisionsByOrderNo(clientId, baseOrderNo, voidPrefix)
+        return orderRepository.findAllRevisionsByOrderNoAndOrgId(clientId, orgId, baseOrderNo, voidPrefix)
                 .stream()
                 .map(purchaseOrderDtoMapper::toResponseDto)
                 .toList();
@@ -156,9 +151,7 @@ public class PurchaseOrderQueryService {
 
     private List<Order> fetchFilteredPurchaseOrders(java.time.Instant from, java.time.Instant to, UUID orgId, UUID vendorId, UUID warehouseId, boolean fetchLines) {
         UUID clientId = TenantContext.getCurrentTenant();
-        UUID resolvedOrgId = orgId != null
-                ? orgId
-                : (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg());
+        UUID resolvedOrgId = resolveOrgId(orgId);
 
         return orderRepository.findAll((root, query, cb) -> {
             var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
@@ -190,10 +183,22 @@ public class PurchaseOrderQueryService {
     }
 
     private int currencyDp(UUID orgId) {
-        UUID resolvedOrgId = orgId != null
-                ? orgId
-                : (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin() ? null : TenantContext.getCurrentOrg());
+        UUID resolvedOrgId = resolveOrgId(orgId);
         return currencyScale.decimalPlaces(TenantContext.getCurrentTenant(), resolvedOrgId);
+    }
+
+    private UUID resolveOrgId(UUID requestedOrgId) {
+        UUID selectedOrgId = TenantContext.getCurrentOrg();
+        if (selectedOrgId != null) {
+            if (requestedOrgId != null && !selectedOrgId.equals(requestedOrgId)) {
+                throw new BusinessException("The requested branch does not match the active branch.");
+            }
+            return selectedOrgId;
+        }
+        if (com.restaurant.pos.common.util.SecurityUtils.isSuperAdmin()) {
+            throw new BusinessException("Select a branch before viewing purchase orders.");
+        }
+        return null;
     }
 
     private java.math.BigDecimal safe(java.math.BigDecimal val) {

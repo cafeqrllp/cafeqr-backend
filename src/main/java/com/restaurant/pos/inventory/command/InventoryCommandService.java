@@ -340,6 +340,15 @@ public class InventoryCommandService {
             transfer.setTransferNumber(documentSequenceService.generateNextSequence(DocumentType.STOCK_TRANSFER, orgId));
         }
 
+        // Branch-specific products may only be transferred when source and destination warehouses
+        // belong to the same branch as the product.
+        Warehouse transferSourceWh = transfer.getSourceWarehouseId() != null
+                ? warehouseRepository.findById(transfer.getSourceWarehouseId()).orElse(null) : null;
+        Warehouse transferDestWh = transfer.getDestWarehouseId() != null
+                ? warehouseRepository.findById(transfer.getDestWarehouseId()).orElse(null) : null;
+        UUID transferSourceOrgId = transferSourceWh != null && transferSourceWh.getOrgId() != null ? transferSourceWh.getOrgId() : orgId;
+        UUID transferDestOrgId = transferDestWh != null && transferDestWh.getOrgId() != null ? transferDestWh.getOrgId() : orgId;
+
         if (transfer.getLines() != null) {
             for (StockTransferLine line : transfer.getLines()) {
                 line.setTransfer(transfer);
@@ -349,7 +358,11 @@ public class InventoryCommandService {
                 if (line.getProductId() != null) {
                     com.restaurant.pos.product.domain.Product product = productRepository.findById(line.getProductId()).orElse(null);
                     if (product != null) {
-                        if (product.getOrgId() != null && !new UUID(0L, 0L).equals(product.getOrgId())) {
+                        boolean branchSpecific = product.getOrgId() != null && !new UUID(0L, 0L).equals(product.getOrgId());
+                        boolean sameBranchTransfer = branchSpecific
+                                && product.getOrgId().equals(transferSourceOrgId)
+                                && product.getOrgId().equals(transferDestOrgId);
+                        if (branchSpecific && !sameBranchTransfer) {
                             throw new com.restaurant.pos.common.exception.BusinessException(
                                     "Product '" + product.getName() + "' is branch-specific and cannot be transferred across branches."
                             );

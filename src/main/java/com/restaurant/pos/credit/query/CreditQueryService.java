@@ -3,6 +3,7 @@ package com.restaurant.pos.credit.query;
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.service.CurrencyScaleService;
 import com.restaurant.pos.common.tenant.TenantContext;
+import com.restaurant.pos.common.util.SecurityUtils;
 import com.restaurant.pos.credit.common.CreditGuard;
 import com.restaurant.pos.credit.domain.CreditCustomer;
 import com.restaurant.pos.credit.dto.CreditBPartnerDto;
@@ -78,16 +79,19 @@ public class CreditQueryService {
         validatePartnerType(partnerType);
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
+        UUID orgId = resolveReadOrgId();
 
         if (creditGuard.isVendor(partnerType)) {
-            List<Vendor> vendors = vendorRepository.findByClientIdOrderByNameAsc(clientId);
+            List<Vendor> vendors = orgId == null
+                    ? vendorRepository.findByClientIdOrderByNameAsc(clientId)
+                    : vendorRepository.findByClientIdAndOrgIdOrderByNameAsc(clientId, orgId);
             if (vendors.isEmpty()) return List.of();
 
             List<UUID> vendorIds = vendors.stream().map(Vendor::getId).collect(Collectors.toList());
-            Map<UUID, BigDecimal> invoiceTotals = toMapBigDecimal(invoiceRepository.sumTotalAmountByVendorIds(clientId, vendorIds));
-            Map<UUID, BigDecimal> pendingBalances = toMapBigDecimal(invoiceRepository.sumAmountDueByVendorIds(clientId, vendorIds));
-            Map<UUID, BigDecimal> paidTotals = toMapBigDecimal(paymentRepository.sumPaidByVendorIds(clientId, vendorIds));
-            Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByVendorIds(clientId, vendorIds));
+            Map<UUID, BigDecimal> invoiceTotals = toMapBigDecimal(invoiceRepository.sumTotalAmountByVendorIds(clientId, orgId, vendorIds));
+            Map<UUID, BigDecimal> pendingBalances = toMapBigDecimal(invoiceRepository.sumAmountDueByVendorIds(clientId, orgId, vendorIds));
+            Map<UUID, BigDecimal> paidTotals = toMapBigDecimal(paymentRepository.sumPaidByVendorIds(clientId, orgId, vendorIds));
+            Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByVendorIds(clientId, orgId, vendorIds));
 
             return vendors.stream().map(vendor -> {
                 int dp = currencyScale.decimalPlaces(vendor.getClientId(), vendor.getOrgId());
@@ -98,7 +102,8 @@ public class CreditQueryService {
 
                 BigDecimal totalCredit = creditGuard.money(vendor.getOpeningBalance(), dp).add(invTotal);
                 BigDecimal balance = creditGuard.money(vendor.getOpeningBalance(), dp).add(pendingBal).setScale(dp, RoundingMode.HALF_UP);
-                String vStatus = "Y".equalsIgnoreCase(vendor.getIsactive()) ? "ACTIVE" : "INACTIVE";
+                // Same rule as the purchase-order check: only an explicit 'N' is inactive.
+                String vStatus = "N".equalsIgnoreCase(vendor.getIsactive()) ? "INACTIVE" : "ACTIVE";
 
                 return CreditBPartnerDto.builder()
                         .id(vendor.getId())
@@ -122,13 +127,16 @@ public class CreditQueryService {
                 ? creditCustomerRepository.findByClientIdAndStatusAndIsactiveOrderByNameAsc(clientId, creditGuard.normalizeStatus(status), "Y")
                 : creditCustomerRepository.findByClientIdAndIsactiveOrderByNameAsc(clientId, "Y");
 
+        if (orgId != null) {
+            customers = customers.stream().filter(customer -> orgId.equals(customer.getOrgId())).collect(Collectors.toList());
+        }
         if (customers.isEmpty()) return List.of();
 
         List<UUID> customerIds = customers.stream().map(CreditCustomer::getId).collect(Collectors.toList());
-        Map<UUID, BigDecimal> invoiceTotals = toMapBigDecimal(invoiceRepository.sumTotalAmountByCustomerIds(clientId, customerIds));
-        Map<UUID, BigDecimal> pendingBalances = toMapBigDecimal(invoiceRepository.sumAmountDueByCustomerIds(clientId, customerIds));
-        Map<UUID, BigDecimal> paidTotals = toMapBigDecimal(paymentRepository.sumPaidByCustomerIds(clientId, customerIds));
-        Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByCustomerIds(clientId, customerIds));
+        Map<UUID, BigDecimal> invoiceTotals = toMapBigDecimal(invoiceRepository.sumTotalAmountByCustomerIds(clientId, orgId, customerIds));
+        Map<UUID, BigDecimal> pendingBalances = toMapBigDecimal(invoiceRepository.sumAmountDueByCustomerIds(clientId, orgId, customerIds));
+        Map<UUID, BigDecimal> paidTotals = toMapBigDecimal(paymentRepository.sumPaidByCustomerIds(clientId, orgId, customerIds));
+        Map<UUID, Long> openCounts = toMapLong(invoiceRepository.countOpenInvoicesByCustomerIds(clientId, orgId, customerIds));
 
         return customers.stream().map(customer -> {
             int dp = currencyScale.decimalPlaces(customer.getClientId(), customer.getOrgId());
@@ -171,14 +179,17 @@ public class CreditQueryService {
         validatePartnerType(partnerType);
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
+        UUID orgId = resolveReadOrgId();
 
         Pageable defaultSortedPageable = ensureSort(pageable, "invoiceDate", Sort.Direction.DESC);
 
         if (creditGuard.isVendor(partnerType)) {
             Vendor vendor = creditGuard.getVendor(partnerId, clientId);
+            requirePartnerOrg(vendor.getOrgId(), orgId);
             Specification<Invoice> spec = (root, query, cb) -> {
                 var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
                 predicates.add(cb.equal(root.get("clientId"), clientId));
+                if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
                 predicates.add(cb.or(
                         cb.equal(root.get("vendorId"), vendor.getId()),
                         cb.equal(root.get("creditCustomerId"), vendor.getId())
@@ -196,9 +207,11 @@ public class CreditQueryService {
         }
 
         CreditCustomer customer = creditGuard.getCreditCustomer(partnerId, clientId);
+        requirePartnerOrg(customer.getOrgId(), orgId);
         Specification<Invoice> spec = (root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
             predicates.add(cb.equal(root.get("creditCustomerId"), customer.getId()));
             predicates.add(cb.equal(root.get("invoiceType"), InvoiceType.CUSTOMER_INVOICE));
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
@@ -224,14 +237,17 @@ public class CreditQueryService {
         validatePartnerType(partnerType);
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
+        UUID orgId = resolveReadOrgId();
 
         Pageable defaultSortedPageable = ensureSort(pageable, "paymentDate", Sort.Direction.DESC);
 
         if (creditGuard.isVendor(partnerType)) {
             Vendor vendor = creditGuard.getVendor(partnerId, clientId);
+            requirePartnerOrg(vendor.getOrgId(), orgId);
             Specification<Payment> spec = (root, query, cb) -> {
                 var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
                 predicates.add(cb.equal(root.get("clientId"), clientId));
+                if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
                 predicates.add(cb.equal(root.get("paymentType"), PaymentType.OUTBOUND));
                 predicates.add(cb.equal(root.get("creditCustomerId"), vendor.getId()));
                 predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
@@ -245,9 +261,11 @@ public class CreditQueryService {
         }
 
         CreditCustomer customer = creditGuard.getCreditCustomer(partnerId, clientId);
+        requirePartnerOrg(customer.getOrgId(), orgId);
         Specification<Payment> spec = (root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
+            if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
             predicates.add(cb.equal(root.get("creditCustomerId"), customer.getId()));
             predicates.add(cb.or(cb.isNull(root.get("isactive")), cb.notEqual(cb.upper(root.get("isactive").as(String.class)), "N")));
             predicates.add(cb.or(cb.isNull(root.get("docStatus")), cb.not(cb.upper(root.get("docStatus").as(String.class)).in("VOID", "VOIDED"))));
@@ -270,7 +288,7 @@ public class CreditQueryService {
     public CreditReportDto report(Instant from, Instant to, UUID customerId) {
         creditGuard.ensureCreditEnabled();
         UUID clientId = creditGuard.requireClient();
-        UUID orgId = TenantContext.getCurrentOrg();
+        UUID orgId = resolveReadOrgId();
         int dp = currencyScale.decimalPlaces(clientId, orgId);
         ZoneId zoneId = timezoneResolver.resolveTimezone(clientId, orgId);
         if (from != null && to != null && from.isAfter(to)) {
@@ -291,9 +309,7 @@ public class CreditQueryService {
         List<Invoice> invoices = invoiceRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
-            if (orgId != null) {
-                predicates.add(cb.equal(root.get("orgId"), orgId));
-            }
+            if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
             predicates.add(cb.equal(root.get("invoiceType"), InvoiceType.CUSTOMER_INVOICE));
             predicates.add(cb.isNotNull(root.get("creditCustomerId")));
             // Only sales completed on credit; a credit customer attached to a paid sale is not a credit sale.
@@ -316,9 +332,7 @@ public class CreditQueryService {
         List<Payment> payments = paymentRepository.findAll((root, query, cb) -> {
             var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
             predicates.add(cb.equal(root.get("clientId"), clientId));
-            if (orgId != null) {
-                predicates.add(cb.equal(root.get("orgId"), orgId));
-            }
+            if (orgId != null) predicates.add(cb.equal(root.get("orgId"), orgId));
             predicates.add(cb.isNotNull(root.get("creditCustomerId")));
             // Customer credit settlements only; vendor payouts also carry creditCustomerId but are OUTBOUND.
             predicates.add(cb.equal(root.get("paymentType"), PaymentType.INBOUND));
@@ -664,5 +678,16 @@ public class CreditQueryService {
         if (ids.isEmpty()) return Map.of();
         return creditCustomerRepository.findByIdInAndClientId(ids, creditGuard.requireClient()).stream()
                 .collect(Collectors.toMap(CreditCustomer::getId, customer -> customer, (left, right) -> left, LinkedHashMap::new));
+    }
+
+    private UUID resolveReadOrgId() {
+        // null = super admin with the global "All branches" selection (every branch of their client)
+        return TenantContext.getCurrentOrg();
+    }
+
+    private void requirePartnerOrg(UUID partnerOrgId, UUID selectedOrgId) {
+        if (selectedOrgId != null && !selectedOrgId.equals(partnerOrgId)) {
+            throw new com.restaurant.pos.common.exception.ResourceNotFoundException("Credit partner not found");
+        }
     }
 }

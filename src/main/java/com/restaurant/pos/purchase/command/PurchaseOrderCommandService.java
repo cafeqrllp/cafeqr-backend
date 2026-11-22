@@ -51,6 +51,22 @@ public class PurchaseOrderCommandService {
     private final com.restaurant.pos.invoice.repository.InvoiceRepository invoiceRepository;
     private final com.restaurant.pos.order.repository.PaymentRepository paymentRepository;
     private final PlatformTransactionManager transactionManager;
+    private final com.restaurant.pos.purchasing.repository.VendorRepository vendorRepository;
+
+    /**
+     * An inactive vendor must not be used on a new purchase or swapped onto an existing one.
+     * Purchases already placed with a vendor that was deactivated later are left untouched.
+     */
+    private void assertVendorActive(UUID clientId, UUID vendorId) {
+        if (vendorId == null) {
+            return;
+        }
+        com.restaurant.pos.purchasing.domain.Vendor vendor = vendorRepository.findByIdAndClientId(vendorId, clientId)
+                .orElseThrow(() -> new BusinessException("Vendor not found"));
+        if ("N".equalsIgnoreCase(vendor.getIsactive())) {
+            throw new BusinessException("Vendor '" + vendor.getName() + "' is inactive and cannot be used for a purchase order.");
+        }
+    }
 
     /**
      * A fresh transaction per purchase order for bulk operations. Without it, one PO whose
@@ -72,6 +88,7 @@ public class PurchaseOrderCommandService {
 
         UUID clientId = TenantContext.getCurrentTenant();
         UUID orgId = branchContext.requireWriteOrgId(command.getOrgId());
+        assertVendorActive(clientId, command.getVendorId());
         String sourceRef = StringUtils.hasText(idempotencyKey) ? idempotencyKey : command.getSourceLocalRef();
 
         // Idempotency check: Return existing order if identical sourceLocalRef was already processed
@@ -173,6 +190,11 @@ public class PurchaseOrderCommandService {
         }
 
         boolean isDraft = OrderStatus.DRAFT.name().equalsIgnoreCase(existingEntity.getOrderStatus());
+
+        // Only a vendor change is checked; keeping the original (possibly since-deactivated) vendor is allowed
+        if (command.getVendorId() != null && !command.getVendorId().equals(existingEntity.getVendorId())) {
+            assertVendorActive(clientId, command.getVendorId());
+        }
 
         // IF DRAFT: Update existing entity in place directly without creating _VOID_ revision snapshots
         if (isDraft) {
@@ -385,6 +407,8 @@ public class PurchaseOrderCommandService {
             throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already received");
         }
 
+        validateOrderLinePrices(existingEntity.getLines());
+
         assertInvoiceNotAlreadyReceived(clientId, existingEntity.getOrgId(), existingEntity.getVendorId(),
                 existingEntity.getReference(), existingEntity.getId());
 
@@ -498,6 +522,8 @@ public class PurchaseOrderCommandService {
                         throw new BusinessException("Purchase Order " + existingEntity.getOrderNo() + " is already received/completed");
                     }
 
+                    validateOrderLinePrices(existingEntity.getLines());
+
                     if (!StringUtils.hasText(existingEntity.getPaymentMethod())) {
                         throw new BusinessException("Payment method must be specified before receiving Purchase Order " + existingEntity.getOrderNo());
                     }
@@ -546,6 +572,9 @@ public class PurchaseOrderCommandService {
             throw new BusinessException("Purchase Order must have at least one line item");
         }
         boolean isDraft = command.getOrderStatus() == null || OrderStatus.DRAFT.name().equalsIgnoreCase(command.getOrderStatus());
+        if (requiresUnitPrice(command.getOrderStatus()) || Boolean.TRUE.equals(command.getIsReceived())) {
+            validateCommandLinePrices(command.getLines());
+        }
         if (!isDraft && !StringUtils.hasText(command.getPaymentMethod())) {
             throw new BusinessException("Payment method must be specified for a Purchase Order");
         }
@@ -603,6 +632,39 @@ public class PurchaseOrderCommandService {
         }
         if (order.getLines() == null || order.getLines().isEmpty()) {
             throw new BusinessException("Purchase Order must contain at least one line item.");
+        }
+        if (requiresUnitPrice(order)) {
+            validateOrderLinePrices(order.getLines());
+        }
+    }
+
+    private boolean requiresUnitPrice(Order order) {
+        return requiresUnitPrice(order.getOrderStatus()) || Boolean.TRUE.equals(order.getIsReceived());
+    }
+
+    private boolean requiresUnitPrice(String status) {
+        return OrderStatus.CONFIRMED.name().equalsIgnoreCase(status)
+                || OrderStatus.COMPLETED.name().equalsIgnoreCase(status);
+    }
+
+    private void validateCommandLinePrices(List<CreatePurchaseOrderCommand.PurchaseOrderLineCommand> lines) {
+        for (CreatePurchaseOrderCommand.PurchaseOrderLineCommand line : lines) {
+            if (line.getUnitPrice() == null) {
+                String product = StringUtils.hasText(line.getProductName()) ? line.getProductName() : "the selected product";
+                throw new BusinessException("Unit price is required for " + product + ".");
+            }
+        }
+    }
+
+    private void validateOrderLinePrices(List<OrderLine> lines) {
+        if (lines == null || lines.isEmpty()) {
+            throw new BusinessException("Purchase Order must contain at least one line item.");
+        }
+        for (OrderLine line : lines) {
+            if (line.getUnitPrice() == null) {
+                String product = StringUtils.hasText(line.getProductName()) ? line.getProductName() : "the selected product";
+                throw new BusinessException("Unit price is required for " + product + ".");
+            }
         }
     }
 

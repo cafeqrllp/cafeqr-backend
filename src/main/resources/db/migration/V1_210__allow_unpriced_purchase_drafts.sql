@@ -1,0 +1,1 @@
+ALTER TABLE order_lines ALTER COLUMN unit_price DROP NOT NULL;
