@@ -127,6 +127,7 @@ public class ProductService {
         existing.setDescription(category.getDescription());
         existing.setActive(category.isActive());
         existing.setImageUrl(category.getImageUrl());
+        existing.setSequenceNo(category.getSequenceNo());
         Category saved = categoryRepository.save(existing);
         invalidatePosCategories(existing.getClientId(), existing.getOrgId());
         return saved;

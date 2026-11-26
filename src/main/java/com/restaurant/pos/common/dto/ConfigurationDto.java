@@ -29,6 +29,8 @@ public class ConfigurationDto {
     private boolean creditEnabled;
     @Builder.Default
     private String creditAllocationMode = "OLDEST_FIRST";
+    @Builder.Default
+    private String categorySortMode = "NAME_ASC";
     private boolean tableManagementEnabled;
     private boolean qrOrderingEnabled;
     private boolean inventoryEnabled;
@@ -57,6 +59,8 @@ public class ConfigurationDto {
     private String cashDrawerOpenTenders = "CASH";
     @Builder.Default
     private boolean cashDrawerManualReasonRequired = true;
+    @Builder.Default
+    private boolean highlightPosEnabled = true;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;

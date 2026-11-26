@@ -49,6 +49,7 @@ public class SalesScreenConfiguration {
     private boolean menuImagesEnabled;
     private boolean creditEnabled;
     private String creditAllocationMode;
+    private String categorySortMode;
 
     // Currency & Formatting
     private String currencySymbol;

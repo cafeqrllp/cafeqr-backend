@@ -52,6 +52,15 @@ public class PosSaleQueryController {
     }
 
     /**
+     * Active categories in the order configured for the sales screen (sequence, A-Z, most sold, ...).
+     */
+    @GetMapping("/categories")
+    @Operation(summary = "POS Sale Categories", description = "Returns active categories already ordered per the configured category sort mode.")
+    public ResponseEntity<ApiResponse<java.util.List<com.restaurant.pos.pos.sale.dto.ProductCategoryBean>>> getOrderedCategories() {
+        return ResponseEntity.ok(ApiResponse.success(queryService.getOrderedCategories()));
+    }
+
+    /**
      * Loads POS configuration independently.
      */
     @GetMapping("/configurations")

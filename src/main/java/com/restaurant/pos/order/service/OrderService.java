@@ -2471,6 +2471,11 @@ public class OrderService {
                 oldOrder.setIsCredit(updates.getIsCredit());
             if (updates.getCreditCustomerId() != null)
                 oldOrder.setCreditCustomerId(updates.getCreditCustomerId());
+            if (updates.getCustomerId() != null && !updates.getCustomerId().equals(oldOrder.getCustomerId())) {
+                // Different customer: clear previous name/phone so they aren't carried over.
+                oldOrder.setCustomerName(null);
+                oldOrder.setCustomerPhone(null);
+            }
             if (updates.getCustomerId() != null)
                 oldOrder.setCustomerId(updates.getCustomerId());
             if (updates.getCustomerName() != null)
@@ -2740,10 +2745,15 @@ public class OrderService {
         newOrder.setIsCredit(updates.getIsCredit() != null ? updates.getIsCredit() : oldOrder.getIsCredit());
         newOrder.setCreditCustomerId(
                 updates.getCreditCustomerId() != null ? updates.getCreditCustomerId() : oldOrder.getCreditCustomerId());
+        // If the customer changed, never inherit the previous customer's name/phone.
+        boolean customerSwitched = updates.getCustomerId() != null
+                && !updates.getCustomerId().equals(oldOrder.getCustomerId());
         newOrder.setCustomerName(
-                updates.getCustomerName() != null ? updates.getCustomerName() : oldOrder.getCustomerName());
+                updates.getCustomerName() != null ? updates.getCustomerName()
+                        : (customerSwitched ? null : oldOrder.getCustomerName()));
         newOrder.setCustomerPhone(
-                updates.getCustomerPhone() != null ? updates.getCustomerPhone() : oldOrder.getCustomerPhone());
+                updates.getCustomerPhone() != null ? updates.getCustomerPhone()
+                        : (customerSwitched ? null : oldOrder.getCustomerPhone()));
         newOrder.setCustomerIds(
                 updates.getCustomerIds() != null ? updates.getCustomerIds() : oldOrder.getCustomerIds());
         newOrder.setWarehouseId(
@@ -3225,6 +3235,12 @@ public class OrderService {
                 || (safeRequest.getCustomerPhone() != null && !safeRequest.getCustomerPhone().isBlank())
                 || (safeRequest.getCustomerName() != null && !safeRequest.getCustomerName().isBlank());
         if (hasSettleCustomer) {
+            // Switching to a different customer: drop the previous customer's name/phone so a
+            // stale phone is never used for the WhatsApp bill when the new customer has none.
+            if (safeRequest.getCustomerId() != null && !safeRequest.getCustomerId().equals(order.getCustomerId())) {
+                order.setCustomerName(null);
+                order.setCustomerPhone(null);
+            }
             if (safeRequest.getCustomerId() != null) {
                 order.setCustomerId(safeRequest.getCustomerId());
             }
