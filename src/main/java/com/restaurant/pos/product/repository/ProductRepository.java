@@ -17,6 +17,16 @@ import java.util.UUID;
 
 @Repository
 public interface ProductRepository extends JpaRepository<Product, UUID> {
+
+    /** Rows: [categoryId (UUID), count (Long)] of active, non-ingredient products, for POS category ordering. */
+    @Query("SELECT p.category.id, COUNT(p) FROM Product p WHERE (p.clientId = :clientId OR p.clientId IS NULL) " +
+           "AND (:orgId IS NULL OR p.orgId = :orgId OR p.orgId IS NULL OR p.orgId = :nilOrgId) " +
+           "AND p.isActive = true AND p.isIngredient = false AND p.category IS NOT NULL GROUP BY p.category.id")
+    List<Object[]> countActiveSellableByCategoryInternal(@Param("clientId") UUID clientId, @Param("orgId") UUID orgId, @Param("nilOrgId") UUID nilOrgId);
+
+    default List<Object[]> countActiveSellableByCategory(UUID clientId, UUID orgId) {
+        return countActiveSellableByCategoryInternal(clientId, orgId, new UUID(0L, 0L));
+    }
     UUID NIL_ORG_ID = new UUID(0L, 0L);
 
     List<Product> findByClientId(UUID clientId);

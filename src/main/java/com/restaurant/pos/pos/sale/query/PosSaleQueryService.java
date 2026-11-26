@@ -72,6 +72,7 @@ public class PosSaleQueryService {
     private final ExecutorService salesScreenExecutor;
     private final SingleFlightCacheLoader singleFlightLoader;
     private final PosCacheVersionService versionService;
+    private final CategoryOrderService categoryOrderService;
 
     public PosSaleQueryService(
             PosSaleProjectionRepository projectionRepository,
@@ -83,7 +84,8 @@ public class PosSaleQueryService {
             RedisCacheService redisCacheService,
             @Autowired(required = false) @Qualifier("posSalesScreenExecutor") ExecutorService salesScreenExecutor,
             SingleFlightCacheLoader singleFlightLoader,
-            PosCacheVersionService versionService) {
+            PosCacheVersionService versionService,
+            CategoryOrderService categoryOrderService) {
         this.projectionRepository = projectionRepository;
         this.configurationService = configurationService;
         this.productService = productService;
@@ -94,6 +96,7 @@ public class PosSaleQueryService {
         this.salesScreenExecutor = salesScreenExecutor;
         this.singleFlightLoader = singleFlightLoader;
         this.versionService = versionService;
+        this.categoryOrderService = categoryOrderService;
     }
 
     private ExecutorService getExecutor() {
@@ -403,6 +406,12 @@ public class PosSaleQueryService {
         return result;
     }
 
+    /** Active POS categories already ordered per the branch's category sort mode. */
+    public List<ProductCategoryBean> getOrderedCategories() {
+        TenantOrgContext ctx = resolveTenantOrgContext(null);
+        return getCategoryBeans(ctx.clientId(), ctx.orgId());
+    }
+
     private List<ProductCategoryBean> getCategoryBeans(UUID clientId, UUID orgId) {
         long version = versionService.getVersion(PosCacheVersionService.Namespace.CATEGORIES, clientId, orgId);
         String cacheKey = PosCacheKeys.categories(clientId, orgId, version);
@@ -418,13 +427,16 @@ public class PosSaleQueryService {
             List<Category> list = productService.getCategories();
             if (list == null)
                 return Collections.<ProductCategoryBean>emptyList();
-            return list.stream()
+            List<ProductCategoryBean> beans = list.stream()
                     .filter(c -> c != null && c.isActive())
                     .map(c -> ProductCategoryBean.builder()
                             .id(c.getId() != null ? c.getId().toString() : null)
                             .name(c.getName())
+                            .sequenceNo(c.getSequenceNo())
                             .build())
                     .toList();
+            // Ordered per the branch's category sort mode; the cache version is bumped when mode or categories change
+            return categoryOrderService.order(beans, clientId, orgId);
         }, (k, v) -> redisCacheService.put(k, v, PosCacheKeys.jittered(PosCacheKeys.TTL_CATEGORIES)));
     }
 
@@ -621,6 +633,7 @@ public class PosSaleQueryService {
                 .menuImagesEnabled(c.isMenuImagesEnabled())
                 .creditEnabled(c.isCreditEnabled())
                 .creditAllocationMode(c.getCreditAllocationMode())
+                .categorySortMode(c.getCategorySortMode())
                 .currencySymbol(c.getCurrencySymbol())
                 .currencyPosition(c.getCurrencyPosition())
                 .currencyDecimalPlaces(c.getCurrencyDecimalPlaces() != null ? c.getCurrencyDecimalPlaces() : 2)

@@ -38,6 +38,9 @@ public class Category extends AuditableEntity {
 
     private String imageUrl;
 
+    @Column(name = "sequence_no")
+    private Integer sequenceNo;
+
     @Column(name = "client_id")
     private UUID clientId;
 

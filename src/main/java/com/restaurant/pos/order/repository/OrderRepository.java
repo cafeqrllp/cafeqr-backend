@@ -21,6 +21,29 @@ import java.util.UUID;
 
 @Repository
 public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecificationExecutor<Order> {
+
+    /**
+     * Per-category sales since {@code since} for POS category ordering.
+     * Rows: [categoryName, SUM(quantity), SUM(lineTotal), MAX(orderDate)].
+     * Counts only billed/completed, active, non-void orders.
+     */
+    @Query("""
+            SELECT l.categoryName, SUM(l.quantity), SUM(l.lineTotal), MAX(o.orderDate)
+            FROM OrderLine l JOIN l.order o
+            WHERE o.clientId = :clientId
+              AND (:orgId IS NULL OR o.orgId = :orgId)
+              AND o.orderDate >= :since
+              AND o.isactive = 'Y'
+              AND o.orderStatus IN ('BILLED', 'COMPLETED')
+              AND COALESCE(o.paymentStatus, '') <> 'VOID'
+              AND o.orderNo NOT LIKE '%\\_VOID\\_%' ESCAPE '\\'
+              AND l.categoryName IS NOT NULL
+            GROUP BY l.categoryName
+            """)
+    List<Object[]> findCategorySalesStats(@Param("clientId") UUID clientId,
+                                          @Param("orgId") UUID orgId,
+                                          @Param("since") Instant since);
+
     @EntityGraph(attributePaths = "lines")
     List<Order> findByClientIdOrderByCreatedAtDesc(UUID clientId);
 

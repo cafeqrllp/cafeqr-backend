@@ -322,6 +322,13 @@ public interface PosSaleProjectionRepository extends JpaRepository<Order, UUID> 
         WHERE c.client_id = :clientId
           AND c.isactive = 'Y'
           AND (:orgId IS NULL OR c.org_id = CAST(:orgId AS uuid) OR c.org_id IS NULL)
+          AND UPPER(COALESCE(c.customer_category, '')) <> 'CREDIT'
+          AND NOT EXISTS (
+              SELECT 1 FROM credit_customers lcc
+              WHERE lcc.linked_customer_id = c.id
+                AND lcc.client_id = c.client_id
+                AND lcc.isactive = 'Y'
+          )
           AND (
               :search IS NULL
               OR c.name ILIKE '%' || :search || '%'

@@ -51,6 +51,9 @@ public class SystemConfiguration {
     @Column(name = "credit_allocation_mode", length = 30)
     @Builder.Default
     private String creditAllocationMode = "OLDEST_FIRST";
+    @Column(name = "category_sort_mode", length = 20)
+    @Builder.Default
+    private String categorySortMode = "NAME_ASC";
     private boolean tableManagementEnabled;
     private boolean qrOrderingEnabled;
     private boolean inventoryEnabled;
@@ -90,6 +93,10 @@ public class SystemConfiguration {
     @Builder.Default
     @Column(name = "cash_drawer_manual_reason_required")
     private boolean cashDrawerManualReasonRequired = true;
+    /** Menu highlight: blink the POS card / sidebar link and list POS first. */
+    @Builder.Default
+    @Column(name = "highlight_pos_enabled")
+    private boolean highlightPosEnabled = true;
     private boolean takeawayHideKitchenMode;
     private boolean dineInAutoPrintKotOnSettle;
     private boolean dineInHideKitchenMode;

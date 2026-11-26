@@ -2,6 +2,7 @@ package com.restaurant.pos.product.service;
 
 import com.restaurant.pos.common.exception.BusinessException;
 import com.restaurant.pos.common.tenant.TenantContext;
+import com.restaurant.pos.product.domain.Category;
 import com.restaurant.pos.product.domain.Product;
 import com.restaurant.pos.product.repository.CategoryRepository;
 import com.restaurant.pos.product.repository.ProductRepository;
@@ -66,6 +67,27 @@ class ProductServiceTest {
     void tearDown() {
         TenantContext.clear();
         SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void updateCategory_persistsSequenceNo() {
+        UUID categoryId = UUID.randomUUID();
+        Category existing = new Category();
+        existing.setId(categoryId);
+        existing.setName("Coffee");
+        existing.setClientId(clientId);
+        existing.setOrgId(branchId);
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(existing));
+        when(categoryRepository.save(any(Category.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Category update = new Category();
+        update.setName("Coffee");
+        update.setActive(true);
+        update.setSequenceNo(5);
+        assertThat(productService.updateCategory(categoryId, update).getSequenceNo()).isEqualTo(5);
+
+        update.setSequenceNo(null);
+        assertThat(productService.updateCategory(categoryId, update).getSequenceNo()).isNull();
     }
 
     @Test
